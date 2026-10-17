@@ -596,7 +596,7 @@ int main(int argc, char** argv) {
                   "[J8-24] outline x %d gap %.4f/%.4f", int(xOk), gLo, gHi);
             CHECK(od <= tol / 2 + 1e-9 && mx <= tol / 2 + 1e-9, "[J8-24] olDev %.6f maxDev %.6f", od, mx);
             std::printf("[J8-24] faces=%zu lod=%zu n=%zu ends=(%.3f,%.3f)…(%.3f,%.3f) gap %.3f/%.3f olDev=%.3f maxDev=%.3f maxdiff=%.3g · "
-                        "dims base=%.2f wall=%.2f (LOD 치수 — 판정 아님)\n",
+                        "dims base=%.2f wall=%.2f (원본 치수 — 판정은 [J9-1])\n",
                         faces, lod, h.orthoOutline().size(), ol.front().x, ol.front().y, ol.back().x, ol.back().y, gLo, gHi, od, mx, md,
                         h.dims().base, h.dims().meanWall);
         }

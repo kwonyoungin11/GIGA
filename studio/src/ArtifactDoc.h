@@ -93,7 +93,8 @@ public:
 
   // 정면각 θ (deg, [−180, 180]): 확정 자세를 +Z 오른손 법칙으로 θ 돌린(위에서
   // 보아 반시계 — 정면(−Y)의 면이 화면 오른쪽 +X 로 가는) 메시의 Y=0 면 x ≥ 0
-  // 반쪽이 단면. 0° = 확정 자세. 확정 전·미로드는 무시. 원본 전체 다시 계산.
+  // 반쪽이 단면. 0° = 확정 자세. 확정 전·미로드는 무시. 단면·외곽은 원본에서 다시 계산하고
+  // 5대 치수·잰 기벽은 확정 때 값(+Z 회전은 바꾸지 않는다 — 두 고리를 못 잡은 단일 쉘의 추정 기벽만 각 단면을 따름).
   void setFrontAngle(double deg);
   void alignCut(CutAxis a); // 막 맞춤: Y → 0°, X → 90°
   // 실시간 미리보기: 확정 전·미로드 무시. LOD 만 돌려 Y=0 단면 1장 → 미리보기
@@ -142,10 +143,10 @@ public:
   QString unitNote() const { return unitNote_; }
   int removedNoiseFaces() const { return removedNoiseFaces_; }
 
-  // 치수 계산용 K-Arch 실루엣(MaxRadius) — 그리지 않는다(그리는 외곽선은 orthoOutline)
-  const KA::SilhouetteResult &silhouette() const { return sil_; }
   const KA::SectionResult &section() const { return sec_; }
   const KA::Dimensions &rawDims() const { return dims_; }
+  // 5대 치수 — 확정 때 원본 메시(25만 면 초과도 LOD 아님)에서 한 번 잰다. 정면각(+Z 회전)은 치수를 바꾸지 않는다
+  // (예외: 확정 때 두 고리를 못 잡은 단일 쉘이면 평균 기벽 = 각 단면이 갱신하는 추정값 estimatedWallMm)
   const Dims5 &dims() const { return d5_; }
   // 그리는 외곽선의 원 선 = 막과 수직인 실루엣의 외면 반쪽(x ≤ 0, 원본 mesh_, 평활 없음)
   const std::vector<KA::Point2> &orthoOutline() const { return ortho_; }
@@ -190,13 +191,13 @@ public:
 
 private:
   void resetSlots();
-  void recompute();
+  // measureDims: 5대 치수·기벽 두께를 원본에서 잰다(확정 때). 정면각만 바뀌면 false — 확정 때 값을 그대로 쓴다
+  void recompute(bool measureDims = true);
   void unconfirm(); // 자세가 바뀜 → 확정 풀기·슬롯 비우기·계산 비우기
   // 회전 p' = c + R(p − c) 를 원본·LOD 에 함께 적용
   void rotateAbout(const double (&R)[3][3], const KA::Point3 &c);
   // 원본·LOD 를 같은 거리만큼 평행이동 (바운딩 박스 갱신)
   void shiftBoth(double dx, double dy, double dz);
-  double measureWallBySlice(double z) const;
   void buildSectionLoops(); // 확정 각 단면 (미리보기 지움)
   void clearPreview();
   // 화면에 보이는 단면: 미리보기 중이면 미리보기, 아니면 확정 각
@@ -220,6 +221,7 @@ private:
 
   std::vector<double> wallProfile_;
   double wallZ0_ = 0.0, wallStep_ = 1.0;
+  double wallMean_ = -1.0; // 확정 때 잰 평균 기벽 (두 고리가 잡힌 10–90 % 높이), 없으면 −1
 
   KA::MeshData base_; // 정위치까지 적용된 메시 (정면 회전 전)
   KA::MeshData mesh_;
@@ -231,7 +233,6 @@ private:
   QString unitNote_;
   int removedNoiseFaces_ = 0;
 
-  KA::SilhouetteResult sil_;
   std::vector<KA::Point2> ortho_; // 그리는 외곽선의 원 선 = 막과 수직인 실루엣의 외면 반쪽(x ≤ 0, 원본 mesh_, 평활 없음)
   KA::SectionResult sec_;
   KA::Dimensions dims_;

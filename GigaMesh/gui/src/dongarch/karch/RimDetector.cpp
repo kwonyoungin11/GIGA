@@ -30,6 +30,7 @@ struct Loop {
     std::vector<int> indices;
     double meanZ = 0.0;
     double length = 0.0;
+    double area = 0.0; // enclosed area (Newell vector / 2): pose-independent
 };
 
 Loop finishLoop(const MeshData& mesh, const std::vector<int>& idx) {
@@ -42,11 +43,18 @@ Loop finishLoop(const MeshData& mesh, const std::vector<int>& idx) {
         loop.meanZ += mesh.vertices[static_cast<std::size_t>(i)].z;
     }
     loop.meanZ /= static_cast<double>(idx.size());
+    double nx = 0.0;
+    double ny = 0.0;
+    double nz = 0.0;
     for (std::size_t i = 0; i < idx.size(); ++i) {
         const Point3& a = mesh.vertices[static_cast<std::size_t>(idx[i])];
         const Point3& b = mesh.vertices[static_cast<std::size_t>(idx[(i + 1) % idx.size()])];
         loop.length += dist(a, b);
+        nx += (a.y - b.y) * (a.z + b.z);
+        ny += (a.z - b.z) * (a.x + b.x);
+        nz += (a.x - b.x) * (a.y + b.y);
     }
+    loop.area = 0.5 * std::sqrt(nx * nx + ny * ny + nz * nz);
     return loop;
 }
 
@@ -189,12 +197,19 @@ RimResult DetectRimBoundary(const MeshData& mesh) {
         return result;
     }
 
-    std::size_t best = 0;
-    for (std::size_t i = 1; i < kept.size(); ++i) {
-        if (kept[i].meanZ > kept[best].meanZ + 1e-9) {
-            best = i;
-        } else if (std::fabs(kept[i].meanZ - kept[best].meanZ) <= 1e-9 &&
-                   kept[i].length > kept[best].length) {
+    // Loops whose mean Z is within kRimTieMm of the highest are the same height: take the one that
+    // encloses the largest area (outer lip). Scan noise moves the inner and outer lip loops' mean Z
+    // by ~0.003 mm, so an exact (1e-9) tie picked the inner lip at random (rim = inner diameter,
+    // JOB-009). Area, not length: a jagged inner boundary can be longer than the outer one.
+    constexpr double kRimTieMm = 0.5;
+    double zTop = kept.front().meanZ;
+    for (const Loop& L : kept) {
+        zTop = std::max(zTop, L.meanZ);
+    }
+    std::size_t best = kept.size();
+    for (std::size_t i = 0; i < kept.size(); ++i) {
+        if (kept[i].meanZ >= zTop - kRimTieMm &&
+            (best == kept.size() || kept[i].area > kept[best].area)) {
             best = i;
         }
     }

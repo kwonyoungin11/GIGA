@@ -12,6 +12,7 @@
 #include <cmath>
 #include <limits>
 #include <numbers>
+#include <unordered_map>
 
 namespace studio {
 
@@ -247,6 +248,70 @@ std::vector<QRgb> makeSyntheticArtecColors(const KA::MeshData &m) {
     cols[i] = qRgb(r, g, b);
   }
   return cols;
+}
+
+// 높이 zs[k](오름차순)마다 그 높이에 걸치는 면 번호 — 면 순서 그대로. 걸침 = 세 꼭짓점 z 범위 ±1e-6 mm 가 zs[k] 를
+// 품음(K-Arch Slice 가 그 높이에서 선분을 만들 수 있는 면은 모두 들어가고, 남는 면은 선분을 만들지 않는다).
+std::vector<std::vector<int>> zBandFaces(const KA::MeshData &m,
+                                         const std::vector<double> &zs) {
+  std::vector<std::vector<int>> out(zs.size());
+  const long nv = long(m.vertices.size());
+  for (size_t f = 0; f < m.faces.size(); ++f) {
+    const auto &F = m.faces[f];
+    if (F[0] < 0 || F[1] < 0 || F[2] < 0 || F[0] >= nv || F[1] >= nv || F[2] >= nv)
+      continue; // K-Arch Slice 가 건너뛰는 면 (MeshSlicer.cpp:110-116)
+    const double a = m.vertices[size_t(F[0])].z, b = m.vertices[size_t(F[1])].z,
+                 c = m.vertices[size_t(F[2])].z;
+    const auto lo = std::lower_bound(zs.begin(), zs.end(), std::min({a, b, c}) - 1e-6);
+    const auto hi = std::upper_bound(zs.begin(), zs.end(), std::max({a, b, c}) + 1e-6);
+    for (auto it = lo; it < hi; ++it)
+      out[size_t(it - zs.begin())].push_back(int(f));
+  }
+  return out;
+}
+
+// 면 목록만의 작은 메시. 원본 바운딩 박스 두 모서리를 면 없이 넣어 K-Arch Slice 의 이음 허용치(1e-6 × 정점
+// 바운딩 박스 대각선, MeshSlicer.cpp:103-106)를 원본과 같게 한다 → 원본 전체를 자른 것과 같은 고리.
+KA::MeshData bandMesh(const KA::MeshData &m, const std::vector<int> &faces) {
+  KA::MeshData s;
+  s.vertices = {m.bboxMin, m.bboxMax};
+  std::unordered_map<int, int> idx;
+  for (int f : faces) {
+    std::array<int, 3> g{};
+    for (size_t k = 0; k < 3; ++k) {
+      const int v = m.faces[size_t(f)][k];
+      const auto [it, ins] = idx.try_emplace(v, int(s.vertices.size()));
+      if (ins)
+        s.vertices.push_back(m.vertices[size_t(v)]);
+      g[k] = it->second;
+    }
+    s.faces.push_back(g);
+  }
+  return s;
+}
+
+// 높이 z 수평 단면의 기벽 두께 = 평균 반경이 가장 큰 고리 − 두 번째 고리, 고리가 하나뿐이면 −1
+double wallBySlice(const KA::MeshData &m, double z) {
+  const auto loops = KA::Slice(m, KA::Plane{{0, 0, 1}, -z});
+  std::vector<std::pair<double, std::vector<double>>> rs;
+  for (const auto &l : loops) {
+    if (l.pts.size() < 3)
+      continue;
+    std::vector<double> r;
+    r.reserve(l.pts.size());
+    double s = 0;
+    for (const auto &p : l.pts)
+      r.push_back(std::hypot(p.x, p.y)), s += r.back();
+    rs.push_back({s / double(r.size()), std::move(r)});
+  }
+  if (rs.empty())
+    return -1.0;
+  std::sort(rs.begin(), rs.end(),
+            [](auto &a, auto &b) { return a.first > b.first; });
+  if (rs.size() >= 2)
+    return rs[0].first - rs[1].first;
+  // 단일 열린 쉘(내벽 미스캔)인 경우 -1 반환하여 추정 기벽두께와 구분
+  return -1.0;
 }
 
 } // namespace
@@ -631,7 +696,7 @@ void ArtifactDoc::confirmPose() {
     shiftBoth(0, 0, -base_.bboxMin.z); // 접지
   frontAngle_ = 0.0;
   poseConfirmed_ = true;
-  // 25만 면 초과 유물은 치수를 LOD 로 계산하므로 확정 자세로 다시 만든다
+  // 미리보기(끄는 동안)·3D 보조창용 LOD 를 확정 자세로 다시 만든다 (치수는 원본에서)
   buildLodMesh(base_, baseColors_, lodBase_, lodColors_, 35000);
   resetSlots();
   recompute();
@@ -725,7 +790,7 @@ void ArtifactDoc::setFrontAngle(double deg) {
   if (!isLoaded() || !poseConfirmed_)
     return; // 확정 전에는 막을 돌리지 않는다
   frontAngle_ = std::remainder(deg, 360.0);
-  recompute();
+  recompute(false); // +Z 회전은 5대 치수·잰 기벽을 바꾸지 않는다 — 확정 때 값 (단일 쉘의 추정 기벽만 각 단면을 따름)
 }
 
 void ArtifactDoc::alignCut(CutAxis a) {
@@ -760,7 +825,7 @@ void ArtifactDoc::clearPreview() {
   previewLod_ = {};
 }
 
-void ArtifactDoc::recompute() {
+void ArtifactDoc::recompute(bool measureDims) {
   clearPreview();
   mesh_ = base_;
   lodMesh_ = lodBase_;
@@ -768,7 +833,6 @@ void ArtifactDoc::recompute() {
     // 확정 전: 들어온(또는 사람이 돌리는) 자세만 보여 주고 단면·외곽·치수·
     // 기벽은 계산하지 않는다. 바운딩 박스는 자세 조작마다 갱신되어 있고
     // 강체 변환은 평균 변 길이·경계 유무를 바꾸지 않는다.
-    sil_ = {};
     ortho_.clear();
     sec_ = {};
     dims_ = {};
@@ -776,6 +840,7 @@ void ArtifactDoc::recompute() {
     wallProfile_.clear();
     wallZ0_ = 0.0;
     wallStep_ = 1.0;
+    wallMean_ = -1.0;
     lines_ = {};
     aligned_ = false;
     alignNote_ = QStringLiteral("바닥 미정");
@@ -789,43 +854,52 @@ void ArtifactDoc::recompute() {
   KA::FillMeshStats(mesh_);
   KA::FillMeshStats(lodMesh_);
 
-  const KA::MeshData &fastMesh = mesh_.faces.size() > 250000 ? lodMesh_ : mesh_;
-  sil_ = KA::ExtractSilhouette(fastMesh, KA::SilhouetteMode::MaxRadius, 0.25); // 치수용(그리지 않음)
-  dims_ = KA::AnalyzeDimensions(fastMesh, sil_);
   // 그리는 외곽선 = 막과 수직인 실루엣의 외면 반쪽, 늘 원본에서(LOD 아님). MaxRadius(2·98 백분위 · 칸 버림 · 빈 칸
   // 복사 · 평활)는 끝이 기준선에 못 미치고 급한 저부에서 선을 지어냈고, K-Arch TrueOrtho 는 x > 0 쪽까지 보고 평활해
   // 기운 바닥·구연에서 중심선을 넘었다(JOB-008).
   ortho_ = halfOrthoSilhouette(mesh_, 0.25);
 
-  d5_ = {};
-  d5_.ok = dims_.ok;
-  d5_.height = dims_.vesselHeight;
-  d5_.rim = dims_.rimDiameter;
-  d5_.belly = dims_.maxBodyDiameter;
-  d5_.bellyZ = dims_.maxBodyZ - mesh_.bboxMin.z;
-  d5_.base = dims_.baseDiameter;
+  if (measureDims) {
+    // 5대 치수·기벽은 늘 원본 메시에서(LOD 는 3.8 mm 칸 정점 평균이라 바닥판 높이·기벽 고리가 무너져 25만 면 초과
+    // 메시에서 저경 5.2·기벽 3.85 mm 로 틀렸다, JOB-009). K-Arch 실루엣은 치수에 maxBodyZ 대체값(최대 반경 정점이
+    // 늘 있어 쓰이지 않음)으로만 들어가므로 계산하지 않는다.
+    dims_ = KA::AnalyzeDimensions(mesh_, KA::SilhouetteResult{});
+    d5_ = {};
+    d5_.ok = dims_.ok;
+    d5_.height = dims_.vesselHeight;
+    d5_.rim = dims_.rimDiameter;
+    d5_.belly = dims_.maxBodyDiameter;
+    d5_.bellyZ = dims_.maxBodyZ - mesh_.bboxMin.z;
+    d5_.base = dims_.baseDiameter;
 
-  // 기벽 두께 프로파일: 수평 단면을 높이별로 잘라 바깥 고리 - 안쪽 고리 (둘레
-  // 평균)
-  const double h = mesh_.bboxMax.z - mesh_.bboxMin.z;
-  wallZ0_ = mesh_.bboxMin.z;
-  wallStep_ = std::max(1.0, h / 160.0);
-  wallProfile_.clear();
-  for (double z = wallZ0_; z <= mesh_.bboxMax.z; z += wallStep_)
-    wallProfile_.push_back(z <= wallZ0_ + 0.02 * h ||
-                                   z >= mesh_.bboxMax.z - 0.02 * h
-                               ? -1.0
-                               : measureWallBySlice(z));
+    // 기벽 두께 프로파일: 수평 단면을 높이별로 잘라 바깥 고리 - 안쪽 고리 (둘레
+    // 평균). 높이마다 그 높이에 걸치는 원본 면만 자른다(결과는 원본 전체를 자른 것과 같다)
+    const double h = mesh_.bboxMax.z - mesh_.bboxMin.z;
+    wallZ0_ = mesh_.bboxMin.z;
+    wallStep_ = std::max(1.0, h / 160.0);
+    std::vector<double> zs;
+    for (double z = wallZ0_; z <= mesh_.bboxMax.z; z += wallStep_) // 누적 합 높이 — JOB-008 까지와 같은 z 값
+      zs.push_back(z);
+    const auto bands = zBandFaces(mesh_, zs);
+    wallProfile_.clear();
+    for (size_t i = 0; i < zs.size(); ++i)
+      wallProfile_.push_back(zs[i] <= wallZ0_ + 0.02 * h ||
+                                     zs[i] >= mesh_.bboxMax.z - 0.02 * h
+                                 ? -1.0
+                                 : wallBySlice(bandMesh(mesh_, bands[i]), zs[i]));
 
-  double sum = 0;
-  int n = 0;
-  for (size_t i = 0; i < wallProfile_.size(); ++i) {
-    const double z = wallZ0_ + double(i) * wallStep_;
-    if (z < wallZ0_ + 0.1 * h || z > wallZ0_ + 0.9 * h || wallProfile_[i] <= 0)
-      continue;
-    sum += wallProfile_[i], ++n;
+    double sum = 0;
+    int n = 0;
+    for (size_t i = 0; i < wallProfile_.size(); ++i) {
+      const double z = wallZ0_ + double(i) * wallStep_;
+      if (z < wallZ0_ + 0.1 * h || z > wallZ0_ + 0.9 * h || wallProfile_[i] <= 0)
+        continue;
+      sum += wallProfile_[i], ++n;
+    }
+    wallMean_ = n ? sum / n : -1.0;
   }
-  d5_.meanWall = n ? sum / n : estimatedWallMm_;
+  // 확정 때 잰 평균 기벽, 두 고리를 못 잡은 단일 쉘(wallMean_ ≤ 0)이면 각 단면이 갱신하는 추정값
+  d5_.meanWall = wallMean_ > 0 ? wallMean_ : estimatedWallMm_;
   if (d5_.meanWall > 1.5 && d5_.meanWall < 35.0)
     estimatedWallMm_ = d5_.meanWall;
 
@@ -1177,30 +1251,6 @@ double ArtifactDoc::wallThicknessAt(double z) const {
   if (a <= 0 || b <= 0)
     return std::max(a, b);
   return a + (b - a) * (t - double(i));
-}
-
-double ArtifactDoc::measureWallBySlice(double z) const {
-  const KA::MeshData &m = mesh_.faces.size() > 250000 ? lodMesh_ : mesh_;
-  const auto loops = KA::Slice(m, KA::Plane{{0, 0, 1}, -z});
-  std::vector<std::pair<double, std::vector<double>>> rs;
-  for (const auto &l : loops) {
-    if (l.pts.size() < 3)
-      continue;
-    std::vector<double> r;
-    r.reserve(l.pts.size());
-    double s = 0;
-    for (const auto &p : l.pts)
-      r.push_back(std::hypot(p.x, p.y)), s += r.back();
-    rs.push_back({s / double(r.size()), std::move(r)});
-  }
-  if (rs.empty())
-    return -1.0;
-  std::sort(rs.begin(), rs.end(),
-            [](auto &a, auto &b) { return a.first > b.first; });
-  if (rs.size() >= 2)
-    return rs[0].first - rs[1].first;
-  // 단일 열린 쉘(내벽 미스캔)인 경우 -1 반환하여 추정 기벽두께와 구분
-  return -1.0;
 }
 
 double ArtifactDoc::maxDeviationMm() const {

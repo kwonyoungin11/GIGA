@@ -51,8 +51,8 @@ struct RimResult {
 };
 
 // Boundary edges (one adjacent face) -> closed loops.
-// Drop loops shorter than 30% of the longest. Pick highest mean Z.
-// Same-Z tie: longer loop (outer lip). Fewer than 20 vertices -> RimTooSmall.
+// Drop loops shorter than 30% of the longest. Pick highest mean Z; loops within 0.5 mm of
+// the highest mean Z are a tie: largest enclosed area (outer lip). Fewer than 20 vertices -> RimTooSmall.
 RimResult DetectRimBoundary(const MeshData& mesh);
 
 // Auto: Boundary, then Curvature + "RIM_MODE_FALLBACK".

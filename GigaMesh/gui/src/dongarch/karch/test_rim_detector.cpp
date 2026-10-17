@@ -229,6 +229,57 @@ int main() {
         return 1;
     }
 
+    // 안·바깥 입술 고리의 평균 높이가 0.5 mm 안이면 같은 높이로 보고 넓이가 가장 큰 바깥 고리 (스캔 잡음).
+    // 안 입술은 반경을 번갈아 ±0.5 mm 흔들어(지그재그 경계) 바깥보다 길게 만든다 — 길이로는 안쪽이 뽑힌다.
+    MeshData lip = makeOpenCylinderShell(50.0, 100.0, 5.0, 180, 20);
+    const int outerTop = 20 * 180;
+    const int innerTop = 21 * 180 + 20 * 180;
+    for (int j = 0; j < 180; ++j) {
+        Point3& v = lip.vertices[static_cast<std::size_t>(innerTop + j)];
+        const double s = (45.0 + ((j % 2 == 0) ? 0.5 : -0.5)) / 45.0;
+        v.x *= s;
+        v.y *= s;
+        v.z += 0.01;
+    }
+    auto ringLen = [&](int base) {
+        double len = 0.0;
+        for (int j = 0; j < 180; ++j) {
+            const Point3& a = lip.vertices[static_cast<std::size_t>(base + j)];
+            const Point3& b = lip.vertices[static_cast<std::size_t>(base + (j + 1) % 180)];
+            len += std::hypot(a.x - b.x, a.y - b.y, a.z - b.z);
+        }
+        return len;
+    };
+    const double innerLen = ringLen(innerTop);
+    const double outerLen = ringLen(outerTop);
+    const auto tie = DetectRimBoundary(lip);
+    double rTie = 0.0;
+    for (const auto& p : tie.rimPoints) {
+        rTie += std::hypot(p.x, p.y);
+    }
+    rTie /= static_cast<double>(tie.rimPoints.size());
+    for (int j = 0; j < 180; ++j) {
+        lip.vertices[static_cast<std::size_t>(innerTop + j)].z += 0.99;
+    }
+    const auto high = DetectRimBoundary(lip);
+    double rHigh = 0.0;
+    for (const auto& p : high.rimPoints) {
+        rHigh += std::hypot(p.x, p.y);
+    }
+    rHigh /= static_cast<double>(high.rimPoints.size());
+    std::printf("jaggedInnerLip len=%.3f>%.3f | +0.01 n=%zu meanZ=%.3f rMean=%.6f | +1.00 n=%zu meanZ=%.3f rMean=%.6f\n",
+                innerLen, outerLen, tie.rimPoints.size(), tie.meanZ, rTie, high.rimPoints.size(), high.meanZ,
+                rHigh);
+    if (!(innerLen > outerLen) || tie.error != RimError::Ok || std::fabs(rTie - 50.0) >= 1e-9 ||
+        std::fabs(tie.meanZ - 100.0) > 1e-9) {
+        std::fprintf(stderr, "FAIL: noisy jagged lip tie picked inner rMean=%.6f\n", rTie);
+        return 1;
+    }
+    if (high.error != RimError::Ok || std::fabs(rHigh - 45.0) >= 1e-9 || std::fabs(high.meanZ - 101.0) > 1e-9) {
+        std::fprintf(stderr, "FAIL: inner lip 1 mm higher not picked rMean=%.6f\n", rHigh);
+        return 1;
+    }
+
     std::printf("tilt15 n=%zu sealedCurv n=%zu r=%.3f manual n=%zu bothOpen loops=%d\n",
                 tilt.rimPoints.size(), autoSealed.rimPoints.size(), rCurv, man.rimPoints.size(),
                 both.loopCount);
