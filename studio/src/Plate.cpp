@@ -39,8 +39,9 @@ bool isHorizontal(const ArtifactDoc &doc, int slot) {
 
 QString num(double v, int prec = 1) { return QString::number(v, 'f', prec); }
 
-// 정면 방위각 글자 — 정수 0.1° 로 부호·소수를 직접 조립(/fp:fast 에서도 −0 이 생기지 않음).
-// 도판 글: 12° · 37.5° · −20°(U+2212) · −0.04 → 0°, DXF 글: 12.0 · -20.0 · 0.0
+// 정면 방위각 글자 — 정수 0.1° 로 부호·소수를 직접 조립(/fp:fast 에서도 −0 이
+// 생기지 않음). 도판 글: 12° · 37.5° · −20°(U+2212) · −0.04 → 0°, DXF 글: 12.0
+// · -20.0 · 0.0
 QString azimuthText(double deg) {
   const long long t = std::llround(deg * 10.0), a = t < 0 ? -t : t;
   return (t < 0 ? QStringLiteral("−") : QString()) + QString::number(a / 10) +
@@ -53,8 +54,8 @@ std::string azimuthDxf(double deg) {
          std::to_string(a % 10);
 }
 
-// 외곽선 닫는 가로선(축 → 끝점)을 그릴 끝: y 가 작은 끝은 바닥선, 큰 끝은 구연선이
-// 있으면 뺀다 — 그 높이에 기준선이 있어 두 번째 가로선이 생기지 않게
+// 외곽선 닫는 가로선(축 → 끝점)을 그릴 끝: y 가 작은 끝은 바닥선, 큰 끝은
+// 구연선이 있으면 뺀다 — 그 높이에 기준선이 있어 두 번째 가로선이 생기지 않게
 std::vector<KA::Point2> closingEnds(const std::vector<KA::Point2> &ol,
                                     const PlateRefLines &refs) {
   std::vector<KA::Point2> v;
@@ -68,19 +69,22 @@ std::vector<KA::Point2> closingEnds(const std::vector<KA::Point2> &ol,
   return v;
 }
 
-// 기준선 세 줄의 출력 규약 (디자인 v2 가이드 「도면 선 규약」, 그리는 순서 중심선 →
-// 구연선 → 바닥선): SVG 층 id·이름, 굵기 종이 mm / 화면 px, DXF 층
+// 기준선 세 줄의 출력 규약 (디자인 v2 가이드 「도면 선 규약」, 그리는 순서
+// 중심선 → 구연선 → 바닥선): SVG 층 id·이름, 굵기 종이 mm / 화면 px, DXF 층
 struct RefStyle {
   std::optional<RefLine> PlateRefLines::*line;
   const char *id, *name, *dxfLayer;
   double paperMm, screenPx;
 };
-const RefStyle kRefStyles[] = {
-    {&PlateRefLines::center, "refline_center", "중심선", "01_AXIS_CENTER", 0.10, 1.0},
-    {&PlateRefLines::rim, "refline_rim", "구연선", "07_PROJECTION_RIM", 0.13, 1.0},
-    {&PlateRefLines::base, "refline_base", "바닥선", "08_PROJECTION_BASE", 0.25, 1.4}};
+const RefStyle kRefStyles[] = {{&PlateRefLines::center, "refline_center",
+                                "중심선", "01_AXIS_CENTER", 0.10, 1.0},
+                               {&PlateRefLines::rim, "refline_rim", "구연선",
+                                "07_PROJECTION_RIM", 0.13, 1.0},
+                               {&PlateRefLines::base, "refline_base", "바닥선",
+                                "08_PROJECTION_BASE", 0.25, 1.4}};
 
-// 막을 움직이는 중(LOD 미리보기 단면 · 치수·두께는 옛 각)에는 파일을 만들기 전에 거부한다
+// 막을 움직이는 중(LOD 미리보기 단면 · 치수·두께는 옛 각)에는 파일을 만들기
+// 전에 거부한다
 bool refusePreview(const ArtifactDoc &doc, QString *err) {
   if (!doc.isPreviewing())
     return false;
@@ -158,6 +162,44 @@ PlateRefLines plateRefLines(const ArtifactDoc &doc, double extMm) {
     r.rim = RefLine{{-d.rim / 2, H}, {d.rim / 2, H}};
   if (d.base > 0)
     r.base = RefLine{{-d.base / 2, 0}, {d.base / 2, 0}};
+
+  // Feature 24: 경부선 (목 높이) — H의 0.55 ~ 0.95 구간에서 외곽선/단면의 최소
+  // 반경(잘록한 목) 탐색
+  double minR = 1e9;
+  double neckZ = -1.0;
+  double neckR = 0.0;
+  const auto outline = doc.displayOutline();
+  for (const auto &p : outline) {
+    if (p.y >= 0.55 * H && p.y <= 0.95 * H) {
+      double rad = std::fabs(p.x);
+      if (rad < minR) {
+        minR = rad;
+        neckZ = p.y;
+        neckR = rad;
+      }
+    }
+  }
+  if (neckZ <= 0.0) {
+    for (const auto &poly : doc.displaySection()) {
+      for (const auto &p : poly) {
+        if (p.y >= 0.55 * H && p.y <= 0.95 * H) {
+          double rad = std::fabs(p.x);
+          if (rad < minR) {
+            minR = rad;
+            neckZ = p.y;
+            neckR = rad;
+          }
+        }
+      }
+    }
+  }
+  if (neckZ > 0.0 && neckZ < H) {
+    r.neck = RefLine{{-neckR, neckZ}, {neckR, neckZ}};
+  } else if (H > 50.0) {
+    double estZ = H * 0.80;
+    double estR = (d.rim > 0.0 ? d.rim * 0.45 : 30.0);
+    r.neck = RefLine{{-estR, estZ}, {estR, estZ}};
+  }
   return r;
 }
 
@@ -191,8 +233,9 @@ ShadeImage Plate::renderShade(const ArtifactDoc &doc, ShadeMode mode,
   const double r = maxR(doc) + 2.0, h = height(doc) + 4.0;
   pxPerMm = std::clamp(pxPerMm, 0.5, std::min(4000.0 / (2 * r), 4000.0 / h));
   RasterView v;
-  // D5: Right(기본) = 정면(카메라 −Y, yaw 0°)에서 본 x<0 반쪽 → 영상 왼쪽 절반이
-  // 외면. Left(R 반전) = 뒤(yaw 180°)에서 본 모양 → 영상 오른쪽 절반이 외면.
+  // D5: Right(기본) = 정면(카메라 −Y, yaw 0°)에서 본 x<0 반쪽 → 영상 왼쪽
+  // 절반이 외면. Left(R 반전) = 뒤(yaw 180°)에서 본 모양 → 영상 오른쪽 절반이
+  // 외면.
   v.yawDeg = doc.sectionSide() == SectionSide::Right ? 0.0 : 180.0;
   v.pitchDeg = 0.0;
   v.pxPerMm = pxPerMm;
@@ -325,10 +368,10 @@ void Plate::paint(QPainter &p, const ArtifactDoc &doc, const QTransform &t,
   if (o.shade && shade && !shade->isNull()) {
     const QRectF dst = t.mapRect(shade->rectMm);
     const QRectF &sr = shade->rectMm;
-    const QRectF half = t.mapRect(
-        doc.sectionSide() == SectionSide::Right
-            ? QRectF(sr.left(), sr.top(), -sr.left(), sr.height())
-            : QRectF(0, sr.top(), sr.right(), sr.height()));
+    const QRectF half =
+        t.mapRect(doc.sectionSide() == SectionSide::Right
+                      ? QRectF(sr.left(), sr.top(), -sr.left(), sr.height())
+                      : QRectF(0, sr.top(), sr.right(), sr.height()));
     p.save();
     p.setClipRect(half);
     p.setRenderHint(QPainter::SmoothPixmapTransform, true);
@@ -337,7 +380,8 @@ void Plate::paint(QPainter &p, const ArtifactDoc &doc, const QTransform &t,
   }
 
   // 2.5) 기준선 (중심선 · 구연선 · 바닥선, 먹 — 외곽선과 함께 켜고 끈다) ------
-  // 용지(paperPxPerMm > 0): 종이 기준 굵기·중심선 연장 3 mm, 화면: px 굵기·도면 3 mm
+  // 용지(paperPxPerMm > 0): 종이 기준 굵기·중심선 연장 3 mm, 화면: px 굵기·도면
+  // 3 mm
   constexpr double kRefExtPaperMm = 3.0;
   const bool paper = o.paperPxPerMm > 0;
   PlateRefLines refs;
@@ -346,13 +390,40 @@ void Plate::paint(QPainter &p, const ArtifactDoc &doc, const QTransform &t,
                                     : kRefExtPaperMm);
     for (const auto &k : kRefStyles)
       if (const auto &l = refs.*k.line) {
-        p.setPen(QPen(theme::OuterInk,
-                      paper ? std::max(1.0, k.paperMm * o.paperPxPerMm)
-                            : k.screenPx,
-                      Qt::SolidLine, Qt::FlatCap));
+        p.setPen(
+            QPen(theme::OuterInk,
+                 paper ? std::max(1.0, k.paperMm * o.paperPxPerMm) : k.screenPx,
+                 Qt::SolidLine, Qt::FlatCap));
         p.drawLine(t.map(QPointF(l->a.x, l->a.y)),
                    t.map(QPointF(l->b.x, l->b.y)));
       }
+    if (refs.neck) {
+      const double nw = paper ? std::max(1.0, 0.13 * o.paperPxPerMm) : 1.0;
+      // Feature 24: 경부선 — 외면 실선, 내면 긴 파선 (12, 4)
+      p.setPen(QPen(theme::OuterInk, nw, Qt::SolidLine, Qt::FlatCap));
+      p.drawLine(t.map(QPointF(refs.neck->a.x, refs.neck->a.y)),
+                 t.map(QPointF(0, refs.neck->a.y)));
+      QPen neckDash(theme::OuterInk, nw, Qt::CustomDashLine, Qt::FlatCap);
+      neckDash.setDashPattern({12.0, 4.0});
+      p.setPen(neckDash);
+      p.drawLine(t.map(QPointF(0, refs.neck->b.y)),
+                 t.map(QPointF(refs.neck->b.x, refs.neck->b.y)));
+    }
+    // Feature 25: 파단 표시 (0.13 mm 짧은 2중 사선)
+    if (doc.isSherdMode()) {
+      const double bw = paper ? std::max(1.0, 0.13 * o.paperPxPerMm) : 1.0;
+      p.setPen(QPen(theme::OuterInk, bw));
+      auto drawBreak = [&](double bx, double by) {
+        QPointF p1 = t.map(QPointF(bx - 0.4, by - 1.2)),
+                p2 = t.map(QPointF(bx + 0.4, by + 1.2));
+        QPointF p3 = t.map(QPointF(bx + 0.4, by - 1.2)),
+                p4 = t.map(QPointF(bx + 1.2, by + 1.2));
+        p.drawLine(p1, p2);
+        p.drawLine(p3, p4);
+      };
+      drawBreak(doc.dims().rim / 2.0, H);
+      drawBreak(0.0, 0.0);
+    }
   }
 
   // 3) 외곽선 -----------------------------------------------------------------
@@ -424,8 +495,8 @@ void Plate::paint(QPainter &p, const ArtifactDoc &doc, const QTransform &t,
     p.drawLine(b + QPointF(0, -4), b + QPointF(0, 4));
     labelBox(p, (a + b) / 2, QStringLiteral("구경 ⌀ %1 mm").arg(num(d.rim)),
              mono, Qt::AlignHCenter | Qt::AlignVCenter);
-    // 구연선이 있으면 기고 파선은 구연선 바깥 끝 2 mm 앞까지, 라벨은 구연선 바로 위
-    // (구연선 외면 쪽 반과 외곽선 끝의 틈을 덮지 않게)
+    // 구연선이 있으면 기고 파선은 구연선 바깥 끝 2 mm 앞까지, 라벨은 구연선
+    // 바로 위 (구연선 외면 쪽 반과 외곽선 끝의 틈을 덮지 않게)
     const bool rimLine = o.outline && refs.rim;
     p.setPen(QPen(theme::Caution, 1, Qt::DashLine));
     const double hx = rimLine ? -d.rim / 2 - 2 : 0.0;
@@ -548,11 +619,12 @@ void paintSheet(QPainter &p, const ArtifactDoc &doc, const ExportRequest &r,
   p.setFont(small);
   p.setPen(theme::Ink);
   const QString az = azimuthNote(doc, r.opts.slot);
-  p.drawText(QPointF(tr.left(), tr.top() + 7 * ppm),
-             QStringLiteral("축척 %1%2 · 단위 mm%3")
-                 .arg(scaleName(r.scale),
-                      r.scale == 1.0 ? QStringLiteral(" (실제 크기)") : QString(),
-                      az.isEmpty() ? QString() : QStringLiteral(" · ") + az));
+  p.drawText(
+      QPointF(tr.left(), tr.top() + 7 * ppm),
+      QStringLiteral("축척 %1%2 · 단위 mm%3")
+          .arg(scaleName(r.scale),
+               r.scale == 1.0 ? QStringLiteral(" (실제 크기)") : QString(),
+               az.isEmpty() ? QString() : QStringLiteral(" · ") + az));
   scaleBar(p, QPointF(tr.left(), tr.top() + 15 * ppm), r.scale * ppm, 50.0,
            mono, QStringLiteral("50 mm"));
   const QRectF box(tr.right() - 92 * ppm, tr.top() + 3 * ppm, 92 * ppm,
@@ -565,10 +637,23 @@ void paintSheet(QPainter &p, const ArtifactDoc &doc, const ExportRequest &r,
              Qt::AlignLeft | Qt::AlignTop, r.title);
   const auto &d = doc.dims();
   p.setFont(mono);
+  const QString baseStr =
+      (d.base > 0.0 && !doc.isSherdMode()) ? num(d.base) : QStringLiteral("—");
   p.drawText(box.adjusted(3 * ppm, 0, -3 * ppm, -2.5 * ppm),
              Qt::AlignLeft | Qt::AlignBottom,
              QStringLiteral("기고 %1 · 구경 %2 · 저경 %3 mm")
-                 .arg(num(d.height), num(d.rim), num(d.base)));
+                 .arg(num(d.height), num(d.rim), baseStr));
+  if (r.opts.calibration100mm) {
+    p.save();
+    p.setPen(QPen(theme::Ink, std::max(1.0, 0.13 * ppm)));
+    p.setBrush(Qt::NoBrush);
+    const QRectF calRect(20.0 * ppm, 182.0 * ppm, 100.0 * ppm, 100.0 * ppm);
+    p.drawRect(calRect);
+    p.setFont(theme::uiFont(int(2.8 * ppm), false));
+    p.drawText(QPointF(22.0 * ppm, 187.0 * ppm),
+               QStringLiteral("CALIBRATION 100 × 100 mm"));
+    p.restore();
+  }
   p.restore();
 }
 
@@ -616,6 +701,9 @@ bool exportPng(const ArtifactDoc &doc, const ExportRequest &r, int dpi,
 // ---- 레이어 분리 SVG (일러스트레이터 1:1 mm) --------------------------------
 bool exportSvgLayered(const ArtifactDoc &doc, const ExportRequest &r,
                       QString *err) {
+  if (r.opts.spec14Layers) {
+    return exportSvg14Layers(doc, r, err);
+  }
   if (refusePreview(doc, err))
     return false;
   QFile f(r.path);
@@ -689,7 +777,8 @@ bool exportSvgLayered(const ArtifactDoc &doc, const ExportRequest &r,
         << "\" stroke=\"#141413\" stroke-width=\"0.3\"/>\n"
         << "<text x=\"" << L.titleRectMm.left() << "\" y=\"" << ty + 7
         << "\">축척 " << scaleName(s) << " · 단위 mm"
-        << (az.isEmpty() ? QString() : QStringLiteral(" · ") + az) << "</text>\n";
+        << (az.isEmpty() ? QString() : QStringLiteral(" · ") + az)
+        << "</text>\n";
     const double sb = 50.0 * s, sx = L.titleRectMm.left(), sy = ty + 12;
     out << "<rect x=\"" << sx << "\" y=\"" << sy << "\" width=\"" << n3(sb / 2)
         << "\" height=\"1.5\" fill=\"#141413\"/>\n"
@@ -711,7 +800,9 @@ bool exportSvgLayered(const ArtifactDoc &doc, const ExportRequest &r,
         << "<text x=\"" << bx + 3 << "\" y=\"" << ty + 17
         << "\" font-family=\"Consolas\" font-size=\"2.4\">기고 "
         << num(d.height) << " · 구경 " << num(d.rim) << " · 저경 "
-        << num(d.base) << " mm</text>\n";
+        << ((d.base > 0.0 && !doc.isSherdMode()) ? num(d.base)
+                                                 : QStringLiteral("—"))
+        << " mm</text>\n";
     if (!horiz && d.ok) {
       out << "<text x=\"" << n3(X(0)) << "\" y=\"" << n3(Y(H + 8) - 1)
           << "\" text-anchor=\"middle\" font-family=\"Consolas\">구경 ⌀ "
@@ -727,29 +818,30 @@ bool exportSvgLayered(const ArtifactDoc &doc, const ExportRequest &r,
     const ShadeImage sh = Plate::renderShade(
         doc, r.opts.shadeMode, 300.0 / 25.4 / std::max(0.25, 1.0 / s));
     if (!sh.isNull()) {
-      // 외면 쪽 절반만 (Right: 영상 왼쪽 절반을 축 왼쪽에, Left: 오른쪽 절반을 축
-      // 오른쪽에)
+      // 외면 쪽 절반만 (Right: 영상 왼쪽 절반을 축 왼쪽에, Left: 오른쪽 절반을
+      // 축 오른쪽에)
       const bool right = doc.sectionSide() == SectionSide::Right;
       const int half = sh.image.width() / 2;
-      const QImage part =
-          right ? sh.image.copy(0, 0, half, sh.image.height())
-                : sh.image.copy(half, 0, sh.image.width() - half,
-                                sh.image.height());
+      const QImage part = right
+                              ? sh.image.copy(0, 0, half, sh.image.height())
+                              : sh.image.copy(half, 0, sh.image.width() - half,
+                                              sh.image.height());
       QByteArray png;
       QBuffer buf(&png);
       buf.open(QIODevice::WriteOnly);
       part.save(&buf, "PNG");
       layer("shade_dtak", QStringLiteral("음영·탁본"));
-      out << "<image x=\"" << n3(X(right ? sh.rectMm.left() : 0.0))
-          << "\" y=\"" << n3(Y(sh.rectMm.bottom()))
-          << "\" width=\"" << n3(sh.rectMm.width() / 2 * s) << "\" height=\""
+      out << "<image x=\"" << n3(X(right ? sh.rectMm.left() : 0.0)) << "\" y=\""
+          << n3(Y(sh.rectMm.bottom())) << "\" width=\""
+          << n3(sh.rectMm.width() / 2 * s) << "\" height=\""
           << n3(sh.rectMm.height() * s)
           << "\" preserveAspectRatio=\"none\" "
              "xlink:href=\"data:image/png;base64,"
           << png.toBase64() << "\"/>\n</g>\n";
     }
   }
-  // (2.5) 기준선 — 선마다 독립 층 (중심선 → 구연선 → 바닥선), 중심선 연장 종이 3 mm
+  // (2.5) 기준선 — 선마다 독립 층 (중심선 → 구연선 → 바닥선), 중심선 연장 종이
+  // 3 mm
   PlateRefLines refs;
   if (r.opts.outline && !horiz) {
     refs = plateRefLines(doc, 3.0 / s);
@@ -821,8 +913,371 @@ bool exportSvgLayered(const ArtifactDoc &doc, const ExportRequest &r,
   return true;
 }
 
-// ---- DXF R12 (K-Arch 11 레이어, 1:1 mm, 화면과 같은 배치(D5 기본 외면 왼쪽·단면
-// 오른쪽, R 반전 따름)) ----------------------------------------------------------
+bool exportSvg14Layers(const ArtifactDoc &doc, const ExportRequest &r,
+                       QString *err) {
+  if (refusePreview(doc, err))
+    return false;
+  QFile f(r.path);
+  if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) {
+    if (err)
+      *err = QStringLiteral("SVG 파일을 만들 수 없습니다.");
+    return false;
+  }
+  const PaperLayout L = layoutPaper(doc, r.opts.slot, r.paper, r.scale);
+  const QRectF E = Plate::extentMm(doc, r.opts.slot);
+  const double s = r.scale;
+  auto X = [&](double x) { return L.plateRectMm.left() + (x - E.left()) * s; };
+  auto Y = [&](double y) { return L.plateRectMm.top() + (E.bottom() - y) * s; };
+  auto n3 = [](double v) { return QString::number(v, 'f', 3); };
+  auto pts = [&](const std::vector<KA::Point2> &v) {
+    QString o;
+    for (const auto &q : v)
+      o += n3(X(q.x)) + ',' + n3(Y(q.y)) + ' ';
+    return o.trimmed();
+  };
+  QTextStream out(&f);
+  out.setEncoding(QStringConverter::Utf8);
+  const QSizeF ps = L.paperMm;
+  out << "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+      << "<svg xmlns=\"http://www.w3.org/2000/svg\" "
+         "xmlns:xlink=\"http://www.w3.org/1999/xlink\" "
+         "xmlns:inkscape=\"http://www.inkscape.org/namespaces/inkscape\" "
+      << "width=\"" << ps.width() << "mm\" height=\"" << ps.height()
+      << "mm\" viewBox=\"0 0 " << ps.width() << ' ' << ps.height() << "\">\n"
+      << "<title>" << r.title.toHtmlEscaped() << "</title>\n";
+  auto layer = [&](const char *id, const QString &label) {
+    out << "<g id=\"" << id
+        << "\" inkscape:groupmode=\"layer\" inkscape:label=\"" << label
+        << "\">\n";
+  };
+  const bool horiz = isHorizontal(doc, r.opts.slot);
+  const double H = height(doc);
+  const auto refs = plateRefLines(doc, 3.0 / s);
+  const auto &d = doc.dims();
+
+  // (1) grid: 방안 눈금
+  layer("grid", QStringLiteral("방안"));
+  if (r.opts.grid) {
+    out << "<g fill=\"none\">\n";
+    for (int pass = 0; pass < 2; ++pass) {
+      const char *col = pass == 0 ? "#EDEBE2" : "#D5D2C6";
+      const double w = pass == 0 ? 0.08 : 0.15;
+      for (int x = int(std::ceil(E.left())); x <= int(std::floor(E.right()));
+           ++x)
+        if ((pass == 0) == (x % 10 != 0))
+          out << "<line x1=\"" << n3(X(x)) << "\" y1=\"" << n3(Y(E.top()))
+              << "\" x2=\"" << n3(X(x)) << "\" y2=\"" << n3(Y(E.bottom()))
+              << "\" stroke=\"" << col << "\" stroke-width=\"" << w << "\"/>\n";
+      for (int y = int(std::ceil(E.top())); y <= int(std::floor(E.bottom()));
+           ++y)
+        if ((pass == 0) == (y % 10 != 0))
+          out << "<line x1=\"" << n3(X(E.left())) << "\" y1=\"" << n3(Y(y))
+              << "\" x2=\"" << n3(X(E.right())) << "\" y2=\"" << n3(Y(y))
+              << "\" stroke=\"" << col << "\" stroke-width=\"" << w << "\"/>\n";
+    }
+    out << "<rect x=\"" << n3(X(E.left())) << "\" y=\"" << n3(Y(E.bottom()))
+        << "\" width=\"" << n3(E.width() * s) << "\" height=\""
+        << n3(E.height() * s)
+        << "\" stroke=\"#C2C0B6\" stroke-width=\"0.2\"/>\n";
+    out << "</g>\n";
+  }
+  out << "</g>\n";
+
+  // (2) shade: 외면 음영·탁본
+  layer("shade", QStringLiteral("음영"));
+  if (r.opts.shade && !horiz) {
+    const ShadeImage sh = Plate::renderShade(
+        doc, r.opts.shadeMode, 300.0 / 25.4 / std::max(0.25, 1.0 / s));
+    if (!sh.isNull()) {
+      const bool right = doc.sectionSide() == SectionSide::Right;
+      const int half = sh.image.width() / 2;
+      const QImage part = right
+                              ? sh.image.copy(0, 0, half, sh.image.height())
+                              : sh.image.copy(half, 0, sh.image.width() - half,
+                                              sh.image.height());
+      QByteArray png;
+      QBuffer buf(&png);
+      buf.open(QIODevice::WriteOnly);
+      part.save(&buf, "PNG");
+      out << "<image x=\"" << n3(X(right ? sh.rectMm.left() : 0.0)) << "\" y=\""
+          << n3(Y(sh.rectMm.bottom())) << "\" width=\""
+          << n3(sh.rectMm.width() / 2 * s) << "\" height=\""
+          << n3(sh.rectMm.height() * s)
+          << "\" preserveAspectRatio=\"none\" "
+             "xlink:href=\"data:image/png;base64,"
+          << png.toBase64() << "\"/>\n";
+    }
+  }
+  out << "</g>\n";
+
+  // (3) calibration: 보정 100 mm 사각형
+  layer("calibration", QStringLiteral("보정 100 mm"));
+  if (r.opts.calibration100mm) {
+    out << "<g fill=\"none\" stroke=\"#1F1F1F\" stroke-width=\"0.13\">\n"
+        << "<rect x=\"20\" y=\"182\" width=\"100\" height=\"100\"/>\n"
+        << "<text x=\"22\" y=\"187\" font-family=\"Consolas, monospace\" "
+           "font-size=\"3\" fill=\"#1F1F1F\" stroke=\"none\">CALIBRATION 100 × "
+           "100 mm</text>\n"
+        << "</g>\n";
+  }
+  out << "</g>\n";
+
+  // (4) reconstruction: 복원선
+  layer("reconstruction", QStringLiteral("복원선"));
+  if (doc.isSherdMode()) {
+    double estDia = doc.estimatedRimDiameter();
+    if (estDia > 0.0) {
+      out << "<g stroke=\"#1F1F1F\" stroke-width=\"0.13\" "
+             "stroke-dasharray=\"7,4\" fill=\"none\">\n"
+          << "<line x1=\"" << n3(X(-estDia / 2)) << "\" y1=\"" << n3(Y(H))
+          << "\" x2=\"" << n3(X(estDia / 2)) << "\" y2=\"" << n3(Y(H))
+          << "\"/>\n"
+          << "</g>\n";
+    }
+  }
+  out << "</g>\n";
+
+  // (5) inner: 내벽선
+  layer("inner", QStringLiteral("내면선"));
+  if (doc.hasEstimatedInner()) {
+    out << "<g stroke=\"#FF0000\" stroke-width=\"0.30\" "
+           "stroke-dasharray=\"2.0,1.3\" fill=\"none\">\n";
+    for (const auto &est : doc.displayEstimatedInner()) {
+      out << "<polyline points=\"" << pts(est) << "\"/>\n";
+    }
+    out << "</g>\n";
+  }
+  out << "</g>\n";
+
+  // (6) refline.center: 중심선
+  layer("refline.center", QStringLiteral("중심선"));
+  if (refs.center && !horiz) {
+    out << "<line x1=\"" << n3(X(refs.center->a.x)) << "\" y1=\""
+        << n3(Y(refs.center->a.y)) << "\" x2=\"" << n3(X(refs.center->b.x))
+        << "\" y2=\"" << n3(Y(refs.center->b.y))
+        << "\" stroke=\"#141413\" stroke-width=\"0.10\"/>\n";
+  }
+  out << "</g>\n";
+
+  // (7) refline.rim: 구연선 · 경부선
+  layer("refline.rim", QStringLiteral("구연선"));
+  if (refs.rim && !horiz) {
+    out << "<line x1=\"" << n3(X(refs.rim->a.x)) << "\" y1=\""
+        << n3(Y(refs.rim->a.y)) << "\" x2=\"" << n3(X(refs.rim->b.x))
+        << "\" y2=\"" << n3(Y(refs.rim->b.y))
+        << "\" stroke=\"#141413\" stroke-width=\"0.13\"/>\n";
+  }
+  if (refs.neck && !horiz) {
+    out << "<line x1=\"" << n3(X(refs.neck->a.x)) << "\" y1=\""
+        << n3(Y(refs.neck->a.y)) << "\" x2=\"" << n3(X(0.0)) << "\" y2=\""
+        << n3(Y(refs.neck->a.y))
+        << "\" stroke=\"#141413\" stroke-width=\"0.13\"/>\n"
+        << "<line x1=\"" << n3(X(0.0)) << "\" y1=\"" << n3(Y(refs.neck->b.y))
+        << "\" x2=\"" << n3(X(refs.neck->b.x)) << "\" y2=\""
+        << n3(Y(refs.neck->b.y))
+        << "\" stroke=\"#141413\" stroke-width=\"0.13\" "
+           "stroke-dasharray=\"12,4\"/>\n";
+  }
+  out << "</g>\n";
+
+  // (8) refline.base: 바닥선
+  layer("refline.base", QStringLiteral("바닥선"));
+  if (refs.base && !horiz && !doc.isSherdMode() && d.base > 0) {
+    out << "<line x1=\"" << n3(X(refs.base->a.x)) << "\" y1=\""
+        << n3(Y(refs.base->a.y)) << "\" x2=\"" << n3(X(refs.base->b.x))
+        << "\" y2=\"" << n3(Y(refs.base->b.y))
+        << "\" stroke=\"#141413\" stroke-width=\"0.25\"/>\n";
+  }
+  out << "</g>\n";
+
+  // (9) outline: 외곽선
+  layer("outline", QStringLiteral("외곽선"));
+  if (r.opts.outline && !horiz) {
+    const auto ol = doc.displayOutline();
+    out << "<g fill=\"none\" stroke=\"#141413\" stroke-linejoin=\"round\" "
+           "stroke-linecap=\"round\">\n";
+    if (ol.size() >= 2) {
+      out << "<polyline stroke-width=\"0.25\" points=\"" << pts(ol) << "\"/>\n";
+      for (const auto &q : closingEnds(ol, refs))
+        out << "<line x1=\"" << n3(X(0)) << "\" y1=\"" << n3(Y(q.y))
+            << "\" x2=\"" << n3(X(q.x)) << "\" y2=\"" << n3(Y(q.y))
+            << "\" stroke-width=\"0.25\"/>\n";
+    }
+    out << "</g>\n";
+  }
+  out << "</g>\n";
+
+  // (10) section: 단면선
+  layer("section", QStringLiteral("단면선"));
+  if (r.opts.section) {
+    out << "<g stroke=\"#FF0000\" stroke-width=\"0.30\" "
+           "stroke-linejoin=\"round\">\n";
+    if (!horiz) {
+      if (doc.hasEstimatedInner()) {
+        for (const auto &poly : doc.displaySection())
+          out << "<polygon fill=\"#FF0000\" fill-opacity=\"0.12\" "
+                 "stroke=\"none\" points=\""
+              << pts(poly) << "\"/>\n";
+        for (const auto &solid : doc.displayScannedSolid())
+          out << "<polyline fill=\"none\" stroke=\"#FF0000\" "
+                 "stroke-width=\"0.30\" points=\""
+              << pts(solid) << "\"/>\n";
+      } else {
+        for (const auto &poly : doc.displaySection())
+          out << "<polygon fill=\"#FF0000\" fill-opacity=\"0.12\" points=\""
+              << pts(poly) << "\"/>\n";
+      }
+      if (r.opts.hatch) {
+        for (const auto &[a, b] : doc.displayHatch())
+          out << "<line x1=\"" << n3(X(a.x)) << "\" y1=\"" << n3(Y(a.y))
+              << "\" x2=\"" << n3(X(b.x)) << "\" y2=\"" << n3(Y(b.y))
+              << "\" stroke-width=\"0.13\"/>\n";
+      }
+    } else {
+      const auto &sl = doc.slotList()[size_t(r.opts.slot)];
+      for (const auto &pl : doc.horizontalSlice(sl.z)) {
+        std::vector<KA::Point2> v;
+        for (const auto &q : pl.pts)
+          v.push_back({q.x, q.y});
+        out << "<polygon fill=\"none\" points=\"" << pts(v) << "\"/>\n";
+      }
+    }
+    out << "</g>\n";
+  }
+  out << "</g>\n";
+
+  // (11) break: 파단 표시
+  layer("break", QStringLiteral("파단 표시"));
+  {
+    out << "<g stroke=\"#1F1F1F\" stroke-width=\"0.13\" fill=\"none\">\n";
+    auto drawBreakMark = [&](double px, double py) {
+      const double x1a = px - 0.4, y1a = py - 1.2, x2a = px + 0.4,
+                   y2a = py + 1.2;
+      const double x1b = px + 0.4, y1b = py - 1.2, x2b = px + 1.2,
+                   y2b = py + 1.2;
+      out << "<line x1=\"" << n3(X(x1a)) << "\" y1=\"" << n3(Y(y1a))
+          << "\" x2=\"" << n3(X(x2a)) << "\" y2=\"" << n3(Y(y2a)) << "\"/>\n";
+      out << "<line x1=\"" << n3(X(x1b)) << "\" y1=\"" << n3(Y(y1b))
+          << "\" x2=\"" << n3(X(x2b)) << "\" y2=\"" << n3(Y(y2b)) << "\"/>\n";
+    };
+    if (doc.isSherdMode()) {
+      KA::Point2 pt1{d.rim / 2.0, H};
+      KA::Point2 pt2{0.0, 0.0};
+      bool found = false;
+      const auto &dispSec = doc.displaySection();
+      if (!dispSec.empty() && !dispSec[0].empty()) {
+        const auto &poly = dispSec[0];
+        const double distEnds = std::hypot(poly.front().x - poly.back().x,
+                                           poly.front().y - poly.back().y);
+        if (distEnds > 1.0) {
+          if (poly.front().y >= poly.back().y) {
+            pt1 = poly.front();
+            pt2 = poly.back();
+          } else {
+            pt1 = poly.back();
+            pt2 = poly.front();
+          }
+          found = true;
+        }
+      }
+      if (!found) {
+        const auto &ol = doc.displayOutline();
+        if (ol.size() >= 2) {
+          const double distEnds = std::hypot(ol.front().x - ol.back().x,
+                                             ol.front().y - ol.back().y);
+          if (distEnds > 1.0) {
+            if (ol.front().y >= ol.back().y) {
+              pt1 = ol.front();
+              pt2 = ol.back();
+            } else {
+              pt1 = ol.back();
+              pt2 = ol.front();
+            }
+          }
+        }
+      }
+      drawBreakMark(pt1.x, pt1.y);
+      drawBreakMark(pt2.x, pt2.y);
+    }
+    out << "</g>\n";
+  }
+  out << "</g>\n";
+
+  // (12) dimension: 치수선·치수
+  layer("dimension", QStringLiteral("치수"));
+  if (!horiz && d.ok) {
+    out << "<g font-family=\"Consolas, monospace\" font-size=\"2.6\" "
+           "fill=\"#141413\">\n"
+        << "<text x=\"" << n3(X(0)) << "\" y=\"" << n3(Y(H + 8) - 1)
+        << "\" text-anchor=\"middle\">구경 ⌀ " << num(d.rim) << " mm</text>\n"
+        << "<line x1=\"" << n3(X(-d.rim / 2)) << "\" y1=\"" << n3(Y(H + 8))
+        << "\" x2=\"" << n3(X(d.rim / 2)) << "\" y2=\"" << n3(Y(H + 8))
+        << "\" stroke=\"#141413\" stroke-width=\"0.18\"/>\n"
+        << "</g>\n";
+  }
+  out << "</g>\n";
+
+  // (13) scalebar: 축척 막대
+  layer("scalebar", QStringLiteral("축척 막대"));
+  {
+    const double ty = L.titleRectMm.top();
+    const double sb = 50.0 * s, sx = L.titleRectMm.left(), sy = ty + 12;
+    out << "<g>\n"
+        << "<rect x=\"" << sx << "\" y=\"" << sy << "\" width=\"" << n3(sb / 2)
+        << "\" height=\"1.5\" fill=\"#141413\"/>\n"
+        << "<rect x=\"" << n3(sx + sb / 2) << "\" y=\"" << sy << "\" width=\""
+        << n3(sb / 2)
+        << "\" height=\"1.5\" fill=\"#FFFFFF\" stroke=\"#141413\" "
+           "stroke-width=\"0.2\"/>\n"
+        << "<text x=\"" << sx << "\" y=\"" << sy + 5
+        << "\" font-family=\"Consolas, monospace\" font-size=\"2.6\" "
+           "fill=\"#141413\">0</text>\n"
+        << "<text x=\"" << n3(sx + sb - 4) << "\" y=\"" << sy + 5
+        << "\" font-family=\"Consolas, monospace\" font-size=\"2.6\" "
+           "fill=\"#141413\">50 mm</text>\n"
+        << "</g>\n";
+  }
+  out << "</g>\n";
+
+  // (14) label: 표제란·도면명
+  layer("label", QStringLiteral("표제란"));
+  {
+    const double ty = L.titleRectMm.top();
+    const double bx = L.titleRectMm.right() - 92;
+    const QString az = azimuthNote(doc, r.opts.slot);
+    const QString baseStr = (d.base > 0.0 && !doc.isSherdMode())
+                                ? num(d.base)
+                                : QStringLiteral("—");
+    out << "<g font-family=\"Malgun Gothic, Noto Sans KR, sans-serif\" "
+           "fill=\"#141413\">\n"
+        << "<line x1=\"" << L.titleRectMm.left() << "\" y1=\"" << ty
+        << "\" x2=\"" << L.titleRectMm.right() << "\" y2=\"" << ty
+        << "\" stroke=\"#141413\" stroke-width=\"0.3\"/>\n"
+        << "<text x=\"" << L.titleRectMm.left() << "\" y=\"" << ty + 7
+        << "\" font-size=\"2.6\">축척 " << scaleName(s) << " · 단위 mm"
+        << (az.isEmpty() ? QString() : QStringLiteral(" · ") + az)
+        << "</text>\n"
+        << "<rect x=\"" << bx << "\" y=\"" << ty + 3
+        << "\" width=\"92\" height=\"18\" fill=\"none\" stroke=\"#141413\" "
+           "stroke-width=\"0.25\"/>\n"
+        << "<text x=\"" << bx + 3 << "\" y=\"" << ty + 9
+        << "\" font-size=\"3\" font-weight=\"700\">" << r.title.toHtmlEscaped()
+        << "</text>\n"
+        << "<text x=\"" << bx + 3 << "\" y=\"" << ty + 17
+        << "\" font-family=\"Consolas, monospace\" font-size=\"2.4\">기고 "
+        << num(d.height) << " · 구경 " << num(d.rim) << " · 저경 " << baseStr
+        << " mm</text>\n"
+        << "</g>\n";
+  }
+  out << "</g>\n";
+
+  out << "</svg>\n";
+  return true;
+}
+
+// ---- DXF R12 (K-Arch 11 레이어, 1:1 mm, 화면과 같은 배치(D5 기본 외면
+// 왼쪽·단면 오른쪽, R 반전 따름))
+// ----------------------------------------------------------
 bool exportDxf(const ArtifactDoc &doc, const ExportRequest &r, QString *err) {
   if (refusePreview(doc, err))
     return false;
@@ -845,8 +1300,8 @@ bool exportDxf(const ArtifactDoc &doc, const ExportRequest &r, QString *err) {
   w.DefineLayer("10_ANNOTATION_TEXT", 7, LT::Continuous);
   w.DefineLayer("11_SCALE_BAR", 7, LT::Continuous);
   const double H = height(doc);
-  // 기준선: 중심선 01 · 구연선 07 · 바닥선 08 (내보내기 칸과 무관하게 늘, 1:1 모델
-  // 공간이라 중심선 연장 3 mm)
+  // 기준선: 중심선 01 · 구연선 07 · 바닥선 08 (내보내기 칸과 무관하게 늘, 1:1
+  // 모델 공간이라 중심선 연장 3 mm)
   const PlateRefLines refs = plateRefLines(doc, 3.0);
   for (const auto &k : kRefStyles)
     if (const auto &l = refs.*k.line)
@@ -880,7 +1335,7 @@ bool exportDxf(const ArtifactDoc &doc, const ExportRequest &r, QString *err) {
                   d.height, d.base, d.belly);
     w.WriteText("10_ANNOTATION_TEXT", {-d.rim / 2, -8}, 2.5, buf);
   }
-  if (doc.isLoaded() && doc.poseConfirmed())  // DXF 는 늘 종단면(정면각) 도판
+  if (doc.isLoaded() && doc.poseConfirmed()) // DXF 는 늘 종단면(정면각) 도판
     w.WriteText("10_ANNOTATION_TEXT", {-maxR(doc), -12}, 2.5,
                 "FRONT AZIMUTH " + azimuthDxf(doc.frontAngle()) +
                     " DEG (CCW, TOP VIEW)");

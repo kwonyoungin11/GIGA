@@ -15,51 +15,57 @@ namespace studio {
 enum class ExportFormat { Svg, Pdf, Dxf, Png };
 
 class PaperPreview : public QWidget {
-    Q_OBJECT
+  Q_OBJECT
 public:
-    explicit PaperPreview(QWidget* parent = nullptr) : QWidget(parent) { setMinimumSize(360, 420); }
-    void set(const ArtifactDoc* d, const ExportRequest& r) {
-        doc_ = d;
-        req_ = r;
-        update();
-    }
+  explicit PaperPreview(QWidget *parent = nullptr) : QWidget(parent) {
+    setMinimumSize(360, 420);
+  }
+  void set(const ArtifactDoc *d, const ExportRequest &r) {
+    doc_ = d;
+    req_ = r;
+    update();
+  }
 
 protected:
-    void paintEvent(QPaintEvent*) override;
+  void paintEvent(QPaintEvent *) override;
 
 private:
-    const ArtifactDoc* doc_ = nullptr;
-    ExportRequest req_;
+  const ArtifactDoc *doc_ = nullptr;
+  ExportRequest req_;
 };
 
 class ExportDialog : public QDialog {
-    Q_OBJECT
+  Q_OBJECT
 public:
-    ExportDialog(const ArtifactDoc& doc, int slot, const PlateOptions& screenOpts, ExportFormat fmt, QWidget* parent = nullptr);
-    QString savedPath() const { return saved_; }
+  ExportDialog(const ArtifactDoc &doc, int slot, const PlateOptions &screenOpts,
+               ExportFormat fmt, QWidget *parent = nullptr);
+  QString savedPath() const { return saved_; }
 
 private:
-    void sync();
-    void save();
-    void print();
-    ExportRequest request() const;
-    QWidget* chipBar(const QStringList& items, int sel, std::function<void(int)> on, QList<QPushButton*>* out);
+  void sync();
+  void save();
+  void print();
+  ExportRequest request() const;
+  QWidget *chipBar(const QStringList &items, int sel,
+                   std::function<void(int)> on, QList<QPushButton *> *out);
 
-    const ArtifactDoc& doc_;
-    int slot_;
-    PlateOptions base_;
-    ExportFormat fmt_;
-    double scale_ = 1.0;
-    QLineEdit* name_;
-    QComboBox* paper_;
-    QCheckBox *cSec_, *cOut_, *cShade_, *cGrid_;
-    QList<QPushButton*> scaleChips_, fmtChips_;
-    PaperPreview* preview_;
-    QLabel* previewHead_;
-    QLabel* advice_;
-    QLabel* note_;
-    QPushButton* saveBtn_;
-    QString saved_;
+  const ArtifactDoc &doc_;
+  int slot_;
+  PlateOptions base_;
+  ExportFormat fmt_;
+  double scale_ = 1.0;
+  QLineEdit *name_;
+  QComboBox *paper_;
+  QCheckBox *cSec_, *cOut_, *cShade_, *cGrid_;
+  QCheckBox *c14Layers_ = nullptr, *cCalib100_ = nullptr;
+  QLabel *lblVerified_ = nullptr;
+  QList<QPushButton *> scaleChips_, fmtChips_;
+  PaperPreview *preview_;
+  QLabel *previewHead_;
+  QLabel *advice_;
+  QLabel *note_;
+  QPushButton *saveBtn_;
+  QString saved_;
 };
 
-}  // namespace studio
+} // namespace studio

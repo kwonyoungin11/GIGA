@@ -123,6 +123,9 @@ target_link_libraries(test_studio_cutpage PRIVATE studio_core Qt6::Widgets)
 add_test(NAME studio_cutpage COMMAND test_studio_cutpage ${CMAKE_CURRENT_BINARY_DIR})
 set_tests_properties(studio_cutpage PROPERTIES RUN_SERIAL TRUE)
 
+# 실측 유물(6183.obj) 대용량 벤치마크 및 E2E 정밀도 검증 (JOB-010 E2E 트랙)
+include(tests/CMakeLists.txt)
+
 if(STUDIO_BUILD_KARCH_TESTS)
   set(KARCH_TESTS
     test_taubin_annulus

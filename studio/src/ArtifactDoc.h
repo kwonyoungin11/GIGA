@@ -30,6 +30,48 @@ struct SectionSlot {
 
 enum class HeightRef { Base, Rim }; // B: 바닥 0 mm, T: 구연부 0 mm
 
+enum class BaseTiltMode { RimHorizontal, BaseHorizontal };
+
+struct FloorCandidate {
+  int id = 1;
+  QString name;
+  QString desc;
+  double flatness = 0.0; // % (0 ~ 100)
+  double areaCm2 = 0.0;  // cm2
+  double cogScore = 0.0;
+  double totalScore = 0.0;
+  KA::Point3 normal{0, 0, 1};
+  KA::Point3 center{0, 0, 0};
+  bool recommended = false;
+};
+
+struct RimGapInfo {
+  std::vector<double> anglesDeg;
+  std::vector<double> gapMm;
+  double maxGapMm = 0.0;
+  double contactSpanDeg = 0.0;
+  double gapSpanDeg = 0.0;
+};
+
+struct AngleRecommendation {
+  int rank = 1;
+  double angleDeg = 0.0;
+  double score = 0.0;
+  QString why;
+  bool star = false;
+};
+
+struct CutCheckStatus {
+  bool closedLoop = true;
+  int breakCount = 0;
+  double minWall = 0.0, maxWall = 0.0;
+  double rimDiff = 0.0;
+  bool isThickAnomaly = false;
+  bool passesChip = false;
+  bool passesCrack = false;
+  QString statusText;
+};
+
 struct Dims5 {
   double height = 0, rim = 0, belly = 0, bellyZ = 0, base = 0, meanWall = 0;
   bool ok = false;
@@ -53,11 +95,44 @@ struct SectionLines {
   std::vector<std::vector<KA::Point2>> solids;   // 미스캔 보정 시 실선 구간
   std::vector<std::vector<KA::Point2>> estInner; // 미스캔/홀필 추정 내벽선
   double estZMin = -1.0, estZMax = -1.0;
-  double wallMm = -1.0; // 미스캔 보정 경로가 정한 기벽 두께, 그 경로가 아니면 −1
+  double wallMm =
+      -1.0; // 미스캔 보정 경로가 정한 기벽 두께, 그 경로가 아니면 −1
 };
 
 class ArtifactDoc {
 public:
+  // Feature 13: 단위 확인 모달 & 잠금 상태 머신
+  bool isUnitConfirmed() const { return unitConfirmed_; }
+  void setUnitConfirmed(bool c) { unitConfirmed_ = c; }
+  void confirmUnit(double factor = 1.0);
+  double maxDimension() const;
+  double averageEdgeLength() const;
+
+  // Feature 14: 바닥 후보 평면 자동 판별
+  std::vector<FloorCandidate> floorCandidates() const;
+  void applyFloorCandidate(int index);
+
+  // Feature 15: 구연 수평(T) vs 바닥 수평(B)
+  BaseTiltMode baseTiltMode() const { return baseTiltMode_; }
+  void setBaseTiltMode(BaseTiltMode m);
+  bool isLying() const;
+
+  // Feature 16 & 17: 구연부편(Sherd) 모드 & 틈 보기 & 원호판 가상 중심축
+  bool isSherdMode() const { return sherdMode_; }
+  void setSherdMode(bool on);
+  RimGapInfo rimGapChart() const;
+  double estimatedRimDiameter() const;
+  double estimatedRimError() const;
+  double rimArcDegrees() const;
+
+  // Feature 20: 추천 각도 3종 엔진 & 자석 스냅
+  std::vector<AngleRecommendation> recommendAngles() const;
+  double angleDefectScore(double angleDeg) const;
+  double snapAngle(double deg, double tol = 2.0) const;
+
+  // Feature 21: 실시간 단면 상태 검사선
+  CutCheckStatus checkCutStatus() const;
+
   // 들어온 자세 그대로 보관한다(확정 전 — 단면·치수·도판을 계산하지 않음).
   // 경로·스캐너 프로파일·단위 메모는 바꾸지 않는다(loadFile/loadSample 몫).
   void loadMesh(KA::MeshData m, std::vector<QRgb> colors, const QString &name);
@@ -66,7 +141,8 @@ public:
   // 합성 토기(항아리) — Artec 컬러·타날문 포함 기본 예제.
   // confirm=true: 자동 세우기 → 확정 (예전과 같은 결과), false: 들어온 자세
   void loadSample(bool confirm = true);
-  // 좁은 아가리 토기(내벽 미스캔·Artec 홀필 마개 보정 예제), confirm 은 위와 같음
+  // 좁은 아가리 토기(내벽 미스캔·Artec 홀필 마개 보정 예제), confirm 은 위와
+  // 같음
   void loadArtecBlindSample(bool confirm = true);
   bool isLoaded() const { return !mesh_.vertices.empty(); }
 
@@ -93,16 +169,20 @@ public:
 
   // 정면각 θ (deg, [−180, 180]): 확정 자세를 +Z 오른손 법칙으로 θ 돌린(위에서
   // 보아 반시계 — 정면(−Y)의 면이 화면 오른쪽 +X 로 가는) 메시의 Y=0 면 x ≥ 0
-  // 반쪽이 단면. 0° = 확정 자세. 확정 전·미로드는 무시. 단면·외곽은 원본에서 다시 계산하고
-  // 5대 치수·잰 기벽은 확정 때 값(+Z 회전은 바꾸지 않는다 — 두 고리를 못 잡은 단일 쉘의 추정 기벽만 각 단면을 따름).
+  // 반쪽이 단면. 0° = 확정 자세. 확정 전·미로드는 무시. 단면·외곽은 원본에서
+  // 다시 계산하고 5대 치수·잰 기벽은 확정 때 값(+Z 회전은 바꾸지 않는다 — 두
+  // 고리를 못 잡은 단일 쉘의 추정 기벽만 각 단면을 따름).
   void setFrontAngle(double deg);
   void alignCut(CutAxis a); // 막 맞춤: Y → 0°, X → 90°
   // 실시간 미리보기: 확정 전·미로드 무시. LOD 만 돌려 Y=0 단면 1장 → 미리보기
   // 버퍼. 외곽·치수·두께·estimatedWallMm·슬롯·원본 메시·frontAngle 은 그대로.
   void previewFrontAngle(double deg);
-  void commitPreview(); // 미리보기 중이면 setFrontAngle(previewAngle()), 아니면 무시
+  void
+  commitPreview(); // 미리보기 중이면 setFrontAngle(previewAngle()), 아니면 무시
   bool isPreviewing() const { return previewing_; }
-  double previewAngle() const { return previewing_ ? previewAngle_ : frontAngle_; }
+  double previewAngle() const {
+    return previewing_ ? previewAngle_ : frontAngle_;
+  }
   void setHeightRef(HeightRef r) { heightRef_ = r; }
   void setSimplifyTol(double mm) { simplifyTol_ = mm; }
   void setSmooth(bool on) { smooth_ = on; }
@@ -112,7 +192,8 @@ public:
   void setSectionSide(SectionSide s) { side_ = s; }
   SectionSide sectionSide() const { return side_; }
   void toggleSectionSide() {
-    side_ = side_ == SectionSide::Right ? SectionSide::Left : SectionSide::Right;
+    side_ =
+        side_ == SectionSide::Right ? SectionSide::Left : SectionSide::Right;
   }
   double sectionSign() const { // Right → +1.0, Left → −1.0
     return side_ == SectionSide::Right ? 1.0 : -1.0;
@@ -123,7 +204,9 @@ public:
   bool inferInnerWall() const { return inferInnerWall_; }
   void setEstimatedWallMm(double mm);
   double estimatedWallMm() const { return estimatedWallMm_; }
-  bool hasEstimatedInner() const { return !shown().estInner.empty(); } // 미리보기 따름
+  bool hasEstimatedInner() const {
+    return !shown().estInner.empty();
+  } // 미리보기 따름
 
   // 수동 단위 배율 보정 (예: 10.0 = cm→mm, 0.1 = mm→cm)
   void rescaleUnits(double factor);
@@ -134,6 +217,9 @@ public:
   const KA::MeshData &lodMesh() const {
     return previewing_ ? previewLod_ : lodMesh_;
   } // 3D 보조창 고속 회전용 경량 LOD 메시 (미리보기 중이면 미리보기 각)
+  const KA::MeshData &meshMaster() const { return base_; }
+  const KA::MeshData &meshProxy() const { return lodMesh(); }
+  const KA::MeshBVH &bvhMaster() const { return bvhMaster_; }
   const std::vector<QRgb> &vertexColors() const { return baseColors_; }
   const std::vector<QRgb> &lodVertexColors() const { return lodColors_; }
   bool hasColor() const {
@@ -145,18 +231,21 @@ public:
 
   const KA::SectionResult &section() const { return sec_; }
   const KA::Dimensions &rawDims() const { return dims_; }
-  // 5대 치수 — 확정 때 원본 메시(25만 면 초과도 LOD 아님)에서 한 번 잰다. 정면각(+Z 회전)은 치수를 바꾸지 않는다
-  // (예외: 확정 때 두 고리를 못 잡은 단일 쉘이면 평균 기벽 = 각 단면이 갱신하는 추정값 estimatedWallMm)
+  // 5대 치수 — 확정 때 원본 메시(25만 면 초과도 LOD 아님)에서 한 번 잰다.
+  // 정면각(+Z 회전)은 치수를 바꾸지 않는다 (예외: 확정 때 두 고리를 못 잡은
+  // 단일 쉘이면 평균 기벽 = 각 단면이 갱신하는 추정값 estimatedWallMm)
   const Dims5 &dims() const { return d5_; }
-  // 그리는 외곽선의 원 선 = 막과 수직인 실루엣의 외면 반쪽(x ≤ 0, 원본 mesh_, 평활 없음)
+  // 그리는 외곽선의 원 선 = 막과 수직인 실루엣의 외면 반쪽(x ≤ 0, 원본 mesh_,
+  // 평활 없음)
   const std::vector<KA::Point2> &orthoOutline() const { return ortho_; }
   // 지금 보이는 단면의 원 선(시험·판독용)
   const SectionLines &sectionLines() const { return shown(); }
 
   // 화면/내보내기용 선 (간략화·곡선 옵션 적용, 도면 좌표 x=R, y=H). D5 기본
   // (Right): 외곽 왼쪽 x ≤ 0 · 단면 오른쪽 x ≥ 0, Left: x 부호만 반전(거울상).
-  // 부호는 간략화·곡선 다듬기가 모두 끝난 뒤 마지막에 x 에 sectionSign() 을 곱한다.
-  // 곡선은 원 선에서 간격/2 안이고 원 선의 높이 범위·축 쪽을 넘지 않는 구간에만 — fitCurve.
+  // 부호는 간략화·곡선 다듬기가 모두 끝난 뒤 마지막에 x 에 sectionSign() 을
+  // 곱한다. 곡선은 원 선에서 간격/2 안이고 원 선의 높이 범위·축 쪽을 넘지 않는
+  // 구간에만 — fitCurve.
   std::vector<std::vector<KA::Point2>> displaySection() const;
   // Artec 미스캔 보정 시 실제 스캔된 실선 구간(외벽·구연·상부내벽·바닥)
   std::vector<std::vector<KA::Point2>> displayScannedSolid() const;
@@ -166,6 +255,7 @@ public:
   std::vector<std::pair<KA::Point2, KA::Point2>> displayHatch() const;
   std::vector<KA::Polyline3> horizontalSlice(double z) const;
   double wallThicknessAt(double z) const; // 해당 높이 기벽 두께, 없으면 -1
+  double outerRadiusAt(double z) const;   // 해당 높이 외경 반경, 없으면 -1
   bool
   isWallEstimatedAt(double z) const; // 해당 높이가 Artec 미스캔 추정 구간인지
 
@@ -180,10 +270,10 @@ public:
   bool smooth() const { return smooth_; }
   int pointCount() const; // 단면+외곽 점 수 (간략화 후)
   int rawPointCount() const;
-  // 그린 선(간략화·곡선)이 원 선에서 떨어진 가장 큰 거리 (mm). 원 선 = 단면은 막이
-  // 자른 선(미스캔 보정이면 실측 실선과 추정 내벽선 — 추정선도 포함), 외곽선은 막과
-  // 수직인 실루엣의 외면 반쪽(orthoOutline). 꼭짓점 기준 양방향: 그린 꼭짓점 → 원
-  // 꺾은선, 원 꼭짓점 → 그린 꺾은선. 미로드·확정 전 0.
+  // 그린 선(간략화·곡선)이 원 선에서 떨어진 가장 큰 거리 (mm). 원 선 = 단면은
+  // 막이 자른 선(미스캔 보정이면 실측 실선과 추정 내벽선 — 추정선도 포함),
+  // 외곽선은 막과 수직인 실루엣의 외면 반쪽(orthoOutline). 꼭짓점 기준 양방향:
+  // 그린 꼭짓점 → 원 꺾은선, 원 꼭짓점 → 그린 꺾은선. 미로드·확정 전 0.
   double maxDeviationMm() const;
 
   std::vector<SectionSlot> &slotList() { return slotList_; }
@@ -191,7 +281,8 @@ public:
 
 private:
   void resetSlots();
-  // measureDims: 5대 치수·기벽 두께를 원본에서 잰다(확정 때). 정면각만 바뀌면 false — 확정 때 값을 그대로 쓴다
+  // measureDims: 5대 치수·기벽 두께를 원본에서 잰다(확정 때). 정면각만 바뀌면
+  // false — 확정 때 값을 그대로 쓴다
   void recompute(bool measureDims = true);
   void unconfirm(); // 자세가 바뀜 → 확정 풀기·슬롯 비우기·계산 비우기
   // 회전 p' = c + R(p − c) 를 원본·LOD 에 함께 적용
@@ -213,7 +304,7 @@ private:
                                          bool closed) const; // 단면 sub 3
   std::vector<KA::Point2> outlineNatural() const;            // 외곽선 sub 4
 
-  SectionLines lines_;      // 확정 각 Y=0 단면 (원본 메시)
+  SectionLines lines_;        // 확정 각 Y=0 단면 (원본 메시)
   SectionLines previewLines_; // 미리보기 각 Y=0 단면 (LOD)
   KA::MeshData previewLod_;   // 미리보기 각으로 돌린 LOD
   bool previewing_ = false;
@@ -221,7 +312,8 @@ private:
 
   std::vector<double> wallProfile_;
   double wallZ0_ = 0.0, wallStep_ = 1.0;
-  double wallMean_ = -1.0; // 확정 때 잰 평균 기벽 (두 고리가 잡힌 10–90 % 높이), 없으면 −1
+  double wallMean_ =
+      -1.0; // 확정 때 잰 평균 기벽 (두 고리가 잡힌 10–90 % 높이), 없으면 −1
 
   KA::MeshData base_; // 정위치까지 적용된 메시 (정면 회전 전)
   KA::MeshData mesh_;
@@ -233,7 +325,9 @@ private:
   QString unitNote_;
   int removedNoiseFaces_ = 0;
 
-  std::vector<KA::Point2> ortho_; // 그리는 외곽선의 원 선 = 막과 수직인 실루엣의 외면 반쪽(x ≤ 0, 원본 mesh_, 평활 없음)
+  std::vector<KA::Point2>
+      ortho_; // 그리는 외곽선의 원 선 = 막과 수직인 실루엣의 외면 반쪽(x ≤ 0,
+              // 원본 mesh_, 평활 없음)
   KA::SectionResult sec_;
   KA::Dimensions dims_;
   Dims5 d5_;
@@ -248,6 +342,7 @@ private:
   bool inferInnerWall_ = true;   // Artec 미스캔 내벽/홀필 마개 자동 보정
   double estimatedWallMm_ = 6.8; // 추정 기벽 두께 (mm)
   std::vector<SectionSlot> slotList_;
+  KA::MeshBVH bvhMaster_;
 
   // ① 바닥 정하기
   std::vector<KA::Point3> rawVertices_; // 들어온 자세의 정점 (면은 공유)
@@ -259,23 +354,34 @@ private:
   bool pendingAligned_ = false;
   QString pendingNote_;
   double pendingRmse_ = 0.0;
+
+  void computeRimCircleFit();
+
+  bool unitConfirmed_ = true;
+  BaseTiltMode baseTiltMode_ = BaseTiltMode::RimHorizontal;
+  bool sherdMode_ = false;
+  double estimatedRimDia_ = 0.0;
+  double estimatedRimErr_ = 0.0;
+  double rimArcDeg_ = 0.0;
 };
 
-// 메시 m 의 Y=0 단면 x ≥ 0 반쪽 (+ inferInner 면 Artec 미스캔 내벽 추정, 씨앗 두께
-// wallSeedMm). 멤버를 읽지도 쓰지도 않는 순수 함수 — 확정·미리보기 공용.
+// 메시 m 의 Y=0 단면 x ≥ 0 반쪽 (+ inferInner 면 Artec 미스캔 내벽 추정, 씨앗
+// 두께 wallSeedMm). angleDeg 가 주어지면 n = (sin theta, cos theta, 0) 가상
+// 평면으로 Zero-Copy 회전 절단.
 SectionLines sliceSectionY0(const KA::MeshData &m, bool inferInner,
-                            double wallSeedMm);
+                            double wallSeedMm, double angleDeg = 0.0,
+                            const KA::MeshBVH *bvh = nullptr);
 
 // 선 다듬기 유틸 (Douglas–Peucker, 편차 제한 Catmull–Rom). kept 가 있으면 남긴
 // 점의 pts 인덱스를 차례로 넣는다(닫힘의 되감기 점 제외).
 std::vector<KA::Point2> simplifyDP(const std::vector<KA::Point2> &pts,
                                    double tol, bool closed,
                                    std::vector<size_t> *kept = nullptr);
-// 원 선 raw → 그릴 선: DP(tol) 뒤, smooth 면 DP 구간마다 Catmull–Rom 점 sub−1 개를
-// 넣되 (가) 모두 raw 의 높이(y) 범위 안이고 raw 가 축 한쪽(모두 x ≥ 0 또는 모두
-// x ≤ 0)이면 그쪽에 있고 (나) 그 점들과 이 구간의 원 점이 서로 tol 안일 때만 —
-// 아니면 그 구간은 DP 직선(실측 점을 잇는 간략 꺾은선). 곡선 점은 기준선(높이
-// 범위)·중심선 너머로 나가지 않는다.
+// 원 선 raw → 그릴 선: DP(tol) 뒤, smooth 면 DP 구간마다 Catmull–Rom 점 sub−1
+// 개를 넣되 (가) 모두 raw 의 높이(y) 범위 안이고 raw 가 축 한쪽(모두 x ≥ 0 또는
+// 모두 x ≤ 0)이면 그쪽에 있고 (나) 그 점들과 이 구간의 원 점이 서로 tol 안일
+// 때만 — 아니면 그 구간은 DP 직선(실측 점을 잇는 간략 꺾은선). 곡선 점은
+// 기준선(높이 범위)·중심선 너머로 나가지 않는다.
 std::vector<KA::Point2> fitCurve(const std::vector<KA::Point2> &raw, double tol,
                                  bool closed, bool smooth, int sub);
 
