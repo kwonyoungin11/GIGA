@@ -1651,9 +1651,9 @@ std::vector<FloorCandidate> ArtifactDoc::floorCandidates() const {
       }
     }
 
-    if (contactAreaMm2 > 1e-4) {
-      contactCenter.x /= contactAreaMm2;
-      contactCenter.y /= contactAreaMm2;
+    if (sumAlignArea > 1e-4) {
+      contactCenter.x /= sumAlignArea;
+      contactCenter.y /= sumAlignArea;
     } else {
       contactCenter.x = cog.x;
       contactCenter.y = cog.y;
@@ -1927,10 +1927,7 @@ double ArtifactDoc::angleDefectScore(double a) const {
       }
     }
   }
-  double diaDiff = std::fabs(rRight - rLeft);
-  if (diaDiff < 1e-4) {
-    diaDiff = 0.4;
-  }
+  const double diaDiff = std::fabs(rRight - rLeft);
 
   const double score = 5.0 * breakCount + 5.0 * crackCount +
                        2.0 * std::min(5.0, wallVar) +
@@ -1948,6 +1945,14 @@ std::vector<AngleRecommendation> ArtifactDoc::recommendAngles() const {
   std::sort(all.begin(), all.end(),
             [](const auto &x, const auto &y) { return x.second < y.second; });
 
+  const auto &meshToSlice = lodBase_.vertices.empty()
+                                ? (base_.vertices.empty() ? mesh_ : base_)
+                                : lodBase_;
+  const double H = dims_.vesselHeight > 0.0
+                       ? dims_.vesselHeight
+                       : (meshToSlice.bboxMax.z - meshToSlice.bboxMin.z);
+  const double DEG = std::numbers::pi / 180.0;
+
   std::vector<AngleRecommendation> out;
   for (const auto &c : all) {
     bool ok = true;
@@ -1964,12 +1969,25 @@ std::vector<AngleRecommendation> ArtifactDoc::recommendAngles() const {
       rec.angleDeg = c.first;
       rec.score = c.second;
       rec.star = (out.empty());
+      const double cosA = std::cos(c.first * DEG);
+      const double sinA = std::sin(c.first * DEG);
+      double rRight = 0.0, rLeft = 0.0;
+      for (const auto &v : meshToSlice.vertices) {
+        if (v.z >= 0.85 * H && std::fabs(-sinA * v.x + cosA * v.y) <= 2.0) {
+          const double proj = cosA * v.x + sinA * v.y;
+          if (proj > 0.0)
+            rRight = std::max(rRight, proj);
+          else
+            rLeft = std::max(rLeft, -proj);
+        }
+      }
+      const double measuredDiff = std::fabs(rRight - rLeft);
       if (rec.rank == 1) {
-        rec.why = QStringLiteral("끊김 없음 · 두께 고름 · 구경 차 0.4 mm");
+        rec.why = QStringLiteral("끊김 없음 · 두께 고름 · 구경 차 %1 mm")
+                      .arg(measuredDiff, 0, 'f', 1);
       } else {
-        const double diff = 0.4 + 0.1 * double(rec.rank);
         rec.why = QStringLiteral("결실 회피 · 단면 온전 · 구경 차 %1 mm")
-                      .arg(diff, 0, 'f', 1);
+                      .arg(measuredDiff, 0, 'f', 1);
       }
       out.push_back(rec);
       if (out.size() == 3)
@@ -2007,11 +2025,10 @@ CutCheckStatus ArtifactDoc::checkCutStatus() const {
       st.maxWall = mx;
     }
   }
-  if (st.minWall <= 0.0) {
-    st.minWall = 6.1;
-    st.maxWall = 6.8;
+  if (st.minWall <= 0.0 && wallMean_ > 0.0) {
+    st.minWall = wallMean_;
+    st.maxWall = wallMean_;
   }
-  const double a = previewing_ ? previewAngle_ : frontAngle_;
   double rRight = 0.0, rLeft = 0.0;
   const auto ol = displayOutline();
   const auto sec = displaySection();
@@ -2029,25 +2046,21 @@ CutCheckStatus ArtifactDoc::checkCutStatus() const {
     }
   }
   st.rimDiff = std::fabs(rRight - rLeft);
-  if (st.rimDiff < 1e-4) {
-    const double DEG = std::numbers::pi / 180.0;
-    st.rimDiff = 0.4 + 0.2 * std::fabs(std::sin(a * DEG));
-  }
 
+  const QString wallStr = st.minWall > 0.0 ? QStringLiteral("두께 %1–%2 mm")
+                                                 .arg(st.minWall, 0, 'f', 1)
+                                                 .arg(st.maxWall, 0, 'f', 1)
+                                           : QStringLiteral("두께 확인 필요");
   if (st.closedLoop && st.breakCount == 0) {
     st.statusText =
-        QStringLiteral(
-            "✓ 닫힌 단면 · 끊김 0 · 두께 %1–%2 mm · 좌우 구경 차 %3 mm")
-            .arg(st.minWall, 0, 'f', 1)
-            .arg(st.maxWall, 0, 'f', 1)
+        QStringLiteral("✓ 닫힌 단면 · 끊김 0 · %1 · 좌우 구경 차 %2 mm")
+            .arg(wallStr)
             .arg(st.rimDiff, 0, 'f', 1);
   } else {
     st.statusText =
-        QStringLiteral(
-            "✗ 끊긴 단면 · 끊김 %1개 · 두께 %2–%3 mm · 좌우 구경 차 %4 mm")
+        QStringLiteral("✗ 끊긴 단면 · 끊김 %1개 · %2 · 좌우 구경 차 %3 mm")
             .arg(st.breakCount)
-            .arg(st.minWall, 0, 'f', 1)
-            .arg(st.maxWall, 0, 'f', 1)
+            .arg(wallStr)
             .arg(st.rimDiff, 0, 'f', 1);
   }
   return st;

@@ -62,8 +62,7 @@ int main(int argc, char **argv) {
     ArtifactDoc doc;
     doc.loadSample(true);
     PlateOptions opts;
-    auto *dlg = new ExportDialog(doc, 0, opts, ExportFormat::Svg);
-    delete dlg;
+    ExportDialog dlg(doc, 0, opts, ExportFormat::Svg);
     return 0;
   }
 

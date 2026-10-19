@@ -57,16 +57,14 @@ int main(int argc, char **argv) {
 
     // 1. Unloaded doc
     {
-      auto *dlg = new ExportDialog(emptyDoc, 0, opts, ExportFormat::Svg);
-      delete dlg;
+      ExportDialog dlg(emptyDoc, 0, opts, ExportFormat::Svg);
     }
 
     // 2. Unconfirmed doc
     {
       ArtifactDoc unconf;
       unconf.loadSample(false);
-      auto *dlg = new ExportDialog(unconf, 0, opts, ExportFormat::Pdf);
-      delete dlg;
+      ExportDialog dlg(unconf, 0, opts, ExportFormat::Pdf);
     }
 
     // 3. Sherd mode doc
@@ -74,28 +72,26 @@ int main(int argc, char **argv) {
       ArtifactDoc sherdDoc;
       sherdDoc.loadSample(true);
       sherdDoc.setSherdMode(true);
-      auto *dlg = new ExportDialog(sherdDoc, 0, opts, ExportFormat::Dxf);
-      delete dlg;
+      ExportDialog dlg(sherdDoc, 0, opts, ExportFormat::Dxf);
     }
 
     // 4. Full interactive toggle on whole sample
     {
       ArtifactDoc wholeDoc;
       wholeDoc.loadSample(true);
-      auto *dlg = new ExportDialog(wholeDoc, 0, opts, ExportFormat::Png);
+      ExportDialog dlg(wholeDoc, 0, opts, ExportFormat::Png);
       // Toggle all check boxes
-      const auto boxes = dlg->findChildren<QCheckBox *>();
+      const auto boxes = dlg.findChildren<QCheckBox *>();
       for (auto *b : boxes) {
         b->toggle();
       }
       // Toggle all push buttons (chips)
-      const auto btns = dlg->findChildren<QPushButton *>();
+      const auto btns = dlg.findChildren<QPushButton *>();
       for (auto *btn : btns) {
         if (btn->property("chip").toBool()) {
           btn->click();
         }
       }
-      delete dlg;
     }
     return 0;
   }

@@ -1163,6 +1163,11 @@ void MainWindow::flushCut() {
 void MainWindow::cancelCut() {
   cut_.cancel();
   cutTimer_->stop();
+  if (sweepTimer_) {
+    sweepTimer_->stop();
+    sweepTimer_->deleteLater();
+    sweepTimer_ = nullptr;
+  }
 }
 
 void MainWindow::saveSlotAngle(int k) {
@@ -1282,7 +1287,7 @@ void MainWindow::onAction(const QString &id) {
     refreshAll(false);
     sheet_->canvas()->update();
     setHint(doc_.baseTiltMode() == BaseTiltMode::RimHorizontal
-                ? QStringLiteral("수평 기준: 구연 수평 (T, 2.1° 보정 · 권고)")
+                ? QStringLiteral("수평 기준: 구연 수평 (T · 권고)")
                 : QStringLiteral("수평 기준: 바닥 수평 (B, 바닥판 그대로)"));
   } else if (id == "sherdModeToggle") {
     pushUndo();
@@ -1366,7 +1371,13 @@ void MainWindow::onAction(const QString &id) {
                   .arg(recs[recIdx].why));
     }
   } else if (id == "cutSweep") {
-    auto *timer = new QTimer(this);
+    if (sweepTimer_) {
+      sweepTimer_->stop();
+      sweepTimer_->deleteLater();
+      sweepTimer_ = nullptr;
+    }
+    sweepTimer_ = new QTimer(this);
+    QTimer *timer = sweepTimer_;
     QElapsedTimer elapsed;
     elapsed.start();
     const double startAngle = doc_.frontAngle();
@@ -1376,6 +1387,8 @@ void MainWindow::onAction(const QString &id) {
               if (ms >= 3200) {
                 timer->stop();
                 timer->deleteLater();
+                if (sweepTimer_ == timer)
+                  sweepTimer_ = nullptr;
                 doc_.setFrontAngle(startAngle);
                 refreshAll(true);
                 return;

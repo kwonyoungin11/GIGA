@@ -195,10 +195,6 @@ PlateRefLines plateRefLines(const ArtifactDoc &doc, double extMm) {
   }
   if (neckZ > 0.0 && neckZ < H) {
     r.neck = RefLine{{-neckR, neckZ}, {neckR, neckZ}};
-  } else if (H > 50.0) {
-    double estZ = H * 0.80;
-    double estR = (d.rim > 0.0 ? d.rim * 0.45 : 30.0);
-    r.neck = RefLine{{-estR, estZ}, {estR, estZ}};
   }
   return r;
 }
