@@ -14,6 +14,7 @@ class QSlider;
 namespace studio {
 
 enum class PosePickMode { None, Surface1Click, Floor3Point };
+enum class CutPickMode { None, CutPoint1Click, RubbingSpot1Click };
 
 class AngleStripWidget : public QWidget {
   Q_OBJECT
@@ -45,6 +46,11 @@ public:
     update();
   }
   PosePickMode posePickMode() const { return posePickMode_; }
+  void setCutPickMode(CutPickMode m) {
+    cutPickMode_ = m;
+    update();
+  }
+  CutPickMode cutPickMode() const { return cutPickMode_; }
 
 signals:
   void cutAngleDragged(double deltaDeg);
@@ -53,6 +59,8 @@ signals:
   void poseRotated(PoseAxis axis, double deg);
   void floorCandidateClicked(int index);
   void surfacePointPicked(KA::Point3 worldPt);
+  void cutPointPicked(KA::Point3 worldPt);
+  void rubbingSpotPicked(KA::Point3 worldPt);
   void horizontalHeightDragged(double zMm);
 
 protected:
@@ -81,6 +89,7 @@ private:
   bool minimapDrag_ = false;
   bool horizDrag_ = false;
   PosePickMode posePickMode_ = PosePickMode::None;
+  CutPickMode cutPickMode_ = CutPickMode::None;
   QPoint last_;
   std::vector<KA::Polyline3> cut_;
   mutable std::array<QRectF, 3> floorBadgeRects_{};
@@ -105,6 +114,8 @@ signals:
   void poseRotateRequested(PoseAxis axis, double deg);
   void angleSelected(double absDeg);
   void horizontalHeightSelected(double zMm);
+  void cutPointPicked(KA::Point3 worldPt);
+  void rubbingSpotPicked(KA::Point3 worldPt);
 
 private:
   bool cutPage_ = false, editPage_ = false;
@@ -115,6 +126,9 @@ private:
   QWidget *poseBar_ = nullptr;
   QPushButton *btnSurfacePick_ = nullptr;
   QPushButton *btn3PtPick_ = nullptr;
+  QWidget *pickBar_ = nullptr;
+  QPushButton *btnPickCut_ = nullptr;
+  QPushButton *btnPickRubbing_ = nullptr;
   QWidget *cutBar_ = nullptr;
   QSlider *angleSlider_ = nullptr;
   QLabel *angleSliderLbl_ = nullptr;

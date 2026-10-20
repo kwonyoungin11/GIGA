@@ -244,6 +244,37 @@ ShadeImage Plate::renderShade(const ArtifactDoc &doc, ShadeMode mode,
   return s;
 }
 
+QImage Plate::renderRubbingPatch(const ArtifactDoc &doc, double pxPerMm) {
+  if (!doc.isLoaded() || !doc.poseConfirmed() || !doc.hasRubbingSpot())
+    return {};
+  const double wMm = std::clamp(doc.rubbingSpanW(), 20.0, 90.0);
+  const double hMm = std::clamp(doc.rubbingSpanH(), 20.0, 80.0);
+  pxPerMm = std::clamp(pxPerMm, 1.5, 8.0);
+  RasterView v;
+  // 선택된 문양 방위각(rubbingAzimuthDeg)의 외면 법선 정면에서 직교 투영
+  v.yawDeg = 270.0 - doc.rubbingAzimuthDeg();
+  v.pitchDeg = 0.0;
+  v.pxPerMm = pxPerMm;
+  const QSize sz(std::max(32, int(std::ceil(wMm * pxPerMm))),
+                 std::max(32, int(std::ceil(hMm * pxPerMm))));
+  v.centerPx = QPointF(sz.width() / 2.0, sz.height() / 2.0);
+  v.centerX = 0.0;
+  v.centerY = 0.0;
+  v.centerZ = doc.rubbingZ();
+  const auto &m =
+      (doc.isPreviewing() && !doc.lodMesh().faces.empty()) ? doc.lodMesh()
+                                                           : doc.mesh();
+  QImage raw = renderMesh(m, sz, v, ShadeMode::DTak, theme::ModelClay, nullptr,
+                          nullptr);
+  // 배경을 따뜻한 한지 바탕색(#f8f6f0)으로 합성해 완성된 탁본 도판으로 반환
+  QImage out(sz, QImage::Format_RGB32);
+  out.fill(QColor(248, 246, 240));
+  QPainter qp(&out);
+  qp.drawImage(0, 0, raw);
+  qp.end();
+  return out;
+}
+
 void Plate::paint(QPainter &p, const ArtifactDoc &doc, const QTransform &t,
                   double px1mm, double textPx, const PlateOptions &o,
                   const ShadeImage *shade) {
@@ -361,6 +392,7 @@ void Plate::paint(QPainter &p, const ArtifactDoc &doc, const QTransform &t,
   }
 
   // 2) 유물 음영 (외면 쪽 절반: Right 왼쪽 x ≤ 0, Left 오른쪽 x ≥ 0) ---------
+  const auto outline = doc.displayOutline();
   if (o.shade && shade && !shade->isNull()) {
     const QRectF dst = t.mapRect(shade->rectMm);
     const QRectF &sr = shade->rectMm;
@@ -369,7 +401,20 @@ void Plate::paint(QPainter &p, const ArtifactDoc &doc, const QTransform &t,
                       ? QRectF(sr.left(), sr.top(), -sr.left(), sr.height())
                       : QRectF(0, sr.top(), sr.right(), sr.height()));
     p.save();
-    p.setClipRect(half);
+    if (outline.size() >= 4) {
+      QPolygonF clipPoly;
+      clipPoly.reserve(qsizetype(outline.size()) + 2);
+      clipPoly << t.map(QPointF(0.0, outline.front().y));
+      for (const auto &q : outline)
+        clipPoly << t.map(QPointF(q.x, q.y));
+      clipPoly << t.map(QPointF(0.0, outline.back().y));
+      QPainterPath clipPath;
+      clipPath.addPolygon(clipPoly);
+      clipPath.closeSubpath();
+      p.setClipPath(clipPath);
+    } else {
+      p.setClipRect(half);
+    }
     p.setRenderHint(QPainter::SmoothPixmapTransform, true);
     p.drawImage(dst, shade->image);
     p.restore();
@@ -423,7 +468,6 @@ void Plate::paint(QPainter &p, const ArtifactDoc &doc, const QTransform &t,
   }
 
   // 3) 외곽선 -----------------------------------------------------------------
-  const auto outline = doc.displayOutline();
   if (o.outline) {
     if (outline.size() >= 2) {
       p.setPen(QPen(theme::OuterInk, lineOut, Qt::SolidLine, Qt::RoundCap,
@@ -507,6 +551,73 @@ void Plate::paint(QPainter &p, const ArtifactDoc &doc, const QTransform &t,
     const double len = px1mm * 50 > Edev.width() * 0.3 ? 10.0 : 50.0;
     const QPointF lb = t.map(QPointF(E.right() - len - 6, E.top() + 4));
     scaleBar(p, lb, px1mm, len, mono, QString());
+  }
+
+  // 6) 선택 부위 정밀 문양 탁본 콜아웃 박스 & 3D 절단 위치 확인 표지 -----------
+  if (o.shade && doc.hasRubbingSpot() && !horiz && Edev.width() >= 180.0) {
+    const QImage rubImg = renderRubbingPatch(doc, 4.2);
+    if (!rubImg.isNull()) {
+      const double boxW = std::clamp(Edev.width() * 0.24, 76.0, 148.0);
+      const double boxH = boxW * double(rubImg.height()) /
+                          std::max(1.0, double(rubImg.width()));
+      const double capH = std::max(16.0, textPx * 1.45);
+      const bool onRight = (doc.sectionSide() == SectionSide::Left);
+      const double bx =
+          onRight ? (Edev.right() - boxW - 8.0) : (Edev.left() + 8.0);
+      const double by = std::clamp(
+          t.map(QPointF(0.0, doc.rubbingZ())).y() - (boxH + capH) * 0.5,
+          Edev.top() + 34.0, Edev.bottom() - boxH - capH - 28.0);
+      const QRectF cardRect(bx, by, boxW, boxH + capH);
+      const QRectF imgRect(bx + 3.0, by + capH, boxW - 6.0, boxH - 3.0);
+
+      // 외면 선택 높이(rubbingZ)로 이어지는 인출선
+      const double rAtZ = std::max(8.0, doc.outerRadiusAt(doc.rubbingZ()) * 0.65);
+      const double srcX =
+          (doc.sectionSide() == SectionSide::Right ? -1.0 : 1.0) * rAtZ;
+      const QPointF srcPt = t.map(QPointF(srcX, doc.rubbingZ()));
+      const QPointF dstPt(onRight ? cardRect.left() : cardRect.right(),
+                          cardRect.center().y());
+
+      p.save();
+      p.setPen(QPen(theme::OuterInk, 1.0, Qt::DashLine));
+      p.drawLine(srcPt, dstPt);
+      p.setBrush(theme::OuterInk);
+      p.drawEllipse(srcPt, 2.5, 2.5);
+
+      p.setPen(QPen(theme::OuterInk, 1.2));
+      p.setBrush(theme::Surface);
+      p.drawRect(cardRect);
+      p.drawImage(imgRect, rubImg);
+      p.setPen(QPen(theme::Edge, 0.8));
+      p.setBrush(Qt::NoBrush);
+      p.drawRect(imgRect);
+
+      p.setFont(mono);
+      p.setPen(theme::Ink);
+      const QString rubTitle =
+          QStringLiteral("◈ 문양 탁본 (H %1)").arg(num(doc.rubbingZ(), 0));
+      p.drawText(QRectF(bx + 3.0, by + 1.0, boxW - 6.0, capH - 2.0),
+                 Qt::AlignCenter, rubTitle);
+      p.restore();
+    }
+  }
+
+  if (o.section && o.labels && doc.hasCutMarker() && !horiz) {
+    const double cz = doc.cutMarkerZ();
+    double cr = doc.outerRadiusAt(cz);
+    if (cr <= 0.0)
+      cr = 0.5 * doc.dims().belly;
+    const double sx = doc.sectionSign() * cr;
+    const QPointF cutPt = t.map(QPointF(sx, cz));
+    p.save();
+    p.setPen(QPen(Qt::white, 2.0));
+    p.setBrush(theme::ProfileRed);
+    p.drawEllipse(cutPt, 4.5, 4.5);
+    labelBox(p, cutPt + QPointF(doc.sectionSign() * 8.0, 0.0),
+             QStringLiteral("✂ 절단 H %1 mm").arg(num(cz, 1)), mono,
+             (doc.sectionSign() > 0 ? Qt::AlignLeft : Qt::AlignRight) |
+                 Qt::AlignVCenter);
+    p.restore();
   }
   p.restore();
 }

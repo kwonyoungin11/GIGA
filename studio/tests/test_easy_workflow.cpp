@@ -177,34 +177,99 @@ int main(int argc, char **argv) {
     win.triggerActionForTest("toEdit");
     QApplication::processEvents();
     CHECK(true, "MainWindow E2E step 1 -> step 2 -> step 3 multi-section drawing completed");
+  }
 
-    // 5) 선택적 실제 유물(argv[2]) 스크린샷 캡처 (① 바닥 정하기 직립 -> ② 막으로 자르기 -> ③ 도면 편집)
-    if (argc > 2) {
-      const QString realObj = QString::fromLocal8Bit(argv[2]);
-      const QString shotDir =
-          argc > 3 ? QString::fromLocal8Bit(argv[3]) : outDir;
-      if (QFileInfo(realObj).isFile()) {
-        const QString stem = QFileInfo(realObj).completeBaseName();
-        win.resize(1560, 920);
-        win.openPath(realObj);
-        win.triggerActionForTest("poseAuto");
-        QApplication::processEvents();
-        win.grab().save(
-            shotDir + QStringLiteral("/shot_%1_step1.png").arg(stem));
+  // -------------------------------------------------------------------------
+  // [AC-4 & AC-5] JOB-012: 3D 절단 위치 1클릭 지정(내가 여기를 잘랐구나) 및 문양 탁본 선택·도판 출력 검증
+  // -------------------------------------------------------------------------
+  std::printf("\n--- [AC-4 & AC-5] Exact Cut Marker & Pattern Rubbing Callout ---\n");
+  {
+    ArtifactDoc doc;
+    doc.loadSample(true);
+    CHECK(doc.hasRubbingSpot(), "autoInitRubbingSpot initialized on confirmPose");
 
-        win.triggerActionForTest("poseConfirm");
-        win.triggerActionForTest("cutRec1");
-        QApplication::processEvents();
-        win.grab().save(
-            shotDir + QStringLiteral("/shot_%1_step2.png").arg(stem));
+    // 1) 3D 표면 임의 지점 클릭으로 절단 위치 지정 (alignCutToSurfacePoint)
+    const double testAngRad = 60.0 * 3.14159265358979323846 / 180.0;
+    const KA::Point3 cutPt{75.0 * std::cos(testAngRad),
+                           75.0 * std::sin(testAngRad), 122.0};
+    const bool cutOk = doc.alignCutToSurfacePoint(cutPt);
+    CHECK(cutOk && doc.hasCutMarker(), "alignCutToSurfacePoint succeeded and set cutMarker");
+    CHECK(std::fabs(doc.cutMarkerZ() - 122.0) < 1e-6, "cutMarkerZ matches clicked Z (122.0 mm)");
+    CHECK(!doc.displaySection().empty(), "displaySection non-empty at clicked cut point");
 
-        win.triggerActionForTest("toEdit");
-        QApplication::processEvents();
-        win.grab().save(
-            shotDir + QStringLiteral("/shot_%1_step3.png").arg(stem));
-        std::printf("  [PASS] Captured real artifact screenshots to %s\n",
-                    qPrintable(shotDir));
+    // 2) 3D 표면 문양 영역 선택 (selectRubbingSpot) 및 2D 도판 문양 탁본 패치 렌더링 검증
+    const KA::Point3 rubPt{-65.0, -40.0, 138.0};
+    const bool rubOk = doc.selectRubbingSpot(rubPt);
+    CHECK(rubOk && doc.hasRubbingSpot(), "selectRubbingSpot succeeded");
+    CHECK(std::fabs(doc.rubbingZ() - 138.0) < 1e-6, "rubbingZ matches clicked Z (138.0 mm)");
+
+    const QImage rubImg = Plate::renderRubbingPatch(doc, 4.0);
+    CHECK(!rubImg.isNull() && rubImg.width() >= 64 && rubImg.height() >= 64,
+          "renderRubbingPatch produced valid image (%dx%d)", rubImg.width(), rubImg.height());
+    int nonEmptyPx = 0, minLum = 255, maxLum = 0;
+    for (int y = 0; y < rubImg.height(); ++y) {
+      const QRgb *row = reinterpret_cast<const QRgb *>(rubImg.constScanLine(y));
+      for (int x = 0; x < rubImg.width(); ++x) {
+        if (qAlpha(row[x]) > 200) {
+          ++nonEmptyPx;
+          const int g = qRed(row[x]);
+          minLum = std::min(minLum, g);
+          maxLum = std::max(maxLum, g);
+        }
       }
+    }
+    CHECK(nonEmptyPx > 500 && (maxLum - minLum) >= 40,
+          "rubbing patch has valid ink-on-hanji contrast (pixels=%d, lum=%d..%d)",
+          nonEmptyPx, minLum, maxLum);
+
+    // 3) 전체 도판(paintSheet) 렌더링 시 문양 탁본 콜아웃 및 절단 위치 표지 포함 검증
+    ExportRequest req;
+    req.title = QStringLiteral("문양 탁본·절단 위치 검증 도판");
+    req.paper = Paper::A4Portrait;
+    req.scale = 1.0;
+    req.opts.shade = true;
+    req.opts.shadeMode = ShadeMode::DTak;
+    QImage plateImg(840, 1188, QImage::Format_ARGB32_Premultiplied);
+    plateImg.fill(Qt::white);
+    {
+      QPainter p(&plateImg);
+      paintSheet(p, doc, req, 4.0);
+    }
+    CHECK(!plateImg.isNull() && plateImg.width() == 840 && plateImg.height() == 1188,
+          "paintSheet with rubbing callout succeeded (%dx%d)",
+          plateImg.width(), plateImg.height());
+  }
+
+  // -------------------------------------------------------------------------
+  // 선택적 실제 유물(argv[2]) 스크린샷 캡처 (① 바닥 정하기 직립 -> ② 막으로 자르기 -> ③ 도면 편집)
+  // -------------------------------------------------------------------------
+  if (argc > 2) {
+    const QString realObj = QString::fromLocal8Bit(argv[2]);
+    const QString shotDir =
+        argc > 3 ? QString::fromLocal8Bit(argv[3]) : outDir;
+    if (QFileInfo(realObj).isFile()) {
+      MainWindow win;
+      win.resize(1560, 920);
+      win.show();
+      const QString stem = QFileInfo(realObj).completeBaseName();
+      win.openPath(realObj);
+      win.triggerActionForTest("poseAuto");
+      QApplication::processEvents();
+      win.grab().save(
+          shotDir + QStringLiteral("/shot_%1_step1.png").arg(stem));
+
+      win.triggerActionForTest("poseConfirm");
+      // 기본 음영 모드가 이미 디지털 탁본(D-Tak)이므로 그대로 외면 먹탁 + 문양 탁본 콜아웃 + 절단면 캡처
+      QApplication::processEvents();
+      win.grab().save(
+          shotDir + QStringLiteral("/shot_%1_step2.png").arg(stem));
+
+      win.triggerActionForTest("toEdit");
+      QApplication::processEvents();
+      win.grab().save(
+          shotDir + QStringLiteral("/shot_%1_step3.png").arg(stem));
+      std::printf("  [PASS] Captured real artifact screenshots to %s\n",
+                  qPrintable(shotDir));
     }
   }
 

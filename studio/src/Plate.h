@@ -62,6 +62,9 @@ public:
   // 오른쪽 절반이 외면
   static ShadeImage renderShade(const ArtifactDoc &doc, ShadeMode mode,
                                 double pxPerMm);
+  // 3D에서 선택한 문양 부위의 정면 법선 방향 정밀 먹탁 패치 영상 생성
+  static QImage renderRubbingPatch(const ArtifactDoc &doc,
+                                   double pxPerMm = 4.0);
   // mmToDev: 도면 mm(y 위로 +) → 장치 좌표. px1mm: 장치에서 도면 1 mm 의 길이,
   // textPx: 글자 크기(장치 px).
   static void paint(QPainter &p, const ArtifactDoc &doc,

@@ -156,12 +156,11 @@ bool DTakRenderer::initializeHeatMethodShader()
 
 bool DTakRenderer::initializeRenderShader()
 {
-    // For now, use a simple shader for rendering geodesic distances
-    // TODO: Create dedicated render shader for D-Tak visualization
-
+    // 고고학 디지털 탁본(D-Tak, 먹탁) 전용 셰이더:
+    // 정점 1-ring 곡률(texCoord.x) + 화면 공간 법선 미분(dFdx/dFdy)을 결합하여
+    // 양각(돌대·인화문 마루)은 먹색(#161514), 음각(침선·파상문 홈)은 한지 여백(#F8F6F1)으로 표현한다.
     mShaderRender = std::make_unique<QOpenGLShaderProgram>();
 
-    // Simple vertex shader (inline)
     const char* vertSource = R"(
         #version 330 core
         layout(location = 0) in vec3 vertexPosition;
@@ -171,31 +170,46 @@ bool DTakRenderer::initializeRenderShader()
         uniform mat4 viewMatrix;
         uniform mat4 projectionMatrix;
         out vec2 texCoord;
+        out vec3 vViewNormal;
+        out vec3 vViewPos;
         void main() {
             texCoord = vertexTexCoord;
-            gl_Position = projectionMatrix * viewMatrix * modelMatrix * vec4(vertexPosition, 1.0);
+            mat3 normalMat = transpose(inverse(mat3(viewMatrix * modelMatrix)));
+            vViewNormal = normalize(normalMat * vertexNormal);
+            vec4 viewPos = viewMatrix * modelMatrix * vec4(vertexPosition, 1.0);
+            vViewPos = viewPos.xyz;
+            gl_Position = projectionMatrix * viewPos;
         }
     )";
 
-    // Simple fragment shader (inline)
     const char* fragSource = R"(
         #version 330 core
         in vec2 texCoord;
+        in vec3 vViewNormal;
+        in vec3 vViewPos;
         uniform sampler2D distanceTexture;
         out vec4 fragColor;
         void main() {
-            float dist = texture(distanceTexture, texCoord).r;
-            // Color mapping: blue (near) -> green -> yellow -> red (far)
-            vec3 color;
-            if (dist < 0.25) {
-                color = mix(vec3(0.0, 0.0, 1.0), vec3(0.0, 1.0, 1.0), dist * 4.0);
-            } else if (dist < 0.5) {
-                color = mix(vec3(0.0, 1.0, 1.0), vec3(0.0, 1.0, 0.0), (dist - 0.25) * 4.0);
-            } else if (dist < 0.75) {
-                color = mix(vec3(0.0, 1.0, 0.0), vec3(1.0, 1.0, 0.0), (dist - 0.5) * 4.0);
-            } else {
-                color = mix(vec3(1.0, 1.0, 0.0), vec3(1.0, 0.0, 0.0), (dist - 0.75) * 4.0);
+            vec3 n = normalize(vViewNormal);
+            // 정점 곡률 기반 요철(texCoord.x: 양수=양각 마루, 음수=음각 홈)
+            float relief = texCoord.x;
+            // 화면 공간 법선 변화율(미세 인화문·파상문 모서리 강조)
+            vec3 dnx = dFdx(n);
+            vec3 dny = dFdy(n);
+            float edgeCurv = clamp((length(dnx) + length(dny)) * 1.35, 0.0, 1.0);
+            // 시선 정면성(측면 외곽의 과도한 흑화 방지)
+            float facing = clamp(abs(n.z), 0.15, 1.0);
+
+            // 먹 농도(inkDensity): 양각(relief > 0) 및 모서리에 먹이 묻고, 음각(relief < 0)은 한지 백색 유지
+            float ink = 0.28 + 0.52 * tanh(relief * 2.4) + 0.25 * edgeCurv * facing;
+            if (relief < -0.08) {
+                ink *= exp(relief * 3.0);
             }
+            ink = clamp(ink, 0.0, 1.0);
+
+            vec3 hanjiPaper = vec3(0.973, 0.965, 0.945); // #F8F6F1 한지색
+            vec3 sumiInk    = vec3(0.086, 0.082, 0.078); // #161514 먹색
+            vec3 color = mix(hanjiPaper, sumiInk, ink);
             fragColor = vec4(color, 1.0);
         }
     )";
@@ -361,17 +375,26 @@ bool DTakRenderer::uploadMeshData()
 
     mVertexBuffer.bind();
     mVertexBuffer.allocate(vertices.data(), static_cast<int>(vertices.size() * sizeof(float)));
+    mGL.glEnableVertexAttribArray(0);
+    mGL.glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), nullptr);
 
     mNormalBuffer.bind();
     mNormalBuffer.allocate(normals.data(), static_cast<int>(normals.size() * sizeof(float)));
+    mGL.glEnableVertexAttribArray(1);
+    mGL.glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), nullptr);
 
     mTexCoordBuffer.bind();
     mTexCoordBuffer.allocate(texCoords.data(), static_cast<int>(texCoords.size() * sizeof(float)));
+    mGL.glEnableVertexAttribArray(2);
+    mGL.glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, 2 * sizeof(float), nullptr);
 
     mIndexBuffer.bind();
     mIndexBuffer.allocate(indices.data(), static_cast<int>(indices.size() * sizeof(unsigned int)));
 
     mVAO.release();
+
+    // CPU 정점 요철(1-ring Umbrella 곡률) 초기 계산 및 UV 버퍼(texCoord.x) 반영
+    computeGeodesicDistanceCPU();
 
     std::cout << "[DTakRenderer] Mesh uploaded: " << mVertexCount << " vertices, "
               << mIndexCount / 3 << " faces, avg edge length: " << mMeshAverageEdgeLength << std::endl;
@@ -541,12 +564,93 @@ bool DTakRenderer::computeGeodesicDistanceCPU()
     QElapsedTimer timer;
     timer.start();
 
-    // TODO: Use GigaMesh EdgeGeodesic for CPU computation
-    // For now, placeholder
+    const size_t nVerts = mMesh->getVertexNr();
+    const size_t nFaces = mMesh->getFaceNr();
+    if (nVerts == 0 || nFaces == 0) {
+        return false;
+    }
 
-    std::cout << "[DTakRenderer] CPU computation (EdgeGeodesic) - TODO" << std::endl;
+    // 1-ring Umbrella 평균 위치(sumPos) 및 이웃 수(deg) 누적
+    std::vector<double> sumX(nVerts, 0.0), sumY(nVerts, 0.0), sumZ(nVerts, 0.0);
+    std::vector<uint32_t> deg(nVerts, 0);
+
+    auto accumEdge = [&](size_t a, size_t b, const Vertex* va, const Vertex* vb) {
+        if (a >= nVerts || b >= nVerts || !va || !vb) return;
+        sumX[a] += vb->getX(); sumY[a] += vb->getY(); sumZ[a] += vb->getZ(); deg[a]++;
+        sumX[b] += va->getX(); sumY[b] += va->getY(); sumZ[b] += va->getZ(); deg[b]++;
+    };
+
+    for (size_t fi = 0; fi < nFaces; ++fi) {
+        Face* f = mMesh->getFacePos(fi);
+        if (!f) continue;
+        Vertex* v0 = f->getVertA();
+        Vertex* v1 = f->getVertB();
+        Vertex* v2 = f->getVertC();
+        if (!v0 || !v1 || !v2) continue;
+        const size_t i0 = static_cast<size_t>(v0->getIndex());
+        const size_t i1 = static_cast<size_t>(v1->getIndex());
+        const size_t i2 = static_cast<size_t>(v2->getIndex());
+        accumEdge(i0, i1, v0, v1);
+        accumEdge(i1, i2, v1, v2);
+        accumEdge(i2, i0, v2, v0);
+    }
+
+    // 미세(1-ring) 법선 방향 돌출량 계산: 양수 = 양각(돌대·문양 마루), 음수 = 음각(침선·파상문 홈)
+    const double avgEdge = std::max(0.05, static_cast<double>(mMeshAverageEdgeLength));
+    std::vector<float> fineRelief(nVerts, 0.0f);
+    for (size_t i = 0; i < nVerts; ++i) {
+        Vertex* v = mMesh->getVertexPos(i);
+        if (!v || deg[i] == 0) continue;
+        const double invD = 1.0 / static_cast<double>(deg[i]);
+        const double dx = v->getX() - sumX[i] * invD;
+        const double dy = v->getY() - sumY[i] * invD;
+        const double dz = v->getZ() - sumZ[i] * invD;
+        Vector3D n = v->getNormal(true);
+        const double signedDisp = dx * n.getX() + dy * n.getY() + dz * n.getZ();
+        fineRelief[i] = static_cast<float>(std::clamp(signedDisp / (avgEdge * 0.35), -2.5, 2.5));
+    }
+
+    // 2-ring 스무딩으로 중역(mid-scale) 문양 단차 보강
+    std::vector<double> ringSum(nVerts, 0.0);
+    for (size_t fi = 0; fi < nFaces; ++fi) {
+        Face* f = mMesh->getFacePos(fi);
+        if (!f) continue;
+        Vertex* v0 = f->getVertA();
+        Vertex* v1 = f->getVertB();
+        Vertex* v2 = f->getVertC();
+        if (!v0 || !v1 || !v2) continue;
+        const size_t i0 = static_cast<size_t>(v0->getIndex());
+        const size_t i1 = static_cast<size_t>(v1->getIndex());
+        const size_t i2 = static_cast<size_t>(v2->getIndex());
+        if (i0 < nVerts && i1 < nVerts && i2 < nVerts) {
+            ringSum[i0] += fineRelief[i1] + fineRelief[i2];
+            ringSum[i1] += fineRelief[i2] + fineRelief[i0];
+            ringSum[i2] += fineRelief[i0] + fineRelief[i1];
+        }
+    }
+
+    mGeodesicDistances.resize(nVerts, 0.0f);
+    std::vector<float> updatedTexCoords(nVerts * 2, 0.0f);
+    for (size_t i = 0; i < nVerts; ++i) {
+        const float mid = (deg[i] > 0)
+            ? static_cast<float>(ringSum[i] / static_cast<double>(deg[i]))
+            : fineRelief[i];
+        const float combined = 0.65f * fineRelief[i] + 0.35f * mid;
+        mGeodesicDistances[i] = combined;
+        updatedTexCoords[i * 2 + 0] = combined;
+        updatedTexCoords[i * 2 + 1] = static_cast<float>(i / 1024) / 1024.0f;
+    }
+
+    if (mIsInitialized && mTexCoordBuffer.isCreated()) {
+        mTexCoordBuffer.bind();
+        mTexCoordBuffer.allocate(updatedTexCoords.data(),
+                                 static_cast<int>(updatedTexCoords.size() * sizeof(float)));
+        mTexCoordBuffer.release();
+    }
 
     mLastComputeTimeCPU = timer.elapsed();
+    std::cout << "[DTakRenderer] CPU multi-scale relief rubbing computed: "
+              << mLastComputeTimeCPU << " ms (" << nVerts << " vertices)" << std::endl;
     return true;
 }
 

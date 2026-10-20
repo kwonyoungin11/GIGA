@@ -273,17 +273,43 @@ bool View3DCanvas::pickSurfacePoint(const QPointF &screenPt,
   if (m.vertices.empty())
     return false;
   const RasterView v = view();
+  const double yw = v.yawDeg * std::numbers::pi / 180.0;
+  const double pt = v.pitchDeg * std::numbers::pi / 180.0;
+  const double cy = std::cos(yw), sy = std::sin(yw);
+  const double cp = std::cos(pt), sp = std::sin(pt);
+  auto camDepth = [&](const KA::Point3 &p) {
+    const double px = p.x - v.centerX, py = p.y - v.centerY;
+    const double y1 = sy * px + cy * py;
+    const double z1 = p.z - v.centerZ;
+    return -(sp * z1 + cp * y1);
+  };
+
+  double bestNearDepth = -1e18;
+  size_t bestNearIdx = 0;
+  bool foundNear = false;
   double bestDist2 = 1e18;
   size_t bestIdx = 0;
-  const size_t step = std::max<size_t>(1, m.vertices.size() / 8000);
+  const size_t step = std::max<size_t>(1, m.vertices.size() / 12000);
   for (size_t i = 0; i < m.vertices.size(); i += step) {
-    const QPointF sp = projectPoint(m.vertices[i], v);
-    const double dx = sp.x() - screenPt.x(), dy = sp.y() - screenPt.y();
+    const QPointF spPt = projectPoint(m.vertices[i], v);
+    const double dx = spPt.x() - screenPt.x(), dy = spPt.y() - screenPt.y();
     const double d2 = dx * dx + dy * dy;
+    if (d2 <= 16.0 * 16.0) {
+      const double cz = camDepth(m.vertices[i]);
+      if (!foundNear || cz > bestNearDepth) {
+        bestNearDepth = cz;
+        bestNearIdx = i;
+        foundNear = true;
+      }
+    }
     if (d2 < bestDist2) {
       bestDist2 = d2;
       bestIdx = i;
     }
+  }
+  if (foundNear) {
+    outWorld = m.vertices[bestNearIdx];
+    return true;
   }
   if (bestDist2 > 45.0 * 45.0)
     return false;
@@ -404,7 +430,7 @@ void View3DCanvas::paintEvent(QPaintEvent *) {
                  QString::number(i + 1));
     }
 
-    // 상단 안내 배지
+    // 상단 안내 배지 (드래그로 유물이 쓰러지지 않음을 명확히 안내)
     const QString guideTxt =
         posePickMode_ == PosePickMode::Surface1Click
             ? QStringLiteral("🎯 바닥으로 쓸 유물 표면을 마우스로 클릭하세요")
@@ -412,8 +438,8 @@ void View3DCanvas::paintEvent(QPaintEvent *) {
             ? QStringLiteral("🎯 바닥 둘레 3점을 차례로 클릭하세요 (%1/3)")
                   .arg(picks.size())
             : QStringLiteral(
-                  "💡 마우스 드래그: 유물 기울이기 (Shift 15°) · 우클릭 드래그: "
-                  "시점 회전 · ①②③ 클릭: 바로 세우기");
+                  "🔒 유물 자세 고정됨 (드래그: 시점 회전 · 기즈모 고리/버튼: "
+                  "미세 조정 · ①②③: 바닥 선택)");
     p.setFont(theme::uiFont(9, posePickMode_ != PosePickMode::None));
     const QFontMetricsF gfm(p.font());
     const double gw = std::min<double>(width() - 16,
@@ -465,14 +491,34 @@ void View3DCanvas::paintEvent(QPaintEvent *) {
   p.setPen(QPen(theme::Ink, 1, Qt::DashDotLine));
   p.drawLine(projectPoint({0, 0, z0}, v), projectPoint({0, 0, z1}, v));
 
-  // 절단 단면선
+  // 절단 단면선 (편평·결실 유물에서 -X 반쪽이 주 단면일 때는 -X 반쪽을 굵은 실선으로 표시)
+  double zMinPos = 1e18, zMaxPos = -1e18, zMinNeg = 1e18, zMaxNeg = -1e18;
+  if (!horiz) {
+    for (const auto &pl : cut_) {
+      for (const auto &pt : pl.pts) {
+        if (pt.x >= 0.0) {
+          zMinPos = std::min(zMinPos, pt.z);
+          zMaxPos = std::max(zMaxPos, pt.z);
+        } else {
+          zMinNeg = std::min(zMinNeg, pt.z);
+          zMaxNeg = std::max(zMaxNeg, pt.z);
+        }
+      }
+    }
+  }
+  const double spanPos = (zMaxPos > zMinPos) ? (zMaxPos - zMinPos) : 0.0;
+  const double spanNeg = (zMaxNeg > zMinNeg) ? (zMaxNeg - zMinNeg) : 0.0;
+  const bool preferNegSide = !horiz && (spanNeg > spanPos + 5.0);
+
   std::vector<QPolygonF> thick, thin;
   for (const auto &pl : cut_) {
     for (size_t i = 0; i + 1 < pl.pts.size(); ++i) {
-      const bool sec = horiz || pl.pts[i].x + pl.pts[i + 1].x >= 0.0;
+      const bool isPos = pl.pts[i].x + pl.pts[i + 1].x >= 0.0;
+      const bool sec = horiz || (preferNegSide ? !isPos : isPos);
       auto &runs = sec ? thick : thin;
-      const bool cont =
-          i > 0 && (horiz || (pl.pts[i - 1].x + pl.pts[i].x >= 0.0) == sec);
+      const bool prevPos = i > 0 && (pl.pts[i - 1].x + pl.pts[i].x >= 0.0);
+      const bool prevSec = horiz || (preferNegSide ? !prevPos : prevPos);
+      const bool cont = i > 0 && (prevSec == sec);
       if (!cont)
         runs.push_back(QPolygonF{projectPoint(pl.pts[i], v)});
       runs.back() << projectPoint(pl.pts[i + 1], v);
@@ -502,6 +548,74 @@ void View3DCanvas::paintEvent(QPaintEvent *) {
   };
   tag((quad[2] + quad[3]) / 2, a);
   tag((quad[0] + quad[1]) / 2, a + QStringLiteral("′"));
+
+  // [JOB-012] 3D 문양 탁본 선택 영역 표시 (황토·금색 점선 테두리 + 배지)
+  if (doc_->hasRubbingSpot()) {
+    const double azRad = doc_->rubbingAzimuthDeg() * std::numbers::pi / 180.0;
+    const double zC = doc_->rubbingZ();
+    const double halfH = 0.45 * doc_->rubbingSpanH();
+    const double rSurf =
+        std::max(15.0, doc_->outerRadiusAt(zC) > 0.0 ? doc_->outerRadiusAt(zC)
+                                                     : 0.45 * doc_->dims().belly);
+    const double dAng = std::clamp(0.45 * doc_->rubbingSpanW() / rSurf, 0.12, 0.55);
+    QPolygonF patchPoly;
+    for (double ang : {azRad - dAng, azRad, azRad + dAng})
+      patchPoly << projectPoint(
+          {rSurf * std::cos(ang), rSurf * std::sin(ang), zC + halfH}, v);
+    for (double ang : {azRad + dAng, azRad, azRad - dAng})
+      patchPoly << projectPoint(
+          {rSurf * std::cos(ang), rSurf * std::sin(ang), zC - halfH}, v);
+    patchPoly << patchPoly.front();
+
+    p.setPen(QPen(QColor(255, 255, 255, 210), 3.2, Qt::SolidLine));
+    p.setBrush(QColor(237, 137, 54, 34));
+    p.drawPolygon(patchPoly);
+    p.setPen(QPen(QColor(0xb7, 0x55, 0x16), 1.8, Qt::DashLine));
+    p.drawPolygon(patchPoly);
+
+    const QPointF rcPt = projectPoint(doc_->rubbingCenter3D(), v);
+    p.setPen(QPen(Qt::white, 1.8));
+    p.setBrush(QColor(0xb7, 0x55, 0x16));
+    p.drawEllipse(rcPt, 4.5, 4.5);
+    p.setFont(theme::uiFont(8, true));
+    const QString rubLbl =
+        QStringLiteral("◈ 문양 탁본 (H%1)").arg(int(std::lround(zC)));
+    const QFontMetricsF rfm(p.font());
+    const double rw = rfm.horizontalAdvance(rubLbl) + 10.0;
+    const QRectF rBox(rcPt.x() - rw * 0.5, rcPt.y() - 22.0, rw, 16.0);
+    p.setPen(QPen(QColor(0xb7, 0x55, 0x16), 1.0));
+    p.setBrush(QColor(255, 252, 245, 235));
+    p.drawRoundedRect(rBox, 3.0, 3.0);
+    p.drawText(rBox, Qt::AlignCenter, rubLbl);
+  }
+
+  // [JOB-012] 사용자가 클릭해 지정한 3D 절단 위치 표지 (내가 여기를 잘랐구나 확인)
+  if (!horiz && doc_->hasCutMarker()) {
+    const double zM = doc_->cutMarkerZ();
+    double rM = doc_->outerRadiusAt(zM);
+    if (rM <= 0.0)
+      rM = 0.45 * std::max(doc_->dims().belly, 40.0);
+    const double xSign = preferNegSide ? -1.0 : 1.0;
+    const QPointF cmPt = projectPoint({xSign * rM, 0.0, zM}, v);
+    p.setPen(QPen(Qt::white, 2.5));
+    p.setBrush(theme::ProfileRed);
+    p.drawEllipse(cmPt, 6.5, 6.5);
+    p.setPen(QPen(Qt::white, 1.5));
+    p.drawLine(cmPt + QPointF(-4, 0), cmPt + QPointF(4, 0));
+    p.drawLine(cmPt + QPointF(0, -4), cmPt + QPointF(0, 4));
+
+    p.setFont(theme::uiFont(8, true));
+    const QString cutLbl =
+        QStringLiteral("✂ 절단 H %1 mm").arg(zM, 0, 'f', 1);
+    const QFontMetricsF cfm(p.font());
+    const double cw = cfm.horizontalAdvance(cutLbl) + 10.0;
+    const QRectF cBox(cmPt.x() + 9.0, cmPt.y() - 9.0, cw, 18.0);
+    p.setPen(QPen(theme::ProfileRed, 1.2));
+    p.setBrush(QColor(255, 255, 255, 240));
+    p.drawRoundedRect(cBox, 3.0, 3.0);
+    p.setPen(theme::ProfileRed);
+    p.drawText(cBox, Qt::AlignCenter, cutLbl);
+  }
 
   // 수평 슬롯(Z 막 높이로)일 때 파란 높이 조절 손잡이(↕) 표시
   if (horiz) {
@@ -601,6 +715,28 @@ void View3DCanvas::paintEvent(QPaintEvent *) {
       p.drawEllipse(pA, 4.5, 4.5);
     }
   }
+
+  // 단면 위치 / 문양 탁본 1클릭 지정 모드 상단 안내 배지
+  if (cutPickMode_ != CutPickMode::None) {
+    const QString pickTxt =
+        cutPickMode_ == CutPickMode::CutPoint1Click
+            ? QStringLiteral("✂ 자르고 싶은 3D 유물 표면을 마우스로 클릭하세요")
+            : QStringLiteral(
+                  "◈ 문양 탁본을 뜰 3D 유물 표면을 마우스로 클릭하세요");
+    const QColor pickCol = cutPickMode_ == CutPickMode::CutPoint1Click
+                               ? theme::ProfileRed
+                               : QColor(0xb7, 0x55, 0x16);
+    p.setFont(theme::uiFont(9, true));
+    const QFontMetricsF pfm(p.font());
+    const double pw =
+        std::min<double>(width() - 16, pfm.horizontalAdvance(pickTxt) + 16);
+    const QRectF pr(8, 8, pw, 22);
+    p.setPen(QPen(pickCol, 1.4));
+    p.setBrush(QColor(255, 255, 255, 238));
+    p.drawRoundedRect(pr, 4, 4);
+    p.setPen(pickCol);
+    p.drawText(pr, Qt::AlignCenter, pickTxt);
+  }
 }
 
 void View3DCanvas::mousePressEvent(QMouseEvent *e) {
@@ -617,7 +753,7 @@ void View3DCanvas::mousePressEvent(QMouseEvent *e) {
     return;
   }
 
-  // ① 바닥 정하기 단계: 배지 클릭 / 표면 찍기 / 기즈모·유물 직접 드래그 회전
+  // ① 바닥 정하기 단계: 배지 클릭 / 표면 찍기 / 기즈모 고리 직접 드래그만 유물 회전 (일반 드래그는 시점 회전)
   if (!doc_->poseConfirmed()) {
     if (e->button() == Qt::LeftButton) {
       for (int i = 0; i < 3; ++i) {
@@ -635,7 +771,7 @@ void View3DCanvas::mousePressEvent(QMouseEvent *e) {
         }
       }
       poseDragAxis_ = hitGizmoAxis(e->position());
-      poseDrag_ = true;
+      poseDrag_ = (poseDragAxis_ >= 0);
       drag_ = true;
       setCursor(Qt::ClosedHandCursor);
       update();
@@ -648,6 +784,19 @@ void View3DCanvas::mousePressEvent(QMouseEvent *e) {
 
   // ②·③ 확정 후 단계
   if (e->button() == Qt::LeftButton) {
+    if (cutPickMode_ != CutPickMode::None) {
+      KA::Point3 worldPt;
+      if (pickSurfacePoint(e->position(), worldPt)) {
+        const CutPickMode mode = cutPickMode_;
+        cutPickMode_ = CutPickMode::None;
+        if (mode == CutPickMode::CutPoint1Click)
+          emit cutPointPicked(worldPt);
+        else if (mode == CutPickMode::RubbingSpot1Click)
+          emit rubbingSpotPicked(worldPt);
+        update();
+        return;
+      }
+    }
     if (minimapRect_.isValid() && minimapRect_.contains(e->position())) {
       minimapDrag_ = true;
       drag_ = true;
@@ -719,11 +868,6 @@ void View3DCanvas::mouseMoveEvent(QMouseEvent *e) {
       emit poseRotated(PoseAxis::Y, (d.x() - d.y()) * scale);
     } else if (poseDragAxis_ == 2) {
       emit poseRotated(PoseAxis::Z, d.x() * scale);
-    } else {
-      if (std::abs(d.y()) >= std::abs(d.x()))
-        emit poseRotated(PoseAxis::X, d.y() * scale);
-      else
-        emit poseRotated(PoseAxis::Y, d.x() * scale);
     }
     return;
   }
@@ -752,16 +896,7 @@ void View3DCanvas::mouseReleaseEvent(QMouseEvent *) {
 }
 
 void View3DCanvas::wheelEvent(QWheelEvent *e) {
-  if (doc_ && doc_->isLoaded() && !doc_->poseConfirmed()) {
-    const double sign = e->angleDelta().y() > 0 ? 1.0 : -1.0;
-    const auto mod = e->modifiers();
-    const double step = (mod & Qt::ShiftModifier)     ? 15.0
-                        : (mod & Qt::ControlModifier) ? 1.0
-                                                      : 5.0;
-    emit poseRotated(PoseAxis::X, sign * step);
-    e->accept();
-    return;
-  }
+  // 마우스 휠로 유물 자세가 기울어지지 않도록 보호 (유물은 바닥판에 고정)
   QWidget::wheelEvent(e);
 }
 
@@ -1001,8 +1136,54 @@ View3DPane::View3DPane(QWidget *parent) : QWidget(parent) {
   cutBar_->hide();
   v->addWidget(cutBar_);
 
+  // ②·③ 확정 후: 3D 표면 1클릭 단면 위치 지정 · 문양 탁본 부위 선택 빠른 막대
+  pickBar_ = new QWidget(this);
+  pickBar_->setObjectName("PickQuickBar");
+  pickBar_->setStyleSheet(
+      QStringLiteral("background:%1; border-bottom:1px solid %2;")
+          .arg(theme::hex(theme::Surface), theme::hex(theme::Line)));
+  auto *pk = new QHBoxLayout(pickBar_);
+  pk->setContentsMargins(6, 4, 6, 4);
+  pk->setSpacing(4);
+  btnPickCut_ = makeMiniBtn(
+      QStringLiteral("✂ 클릭해 단면 위치 지정"),
+      QStringLiteral(
+          "3D 유물에서 자르고 싶은 곳을 마우스로 클릭하면 정확히 그 자리로 "
+          "단면을 자르고 도면에 표시합니다"),
+      pickBar_);
+  btnPickCut_->setCheckable(true);
+  btnPickRubbing_ = makeMiniBtn(
+      QStringLiteral("◈ 클릭해 문양 탁본 선택"),
+      QStringLiteral(
+          "3D 유물에서 탁본을 뜰 문양 부위를 마우스로 클릭하면 옆 도면에 "
+          "계산·색표현이 완료된 정밀 문양 탁본을 출력합니다"),
+      pickBar_);
+  btnPickRubbing_->setCheckable(true);
+  pk->addWidget(btnPickCut_);
+  pk->addWidget(btnPickRubbing_);
+  pk->addStretch();
+  pickBar_->hide();
+  v->addWidget(pickBar_);
+
   canvas_ = new View3DCanvas(this);
   v->addWidget(canvas_, 1);
+
+  connect(btnPickCut_, &QPushButton::clicked, this, [this](bool checked) {
+    if (checked)
+      btnPickRubbing_->setChecked(false);
+    canvas_->setCutPickMode(checked ? CutPickMode::CutPoint1Click
+                                    : CutPickMode::None);
+  });
+  connect(btnPickRubbing_, &QPushButton::clicked, this, [this](bool checked) {
+    if (checked)
+      btnPickCut_->setChecked(false);
+    canvas_->setCutPickMode(checked ? CutPickMode::RubbingSpot1Click
+                                    : CutPickMode::None);
+  });
+  connect(canvas_, &View3DCanvas::cutPointPicked, this,
+          &View3DPane::cutPointPicked);
+  connect(canvas_, &View3DCanvas::rubbingSpotPicked, this,
+          &View3DPane::rubbingSpotPicked);
 
   angleStrip_ = new AngleStripWidget(this);
   angleStrip_->setObjectName("AngleStrip");
@@ -1054,6 +1235,19 @@ void View3DPane::refresh(const ArtifactDoc &doc, int slot) {
   }
   cutBar_->setVisible(showCutControls);
   angleStrip_->setVisible(showCutControls);
+  if (pickBar_) {
+    pickBar_->setVisible(doc.isLoaded() && doc.poseConfirmed());
+    if (btnPickCut_) {
+      QSignalBlocker b(btnPickCut_);
+      btnPickCut_->setChecked(canvas_->cutPickMode() ==
+                              CutPickMode::CutPoint1Click);
+    }
+    if (btnPickRubbing_) {
+      QSignalBlocker b(btnPickRubbing_);
+      btnPickRubbing_->setChecked(canvas_->cutPickMode() ==
+                                  CutPickMode::RubbingSpot1Click);
+    }
+  }
 
   if (showCutControls) {
     const double curAng =

@@ -6,6 +6,7 @@
 #include "RimDetector.h"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <fstream>
@@ -144,12 +145,72 @@ Dimensions AnalyzeDimensions(const MeshData &alignedMesh,
   }
   const double heightRaw = zMax - zMin;
 
+  double rMax = 0.0;
+  for (const Point3 &p : alignedMesh.vertices) {
+    rMax = std::max(rMax, std::hypot(p.x, p.y));
+  }
+
   const auto rimXy = rimCandidateXy(alignedMesh, zMax);
   if (rimXy.size() >= 20) {
     const Circle2D c = FitCircleTaubin(rimXy);
-    if (c.ok) {
+    if (c.ok && c.r >= 0.12 * rMax &&
+        std::hypot(c.xc, c.yc) <= 0.35 * c.r) {
       d.rimDiameter = 2.0 * c.r;
       fillArcFromFit(d.rimArc, d.rimIsFragment, c, rimXy, zMax + c.r + 15.0);
+    }
+  }
+  if (d.rimDiameter <= 0.0 && heightRaw > 1.0 && rMax > 1.0) {
+    // 부분 파손·물레 굴곡으로 최상단 0.5 mm 에 꼭짓점 한 군데만 몰린 경우:
+    // 상단 구연부 대역(4% H 또는 최소 2.5 mm)에서 방위각 섹터별 최외곽 점을 추출한다.
+    const double rimBand = std::max(2.5, 0.04 * heightRaw);
+    constexpr int kSec = 72;
+    std::array<double, kSec> secR2{};
+    secR2.fill(-1.0);
+    std::array<Point2, kSec> secPt{};
+    for (const Point3 &p : alignedMesh.vertices) {
+      if (p.z < zMax - rimBand)
+        continue;
+      const double r2 = p.x * p.x + p.y * p.y;
+      double ang = std::atan2(p.y, p.x);
+      if (ang < 0.0)
+        ang += 2.0 * 3.14159265358979323846;
+      const int si = std::clamp(
+          static_cast<int>(ang / (2.0 * 3.14159265358979323846) * kSec), 0,
+          kSec - 1);
+      if (r2 > secR2[static_cast<std::size_t>(si)]) {
+        secR2[static_cast<std::size_t>(si)] = r2;
+        secPt[static_cast<std::size_t>(si)] = Point2{p.x, p.y};
+      }
+    }
+    std::vector<Point2> bandXy;
+    std::vector<double> bandRadii;
+    for (int si = 0; si < kSec; ++si) {
+      if (secR2[static_cast<std::size_t>(si)] > 0.0) {
+        bandXy.push_back(secPt[static_cast<std::size_t>(si)]);
+        bandRadii.push_back(std::sqrt(secR2[static_cast<std::size_t>(si)]));
+      }
+    }
+    Circle2D c2;
+    if (bandXy.size() >= 8) {
+      c2 = FitCircleTaubin(bandXy);
+    }
+    if (!c2.ok || c2.r < 0.15 * rMax || c2.r > 1.25 * rMax ||
+        std::hypot(c2.xc, c2.yc) > 0.25 * c2.r) {
+      if (!bandRadii.empty()) {
+        std::sort(bandRadii.begin(), bandRadii.end());
+        const double r90 =
+            bandRadii[ (bandRadii.size() - 1) * 9 / 10 ];
+        c2.ok = true;
+        c2.xc = 0.0;
+        c2.yc = 0.0;
+        c2.r = r90;
+        c2.rmse = 0.0;
+      }
+    }
+    if (c2.ok && c2.r > 0.0) {
+      d.rimDiameter = 2.0 * c2.r;
+      fillArcFromFit(d.rimArc, d.rimIsFragment, c2,
+                     bandXy.empty() ? rimXy : bandXy, zMax + c2.r + 15.0);
     }
   }
 
@@ -191,15 +252,42 @@ Dimensions AnalyzeDimensions(const MeshData &alignedMesh,
       }
     }
   }
+  if ((!baseC.ok || baseC.r < 0.15 * rMax ||
+       std::hypot(baseC.xc, baseC.yc) > 0.45 * baseC.r) &&
+      heightRaw > 1.0 && rMax > 1.0) {
+    // 둥근 바닥·접지 점 접촉 유물: 바닥 접지 대역(2.5% H 또는 최소 2.5 mm)에서 저경 산출
+    const double bBand = std::max(2.5, 0.025 * heightRaw);
+    std::vector<Point2> bPts;
+    std::vector<double> bRadii;
+    for (const Point3 &p : alignedMesh.vertices) {
+      if (p.z <= zMin + bBand) {
+        bPts.push_back(Point2{p.x, p.y});
+        bRadii.push_back(std::hypot(p.x, p.y));
+      }
+    }
+    std::vector<Point2> bOuter = keepOuter(bPts);
+    Circle2D bc2;
+    if (bOuter.size() >= 12) {
+      bc2 = FitCircleTaubin(bOuter);
+    }
+    if (bc2.ok && bc2.r >= 0.15 * rMax && bc2.r <= 1.1 * rMax &&
+        std::hypot(bc2.xc, bc2.yc) <= 0.30 * bc2.r) {
+      baseC = bc2;
+      baseXy = std::move(bOuter);
+    } else if (!bRadii.empty()) {
+      std::sort(bRadii.begin(), bRadii.end());
+      baseC.ok = true;
+      baseC.xc = 0.0;
+      baseC.yc = 0.0;
+      baseC.r = bRadii[(bRadii.size() - 1) * 9 / 10];
+      baseC.rmse = 0.0;
+      baseXy = std::move(bOuter);
+    }
+  }
   if (baseC.ok) {
     d.baseDiameter = 2.0 * baseC.r;
     fillArcFromFit(d.baseArc, d.baseIsFragment, baseC, baseXy,
                    zMin - baseC.r - 15.0);
-  }
-
-  double rMax = 0.0;
-  for (const Point3 &p : alignedMesh.vertices) {
-    rMax = std::max(rMax, std::hypot(p.x, p.y));
   }
   double zSum = 0.0;
   int zCount = 0;

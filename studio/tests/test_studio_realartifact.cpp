@@ -228,12 +228,15 @@ int main(int argc, char **argv) {
 
   const Dims5 dims = doc.dims();
   CHECK(dims.ok, "dims.ok must be true");
-  CHECK(dims.height > 0.0, "height must be positive: %g", dims.height);
-  CHECK((secMaxY - secMinY) >= 0.70 * dims.height,
-        "displaySection vertical span %.1f mm must cover >= 70%% of height %.1f mm",
+  CHECK(dims.height >= 155.0 && dims.height <= 185.0,
+        "upright height must be in [155, 185] mm (got %g mm)", dims.height);
+  CHECK((secMaxY - secMinY) >= 0.90 * dims.height,
+        "displaySection vertical span %.1f mm must cover >= 90%% of height %.1f mm",
         secMaxY - secMinY, dims.height);
-  CHECK(dims.rim > 0.0 || dims.belly > 0.0,
-        "rim or belly must be positive (rim=%g, belly=%g)", dims.rim,
+  CHECK(dims.rim >= 110.0 && dims.rim <= 165.0,
+        "upright rim diameter must be in [110, 165] mm (got %g mm)", dims.rim);
+  CHECK(dims.belly >= 160.0 && dims.belly <= 190.0,
+        "upright belly diameter must be in [160, 190] mm (got %g mm)",
         dims.belly);
 
   const QRectF ext = Plate::extentMm(doc, 0);

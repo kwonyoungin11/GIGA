@@ -1029,6 +1029,7 @@ void buildLodMesh(const KA::MeshData &src, const std::vector<QRgb> &srcColors,
       lodOut.faces.push_back({u, v, w});
   }
   KA::FillMeshStats(lodOut);
+  lodOut.hasBoundary = src.hasBoundary;
 }
 
 bool exportBordersPline(const KA::MeshData &m, const QString &path,

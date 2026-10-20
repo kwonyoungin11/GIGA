@@ -114,7 +114,6 @@ thread_local std::vector<float> tl_final_zb;
 thread_local std::vector<float> tl_final_lum;
 thread_local std::vector<QRgb> tl_final_cbBuf;
 thread_local std::vector<double> tl_sat;
-thread_local std::vector<double> tl_cnt;
 thread_local std::vector<float> tl_rel;
 
 } // namespace
@@ -369,57 +368,80 @@ QImage renderMesh(const KA::MeshData &mesh, QSize size, const RasterView &v,
       w.join();
   }
 
-  // 5. 디지털 탁본(DTak) 모드: 2D SAT 및 국소 평균(반경 ≈ 2.2 mm) 연산
+  // 5. 디지털 탁본(DTak) 모드: 원통 반경(r_cyl) 기반 다중 스케일 요철(0.65 mm / 1.85 mm)
+  //    및 파단면 깊이 불연속(|Δz| > 2.2 mm) 게이팅으로 정통 고고학 먹탁 농담 생성
   if (mode == ShadeMode::DTak) {
-    const int r = std::max(2, int(std::lround(2.2 * v.pxPerMm)));
-    const size_t satSize = size_t(W + 1) * (H + 1);
-    if (tl_sat.size() < satSize)
-      tl_sat.resize(satSize);
-    if (tl_cnt.size() < satSize)
-      tl_cnt.resize(satSize);
-    double *sat = tl_sat.data();
-    double *cnt = tl_cnt.data();
-    std::fill_n(sat, W + 1, 0.0);
-    std::fill_n(cnt, W + 1, 0.0);
-
-    for (int y = 0; y < H; ++y) {
-      sat[size_t(y + 1) * (W + 1)] = 0.0;
-      cnt[size_t(y + 1) * (W + 1)] = 0.0;
-      double rowSat = 0.0;
-      double rowCnt = 0.0;
-      const size_t prevRow = size_t(y) * (W + 1);
-      const size_t currRow = size_t(y + 1) * (W + 1);
-      for (int x = 0; x < W; ++x) {
-        const float z = finalZb[size_t(y) * W + x];
-        const bool ok = std::isfinite(z);
-        rowSat += (ok ? double(z) : 0.0);
-        rowCnt += (ok ? 1.0 : 0.0);
-        sat[currRow + size_t(x + 1)] = sat[prevRow + size_t(x + 1)] + rowSat;
-        cnt[currRow + size_t(x + 1)] = cnt[prevRow + size_t(x + 1)] + rowCnt;
-      }
-    }
-
     if (tl_rel.size() < numPixels)
       tl_rel.resize(numPixels);
+    // tl_sat 버퍼를 픽셀별 원통 반경 r_cyl 저장용으로 재활용
+    if (tl_sat.size() < numPixels)
+      tl_sat.resize(numPixels);
+    double *rCylBuf = tl_sat.data();
     float *relData = tl_rel.data();
+
+    const int r1 = std::clamp(int(std::lround(0.65 * v.pxPerMm)), 1, 4);
+    const int r2 = std::clamp(int(std::lround(1.85 * v.pxPerMm)), 2, 8);
+    const int step2 = (r2 >= 6) ? 2 : 1;
+
+    for (int y = 0; y < H; ++y) {
+      const size_t row = size_t(y) * W;
+      for (int x = 0; x < W; ++x) {
+        const float z = finalZb[row + x];
+        if (!std::isfinite(z)) {
+          rCylBuf[row + x] = -1e9;
+        } else {
+          const double cx = ((double(x) + 0.5) - centerPxX) / pxPerMm;
+          rCylBuf[row + x] = std::hypot(cx, double(z));
+        }
+      }
+    }
 
     auto computeRelRows = [=](int yStart, int yEnd) {
       for (int y = yStart; y < yEnd; ++y) {
         for (int x = 0; x < W; ++x) {
           const size_t k = size_t(y) * W + x;
-          if (!std::isfinite(finalZb[k])) {
+          const float z0 = finalZb[k];
+          if (!std::isfinite(z0)) {
             relData[k] = 0.f;
             continue;
           }
-          const int ax = std::max(0, x - r), bx = std::min(W, x + r + 1);
-          const int ay = std::max(0, y - r), by = std::min(H, y + r + 1);
-          const double count =
-              cnt[size_t(by) * (W + 1) + bx] - cnt[size_t(ay) * (W + 1) + bx] -
-              cnt[size_t(by) * (W + 1) + ax] + cnt[size_t(ay) * (W + 1) + ax];
-          const double sumZ =
-              sat[size_t(by) * (W + 1) + bx] - sat[size_t(ay) * (W + 1) + bx] -
-              sat[size_t(by) * (W + 1) + ax] + sat[size_t(ay) * (W + 1) + ax];
-          relData[k] = count > 0.0 ? float(finalZb[k] - sumZ / count) : 0.f;
+          const double r0 = rCylBuf[k];
+
+          double s1 = 0.0, c1 = 0.0;
+          const int ay1 = std::max(0, y - r1), by1 = std::min(H - 1, y + r1);
+          const int ax1 = std::max(0, x - r1), bx1 = std::min(W - 1, x + r1);
+          for (int ny = ay1; ny <= by1; ++ny) {
+            const size_t nrow = size_t(ny) * W;
+            for (int nx = ax1; nx <= bx1; ++nx) {
+              const float zn = finalZb[nrow + nx];
+              const double rn = rCylBuf[nrow + nx];
+              if (std::isfinite(zn) && std::fabs(zn - z0) <= 2.2f &&
+                  std::fabs(rn - r0) <= 2.0) {
+                s1 += rn;
+                c1 += 1.0;
+              }
+            }
+          }
+          const double rel1 = (c1 >= 3.0) ? (r0 - s1 / c1) : 0.0;
+
+          double s2 = 0.0, c2 = 0.0;
+          const int ay2 = std::max(0, y - r2), by2 = std::min(H - 1, y + r2);
+          const int ax2 = std::max(0, x - r2), bx2 = std::min(W - 1, x + r2);
+          for (int ny = ay2; ny <= by2; ny += step2) {
+            const size_t nrow = size_t(ny) * W;
+            for (int nx = ax2; nx <= bx2; nx += step2) {
+              const float zn = finalZb[nrow + nx];
+              const double rn = rCylBuf[nrow + nx];
+              if (std::isfinite(zn) && std::fabs(zn - z0) <= 3.5f &&
+                  std::fabs(rn - r0) <= 3.0) {
+                s2 += rn;
+                c2 += 1.0;
+              }
+            }
+          }
+          const double rel2 = (c2 >= 5.0) ? (r0 - s2 / c2) : 0.0;
+
+          relData[k] = float(0.55 * rel1 + 0.45 * rel2);
         }
       }
     };
@@ -477,9 +499,12 @@ QImage renderMesh(const KA::MeshData &mesh, QSize size, const RasterView &v,
           const float g = 0.55f + 0.40f * t * (0.6f + 0.4f * finalLum[k]);
           c = QColor::fromRgbF(g * 0.98f, g * 0.97f, g * 0.93f);
         } else {
-          const float t = std::clamp(0.5f - relData[k] * 0.95f, 0.f, 1.f);
-          const float g = (0.38f + 0.58f * t) * (0.82f + 0.18f * finalLum[k]);
-          c = QColor::fromRgbF(g * 0.97f, g * 0.96f, g * 0.93f);
+          // 고고학 정통 먹탁(디지털 탁본): 오목한 음각(인화문·침선, rel < 0)은 한지 백색(t -> 1),
+          // 평면·볼록한 양각(돌대·기면, rel >= 0)은 짙은 먹색(t -> 0)으로 대비 표현
+          const float t = 1.0f / (1.0f + std::exp(relData[k] * 22.0f + 0.35f));
+          const float g = std::clamp(
+              (0.10f + 0.88f * t) * (0.84f + 0.16f * finalLum[k]), 0.06f, 0.98f);
+          c = QColor::fromRgbF(g * 0.99f, g * 0.98f, g * 0.95f);
         }
         line[x] = c.rgba();
       }

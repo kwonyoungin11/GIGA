@@ -95,15 +95,151 @@ void applyMat3(KA::MeshData &m, const double (&R)[3][3],
 }
 
 // 수밀(Watertight) 메시 또는 비스듬히 누운 유물의 회전 대칭축(입구 +Z, 바닥 -Z)을
-// 구면 후보 탐색 + 층별 외곽 원 적합(Taubin) + 상하 공동(구연 개구부 vs 저부 바닥) 비교로 찾는다.
-bool findCoarseVesselAxis(const KA::MeshData &work, KA::Point3 &outUpAxis) {
+// 3D 법선 교점 중심(C0) + 3D 법선-회전축 교차 점수 + 동축 원 적합(Taubin) + 상하 개구부 비교로 찾는다.
+bool findCoarseVesselAxis(const KA::MeshData &work, KA::Point3 &outUpAxis,
+                          KA::Point3 *outCenter = nullptr) {
   if (work.vertices.size() < 60)
     return false;
   std::vector<KA::Point3> pts;
   const size_t stride = std::max<size_t>(1, work.vertices.size() / 4000);
   pts.reserve(work.vertices.size() / stride + 1);
-  for (size_t i = 0; i < work.vertices.size(); i += stride)
-    pts.push_back(work.vertices[i]);
+  double bMinX = 1e18, bMinY = 1e18, bMinZ = 1e18;
+  double bMaxX = -1e18, bMaxY = -1e18, bMaxZ = -1e18;
+  for (size_t i = 0; i < work.vertices.size(); i += stride) {
+    const auto &p = work.vertices[i];
+    pts.push_back(p);
+    bMinX = std::min(bMinX, p.x), bMaxX = std::max(bMaxX, p.x);
+    bMinY = std::min(bMinY, p.y), bMaxY = std::max(bMaxY, p.y);
+    bMinZ = std::min(bMinZ, p.z), bMaxZ = std::max(bMaxZ, p.z);
+  }
+  const KA::Point3 bMid{0.5 * (bMinX + bMaxX), 0.5 * (bMinY + bMaxY),
+                        0.5 * (bMinZ + bMaxZ)};
+  const double rChar =
+      0.5 * std::max({10.0, bMaxX - bMinX, bMaxY - bMinY, bMaxZ - bMinZ});
+
+  struct FaceSample {
+    KA::Point3 c;
+    KA::Point3 n;
+    KA::Point3 m;
+    double area;
+    double mLen;
+  };
+  std::vector<FaceSample> fSamples;
+  const size_t nv = work.vertices.size();
+  const size_t fStride = std::max<size_t>(1, work.faces.size() / 5000);
+  fSamples.reserve(work.faces.size() / fStride + 1);
+  for (size_t fi = 0; fi < work.faces.size(); fi += fStride) {
+    const auto &f = work.faces[fi];
+    if (f[0] < 0 || f[1] < 0 || f[2] < 0 || size_t(f[0]) >= nv ||
+        size_t(f[1]) >= nv || size_t(f[2]) >= nv)
+      continue;
+    const auto &p0 = work.vertices[size_t(f[0])];
+    const auto &p1 = work.vertices[size_t(f[1])];
+    const auto &p2 = work.vertices[size_t(f[2])];
+    const double e1x = p1.x - p0.x, e1y = p1.y - p0.y, e1z = p1.z - p0.z;
+    const double e2x = p2.x - p0.x, e2y = p2.y - p0.y, e2z = p2.z - p0.z;
+    const double nx = e1y * e2z - e1z * e2y;
+    const double ny = e1z * e2x - e1x * e2z;
+    const double nz = e1x * e2y - e1y * e2x;
+    const double nl = std::sqrt(nx * nx + ny * ny + nz * nz);
+    if (nl < 1e-8)
+      continue;
+    fSamples.push_back(
+        {{(p0.x + p1.x + p2.x) / 3.0, (p0.y + p1.y + p2.y) / 3.0,
+          (p0.z + p1.z + p2.z) / 3.0},
+         {nx / nl, ny / nl, nz / nl},
+         {0, 0, 0},
+         0.5 * nl,
+         0.0});
+  }
+
+  // 1) 3D 법선 직선들의 최소제곱 교점 중심 C0 (IRLS 6회 반복)
+  KA::Point3 C0 = bMid;
+  if (fSamples.size() >= 30) {
+    for (int it = 0; it < 6; ++it) {
+      double A[3][3] = {{0, 0, 0}, {0, 0, 0}, {0, 0, 0}};
+      double B[3] = {0, 0, 0};
+      double wSum = 0.0;
+      for (const auto &fs : fSamples) {
+        double w = fs.area;
+        if (it > 0) {
+          const double dx = C0.x - fs.c.x, dy = C0.y - fs.c.y,
+                       dz = C0.z - fs.c.z;
+          const double dot = dx * fs.n.x + dy * fs.n.y + dz * fs.n.z;
+          const double d2 =
+              std::max(0.0, dx * dx + dy * dy + dz * dz - dot * dot);
+          w *= 1.0 / (1.0 + d2 / (0.04 * rChar * rChar));
+        }
+        wSum += w;
+        const double p00 = 1.0 - fs.n.x * fs.n.x;
+        const double p01 = -fs.n.x * fs.n.y;
+        const double p02 = -fs.n.x * fs.n.z;
+        const double p11 = 1.0 - fs.n.y * fs.n.y;
+        const double p12 = -fs.n.y * fs.n.z;
+        const double p22 = 1.0 - fs.n.z * fs.n.z;
+        A[0][0] += w * p00;
+        A[0][1] += w * p01;
+        A[0][2] += w * p02;
+        A[1][1] += w * p11;
+        A[1][2] += w * p12;
+        A[2][2] += w * p22;
+        B[0] += w * (p00 * fs.c.x + p01 * fs.c.y + p02 * fs.c.z);
+        B[1] += w * (p01 * fs.c.x + p11 * fs.c.y + p12 * fs.c.z);
+        B[2] += w * (p02 * fs.c.x + p12 * fs.c.y + p22 * fs.c.z);
+      }
+      A[1][0] = A[0][1];
+      A[2][0] = A[0][2];
+      A[2][1] = A[1][2];
+      const double reg = 1e-3 * std::max(1.0, wSum);
+      A[0][0] += reg;
+      A[1][1] += reg;
+      A[2][2] += reg;
+      B[0] += reg * bMid.x;
+      B[1] += reg * bMid.y;
+      B[2] += reg * bMid.z;
+      // 3x3 가우스 소거
+      double M[3][4] = {{A[0][0], A[0][1], A[0][2], B[0]},
+                        {A[1][0], A[1][1], A[1][2], B[1]},
+                        {A[2][0], A[2][1], A[2][2], B[2]}};
+      bool singular = false;
+      for (int i = 0; i < 3; ++i) {
+        int piv = i;
+        for (int r = i + 1; r < 3; ++r)
+          if (std::fabs(M[r][i]) > std::fabs(M[piv][i]))
+            piv = r;
+        if (std::fabs(M[piv][i]) < 1e-12) {
+          singular = true;
+          break;
+        }
+        for (int c = 0; c < 4; ++c)
+          std::swap(M[i][c], M[piv][c]);
+        const double inv = 1.0 / M[i][i];
+        for (int c = i; c < 4; ++c)
+          M[i][c] *= inv;
+        for (int r = 0; r < 3; ++r) {
+          if (r == i)
+            continue;
+          const double f = M[r][i];
+          for (int c = i; c < 4; ++c)
+            M[r][c] -= f * M[i][c];
+        }
+      }
+      if (!singular &&
+          std::hypot(M[0][3] - bMid.x, M[1][3] - bMid.y, M[2][3] - bMid.z) <
+              1.5 * rChar) {
+        C0 = {M[0][3], M[1][3], M[2][3]};
+      }
+    }
+  }
+  if (outCenter)
+    *outCenter = C0;
+
+  for (auto &fs : fSamples) {
+    const double rx = fs.c.x - C0.x, ry = fs.c.y - C0.y, rz = fs.c.z - C0.z;
+    fs.m = {ry * fs.n.z - rz * fs.n.y, rz * fs.n.x - rx * fs.n.z,
+            rx * fs.n.y - ry * fs.n.x};
+    fs.mLen = std::sqrt(fs.m.x * fs.m.x + fs.m.y * fs.m.y + fs.m.z * fs.m.z);
+  }
 
   auto makeBasis = [](const KA::Point3 &u, KA::Point3 &e1, KA::Point3 &e2) {
     const KA::Point3 ref =
@@ -130,13 +266,39 @@ bool findCoarseVesselAxis(const KA::MeshData &work, KA::Point3 &outUpAxis) {
     if (H < 10.0)
       return -1e9;
 
-    constexpr int kBands = 8;
+    // A) 비구면(경부·구연·돌대·어깨·저부) 법선 직선들이 회전축 (C0, u) 와 교차하는 점수
+    double normScore = 0.0;
+    double normWeight = 0.0;
+    const double minM = 0.14 * rChar;
+    const double inv2Sig2 = 1.0 / (2.0 * std::pow(0.022 * rChar, 2.0));
+    for (const auto &fs : fSamples) {
+      if (fs.mLen < minM)
+        continue;
+      const double un = u.x * fs.n.x + u.y * fs.n.y + u.z * fs.n.z;
+      const double sin2 = 1.0 - un * un;
+      if (sin2 < 0.08)
+        continue;
+      const double d =
+          std::fabs(fs.m.x * u.x + fs.m.y * u.y + fs.m.z * u.z) /
+          std::sqrt(sin2);
+      const double w = fs.area * (fs.mLen / rChar);
+      normWeight += w;
+      normScore += w * std::exp(-d * d * inv2Sig2);
+    }
+    const double normTerm =
+        (normWeight > 1e-6) ? 60.0 * (normScore / normWeight) : 0.0;
+
+    // B) 층별 동축 원 적합 점수 (부분 잔존 경부 호 포함)
+    constexpr int kBands = 10;
     constexpr int kSectors = 24;
-    const double b0 = zMin + 0.14 * H;
-    const double b1 = zMin + 0.82 * H;
+    const double b0 = zMin + 0.10 * H;
+    const double b1 = zMin + 0.92 * H;
     const double bw = (b1 - b0) / double(kBands);
     if (bw <= 0.5)
       return -1e9;
+
+    const double c0x = C0.x * e1.x + C0.y * e1.y + C0.z * e1.z;
+    const double c0y = C0.x * e2.x + C0.y * e2.y + C0.z * e2.z;
 
     struct BandPt {
       double x, y;
@@ -154,28 +316,20 @@ bool findCoarseVesselAxis(const KA::MeshData &work, KA::Point3 &outUpAxis) {
 
     int okCount = 0;
     double sumRelErr = 0.0;
-    double sumCov = 0.0;
     double sumR = 0.0;
     std::vector<KA::Point2> centers;
     centers.reserve(kBands);
 
     for (int bi = 0; bi < kBands; ++bi) {
       const auto &bp = bins[size_t(bi)];
-      if (bp.size() < 16)
+      if (bp.size() < 10)
         continue;
-      double cx = 0.0, cy = 0.0;
-      for (const auto &q : bp) {
-        cx += q.x;
-        cy += q.y;
-      }
-      cx /= double(bp.size());
-      cy /= double(bp.size());
 
       std::array<double, kSectors> bestR2{};
       bestR2.fill(-1.0);
       std::array<KA::Point2, kSectors> bestPt{};
       for (const auto &q : bp) {
-        const double dx = q.x - cx, dy = q.y - cy;
+        const double dx = q.x - c0x, dy = q.y - c0y;
         const double r2 = dx * dx + dy * dy;
         double ang = std::atan2(dy, dx);
         if (ang < 0.0)
@@ -193,22 +347,22 @@ bool findCoarseVesselAxis(const KA::MeshData &work, KA::Point3 &outUpAxis) {
         if (bestR2[size_t(si)] > 0.0)
           ring.push_back(bestPt[size_t(si)]);
       }
-      if (ring.size() < 11)
+      if (ring.size() < 4)
         continue;
       const KA::Circle2D c = KA::FitCircleTaubin(ring);
       if (!c.ok || c.r < 5.0 || c.r > H * 2.5)
         continue;
       const double relErr = c.rmse / c.r;
-      if (relErr > 0.12)
+      const double cOff = std::hypot(c.xc - c0x, c.yc - c0y) / c.r;
+      if (relErr > 0.08 || (ring.size() < 12 && cOff > 0.20))
         continue;
       ++okCount;
       sumRelErr += relErr;
-      sumCov += double(ring.size()) / double(kSectors);
       sumR += c.r;
       centers.push_back({c.xc, c.yc});
     }
     if (okCount < 4)
-      return -1e9;
+      return normTerm - 50.0;
     const double meanR = sumR / double(okCount);
     const double meanErr = sumRelErr / double(okCount);
     double mx = 0.0, my = 0.0;
@@ -223,14 +377,14 @@ bool findCoarseVesselAxis(const KA::MeshData &work, KA::Point3 &outUpAxis) {
       cVar += std::hypot(c.x - mx, c.y - my);
     cVar /= (double(centers.size()) * std::max(10.0, meanR));
 
-    return double(okCount) * 2.0 + sumCov - 35.0 * meanErr - 18.0 * cVar;
+    return normTerm - 20.0 * meanErr - 15.0 * cVar;
   };
 
   KA::Point3 bestU{0, 0, 1};
   double bestScore = scoreAxis(bestU);
 
-  // 상반구 피보나치 격자 64방향 탐색
-  constexpr int kDirs = 64;
+  // 상반구 피보나치 격자 128방향 탐색
+  constexpr int kDirs = 128;
   const double golden = std::numbers::pi * (3.0 - std::sqrt(5.0));
   for (int i = 0; i < kDirs; ++i) {
     const double z = 1.0 - (double(i) + 0.5) / double(kDirs);
@@ -244,8 +398,8 @@ bool findCoarseVesselAxis(const KA::MeshData &work, KA::Point3 &outUpAxis) {
     }
   }
 
-  // 국소 2단계 정밀 탐색 (±12° -> ±3°)
-  for (double stepDeg : {4.0, 1.2}) {
+  // 국소 3단계 정밀 탐색 (±10° -> ±3° -> ±0.8°)
+  for (double stepDeg : {3.5, 1.0, 0.25}) {
     KA::Point3 e1, e2;
     makeBasis(bestU, e1, e2);
     KA::Point3 stageBest = bestU;
@@ -277,36 +431,32 @@ bool findCoarseVesselAxis(const KA::MeshData &work, KA::Point3 &outUpAxis) {
     return false;
 
   // 상하(+bestU vs -bestU) 판별:
-  // 토기 저부(바닥)는 중심축 근처(r ≈ 0)까지 메워져 있어 최소 반경(하위 10% 반경)이 작고,
-  // 구연부(입구)는 가운데가 비어 있는 개구부이므로 중심축 근처 정점이 없어 하위 10% 반경이 크다.
+  // 회전축 중심 C0 투영점(c0x, c0y)으로부터의 반경을 비교한다.
+  // 토기 저부(바닥)는 중심축 근처(r ≈ 0)까지 메워져 있어 하위 10% 반경이 작고,
+  // 구연부(입구)는 가운데가 비어 있는 개구부이므로 하위 10% 반경이 크다.
   KA::Point3 e1, e2;
   makeBasis(bestU, e1, e2);
+  const double c0x = C0.x * e1.x + C0.y * e1.y + C0.z * e1.z;
+  const double c0y = C0.x * e2.x + C0.y * e2.y + C0.z * e2.z;
   double zMin = 1e18, zMax = -1e18;
-  double cx = 0.0, cy = 0.0;
   for (const auto &p : pts) {
-    const double x = p.x * e1.x + p.y * e1.y + p.z * e1.z;
-    const double y = p.x * e2.x + p.y * e2.y + p.z * e2.z;
     const double z = p.x * bestU.x + p.y * bestU.y + p.z * bestU.z;
-    cx += x;
-    cy += y;
     zMin = std::min(zMin, z);
     zMax = std::max(zMax, z);
   }
-  cx /= double(pts.size());
-  cy /= double(pts.size());
   const double H = zMax - zMin;
   std::vector<double> rTop, rBot;
   for (const auto &p : pts) {
     const double x = p.x * e1.x + p.y * e1.y + p.z * e1.z;
     const double y = p.x * e2.x + p.y * e2.y + p.z * e2.z;
     const double z = p.x * bestU.x + p.y * bestU.y + p.z * bestU.z;
-    const double r = std::hypot(x - cx, y - cy);
-    if (z >= zMax - 0.16 * H)
+    const double r = std::hypot(x - c0x, y - c0y);
+    if (z >= zMax - 0.14 * H)
       rTop.push_back(r);
-    if (z <= zMin + 0.16 * H)
+    if (z <= zMin + 0.14 * H)
       rBot.push_back(r);
   }
-  if (rTop.size() >= 8 && rBot.size() >= 8) {
+  if (rTop.size() >= 6 && rBot.size() >= 6) {
     std::sort(rTop.begin(), rTop.end());
     std::sort(rBot.begin(), rBot.end());
     const double qTop = rTop[rTop.size() / 10];
@@ -1206,6 +1356,7 @@ void ArtifactDoc::confirmPose() {
   }
   resetSlots();
   recompute();
+  autoInitRubbingSpot();
 }
 
 void ArtifactDoc::autoAlign() {
@@ -1226,41 +1377,37 @@ void ArtifactDoc::autoAlign() {
   KA::MeshData &work = useProxy ? proxy : m;
 
   // 1) 열린 경계(구연부)가 있는 경우 구연부 PCA 로 입구를 위로,
-  //    수밀(Watertight) 메시이거나 비스듬히 누워 구연 경계를 못 찾는 경우
-  //    구면 대칭축 탐색(findCoarseVesselAxis)으로 입구를 위로 세운다.
-  const KA::RimResult boundaryRim = KA::DetectRimBoundary(work);
+  //    수밀(Watertight) 메시이거나 구연 경계를 못 찾는 경우
+  //    3D 법선 교차 + 동축 원 대칭축 탐색(findCoarseVesselAxis)으로 입구를 위로 세운다.
+  // 1) 대용량 실측 스캔(useProxy, 복셀 LOD는 얇은 능선에서 가짜 구멍이 생기므로 경계 검출 금지)
+  //    또는 수밀(Watertight) 메시이거나 구연 경계를 못 찾는 경우:
+  //    원본 메시(m)의 3D 법선-회전축 교차 + 동축 원 탐색(findCoarseVesselAxis)으로 입구를 위로 세운다.
+  const KA::RimResult boundaryRim =
+      (!useProxy && m.hasBoundary) ? KA::DetectRimBoundary(work)
+                                   : KA::RimResult{};
   bool coarseAligned = false;
-  if (boundaryRim.error != KA::RimError::Ok) {
-    // 현재 +Z 가 이미 양호한 회전 대칭축인지 먼저 확인
-    const auto curFits = KA::FitHorizontalOuters(work, zBand(work, 12));
-    int goodCircles = 0;
-    for (const auto &f : curFits) {
-      if (f.circle.ok && f.circle.r > 5.0 && (f.circle.rmse / f.circle.r) < 0.03)
-        ++goodCircles;
-    }
-    const double curH = work.bboxMax.z - work.bboxMin.z;
-    const double curW = std::max(work.bboxMax.x - work.bboxMin.x,
-                                 work.bboxMax.y - work.bboxMin.y);
-    if (goodCircles < 8 || curH < curW * 0.85) {
-      KA::Point3 upAxis{0, 0, 1};
-      if (findCoarseVesselAxis(work, upAxis)) {
+  KA::Point3 coarseCtr = KA::MeshCentroid(m);
+  if (useProxy || !m.hasBoundary || boundaryRim.error != KA::RimError::Ok) {
+    KA::Point3 upAxis{0, 0, 1};
+    if (findCoarseVesselAxis(m, upAxis, &coarseCtr)) {
+      coarseAligned = true;
+      if (std::hypot(upAxis.x, upAxis.y) > 1e-3 || upAxis.z < 0.0) {
         double R[3][3];
         buildRotationToPlusZ(upAxis, R);
-        const KA::Point3 ctr = KA::MeshCentroid(work);
-        applyMat3(work, R, ctr);
+        applyMat3(work, R, coarseCtr);
         updateBbox(work);
         if (useProxy) {
-          applyMat3(m, R, ctr);
+          applyMat3(m, R, coarseCtr);
           updateBbox(m);
         }
-        coarseAligned = true;
       }
     }
   }
 
-  const KA::RimResult rim = coarseAligned
-                                ? KA::DetectRimBoundary(work)
-                                : KA::DetectRim(work, KA::RimMode::Auto);
+  const KA::RimResult rim =
+      (useProxy || !m.hasBoundary || coarseAligned)
+          ? KA::RimResult{}
+          : KA::DetectRim(work, KA::RimMode::Auto);
   if (rim.error == KA::RimError::Ok) {
     const auto pca =
         KA::ComputePcaAlignment(rim.rimPoints, KA::MeshCentroid(work));
@@ -1275,32 +1422,16 @@ void ArtifactDoc::autoAlign() {
       }
     }
   }
-
-  // 만약 열린 경계 PCA 후에도 유물이 옆으로 누워 있다면(예: 측면 파손 구멍 오검출),
-  // 회전 대칭축 탐색으로 바로잡는다.
-  {
-    const double curH = work.bboxMax.z - work.bboxMin.z;
-    const double curW = std::max(work.bboxMax.x - work.bboxMin.x,
-                                 work.bboxMax.y - work.bboxMin.y);
-    if (curH < curW * 0.75) {
-      KA::Point3 upAxis{0, 0, 1};
-      if (findCoarseVesselAxis(work, upAxis)) {
-        double R[3][3];
-        buildRotationToPlusZ(upAxis, R);
-        const KA::Point3 ctr = KA::MeshCentroid(work);
-        applyMat3(work, R, ctr);
-        updateBbox(work);
-        if (useProxy) {
-          applyMat3(m, R, ctr);
-          updateBbox(m);
-        }
-        coarseAligned = true;
-      }
+  // 2) 수평 외곽 원들로 회전 중심축 정밀화
+  const auto outers24 = KA::FitHorizontalOuters(work, zBand(work, 24));
+  int fullCleanCircles = 0;
+  for (const auto &f : outers24) {
+    if (f.circle.ok && f.circle.pointCount >= 16 &&
+        (f.circle.rmse / std::max(1.0, f.circle.r)) <= 0.02) {
+      ++fullCleanCircles;
     }
   }
-  // 2) 수평 외곽 원들로 회전 중심축 정밀화
-  const KA::Axis3D ax =
-      KA::OptimizeRotationAxis(KA::FitHorizontalOuters(work, zBand(work, 24)));
+  const KA::Axis3D ax = KA::OptimizeRotationAxis(outers24);
   const double workSpan = std::max(work.bboxMax.x - work.bboxMin.x,
                                    work.bboxMax.y - work.bboxMin.y);
   const double workBx = 0.5 * (work.bboxMin.x + work.bboxMax.x);
@@ -1308,9 +1439,10 @@ void ArtifactDoc::autoAlign() {
   const bool odrSane =
       ax.ok &&
       (!coarseAligned ||
-       (ax.rmse <= 3.0 && std::fabs(ax.direction.z) >= 0.94 &&
+       (fullCleanCircles >= 18 && ax.rmse <= 0.8 &&
+        std::fabs(ax.direction.z) >= 0.995 &&
         std::hypot(ax.origin.x - workBx, ax.origin.y - workBy) <=
-            0.25 * workSpan));
+            0.20 * workSpan));
   if (odrSane) {
     translate(work, -ax.origin.x, -ax.origin.y, -ax.origin.z);
     rotateDirToZ(work, ax.direction);
@@ -1347,10 +1479,89 @@ void ArtifactDoc::autoAlign() {
                ? QStringLiteral("바닥 수평(0 mm) · 회전 중심축 정렬됨")
                : QStringLiteral("회전 중심축 정렬됨 (구연부 미검출)");
   } else if (coarseAligned) {
-    const double cx = 0.5 * (m.bboxMin.x + m.bboxMax.x),
-                 cy = 0.5 * (m.bboxMin.y + m.bboxMax.y);
+    const double bx = 0.5 * (m.bboxMin.x + m.bboxMax.x);
+    const double by = 0.5 * (m.bboxMin.y + m.bboxMax.y);
+    const double maxSpan =
+        std::max(m.bboxMax.x - m.bboxMin.x, m.bboxMax.y - m.bboxMin.y);
+    double sx = 0.0, sy = 0.0;
+    int n = 0;
+    for (const auto &f : outers24) {
+      if (f.circle.ok && f.circle.r <= 0.75 * maxSpan &&
+          (f.circle.rmse / std::max(1.0, f.circle.r)) <= 0.04 &&
+          std::hypot(f.circle.xc - bx, f.circle.yc - by) <= 0.25 * maxSpan) {
+        sx += f.circle.xc;
+        sy += f.circle.yc;
+        ++n;
+      }
+    }
+    const double cx = (n > 0) ? (sx / n) : bx;
+    const double cy = (n > 0) ? (sy / n) : by;
+    translate(work, -cx, -cy, 0);
+    updateBbox(work);
     translate(m, -cx, -cy, 0);
     updateBbox(m);
+
+    // 부분 결실 구연부(한쪽만 구연·경부가 남은 유물)인 경우:
+    // 잔존 구연·경부 호가 절단면(180°, Y=0)과 정면 좌측 외면(180°~260°, X<=0·Y<=0)에
+    // 동시에 놓이도록 +Z 초기 방위각을 자동 정렬한다.
+    const double hWork = work.bboxMax.z - work.bboxMin.z;
+    if (hWork > 10.0) {
+      constexpr int kSec = 72;
+      std::array<double, kSec> secMaxZ{};
+      secMaxZ.fill(work.bboxMin.z);
+      for (const auto &p : work.vertices) {
+        double ang = std::atan2(p.y, p.x) * (180.0 / std::numbers::pi);
+        if (ang < 0.0)
+          ang += 360.0;
+        const int si = std::clamp(int(ang / 5.0), 0, kSec - 1);
+        secMaxZ[size_t(si)] = std::max(secMaxZ[size_t(si)], p.z);
+      }
+      int topSectors = 0;
+      const double topCut = work.bboxMax.z - 0.10 * hWork;
+      for (int si = 0; si < kSec; ++si) {
+        if (secMaxZ[size_t(si)] >= topCut)
+          ++topSectors;
+      }
+      if (topSectors >= 6 && topSectors <= 52) {
+        int bestShift = 0;
+        double bestAzScore = -1e18;
+        const double rimCut = work.bboxMax.z - 0.04 * hWork;
+        for (int sh = 0; sh < kSec; ++sh) {
+          // sh 만큼 회전했을 때 원래 섹터 (s - sh) 가 새 섹터 s 로 온다
+          auto rotZAt = [&](int targetSec) {
+            const int orig = (targetSec - sh + kSec) % kSec;
+            return secMaxZ[size_t(orig)];
+          };
+          // 180° (절단면 Y=0 좌측, 섹터 35·36·37 = 175°~190°) 전체가 구연부 높이에 도달해야
+          // 0° 기본 절단면(Y=0)과 정면 좌측 실루엣이 모두 온전함
+          const double z180Min =
+              std::min({rotZAt(35), rotZAt(36), rotZAt(37)});
+          const double z180Mean =
+              (rotZAt(35) + rotZAt(36) + rotZAt(37)) / 3.0;
+          double sc = (z180Min >= rimCut)
+                          ? 2000.0
+                          : (z180Mean - work.bboxMin.z) * 5.0;
+          // 175°~225° (섹터 35~45, 절단면 180° 및 정면 좌측 외면) 구연·경부 보존도 합산
+          for (int s = 35; s <= 45; ++s) {
+            sc += (rotZAt(s) - work.bboxMin.z) / hWork * 10.0;
+            if (rotZAt(s) >= topCut)
+              sc += 8.0;
+          }
+          if (sc > bestAzScore) {
+            bestAzScore = sc;
+            bestShift = sh;
+          }
+        }
+        if (bestShift != 0) {
+          const double rotDeg = double(bestShift * 5);
+          rotateZ(work, rotDeg);
+          updateBbox(work);
+          rotateZ(m, rotDeg);
+          updateBbox(m);
+        }
+      }
+    }
+
     aligned = true;
     rmse = 0.0;
     note = QStringLiteral("바닥 수평(0 mm) · 대칭축 자동 직립 정렬됨");
@@ -1771,6 +1982,27 @@ SectionLines sliceSectionY0(const KA::MeshData &m, bool inferInner,
   for (auto &op : openSlices)
     closedSlices.push_back(std::move(op));
 
+  // 부분 결실 유물에서 절단면(Y=0)의 +X 반쪽은 결실되었으나 -X 반쪽(180°)에
+  // 온전한 구연·몸통 단면이 있는 경우, 더 온전한 반쪽을 단면으로 추출한다.
+  double zMinPos = 1e18, zMaxPos = -1e18;
+  double zMinNeg = 1e18, zMaxNeg = -1e18;
+  for (const auto &pl : closedSlices) {
+    for (const auto &p : pl.pts) {
+      const double rx = useRot ? (p.x * cosA - p.y * sinA) : p.x;
+      if (rx >= 0.0) {
+        zMinPos = std::min(zMinPos, p.z);
+        zMaxPos = std::max(zMaxPos, p.z);
+      }
+      if (rx <= 0.0) {
+        zMinNeg = std::min(zMinNeg, p.z);
+        zMaxNeg = std::max(zMaxNeg, p.z);
+      }
+    }
+  }
+  const double spanPos = (zMaxPos > zMinPos) ? (zMaxPos - zMinPos) : 0.0;
+  const double spanNeg = (zMaxNeg > zMinNeg) ? (zMaxNeg - zMinNeg) : 0.0;
+  const double sgnX = (spanNeg > spanPos + 5.0) ? -1.0 : 1.0;
+
   for (const auto &pl : closedSlices) {
     if (pl.pts.size() < 3)
       continue;
@@ -1778,11 +2010,11 @@ SectionLines sliceSectionY0(const KA::MeshData &m, bool inferInner,
     in.reserve(pl.pts.size());
     if (useRot) {
       for (const auto &p : pl.pts) {
-        in.push_back({p.x * cosA - p.y * sinA, p.z});
+        in.push_back({sgnX * (p.x * cosA - p.y * sinA), p.z});
       }
     } else {
       for (const auto &p : pl.pts)
-        in.push_back({p.x, p.z});
+        in.push_back({sgnX * p.x, p.z});
     }
 
     // 중심축(x=0) 기준 오른쪽(x >= 0) 반평면 클리핑
@@ -2548,11 +2780,17 @@ double ArtifactDoc::angleDefectScore(double a) const {
   const double cosA = std::cos(a * DEG);
   const double sinA = std::sin(a * DEG);
   double rRight = 0.0, rLeft = 0.0;
+  double extQ3MaxZ = 0.0;
   for (const auto &v : meshToSlice.vertices) {
+    const double xRot = cosA * v.x - sinA * v.y;
+    const double yRot = sinA * v.x + cosA * v.y;
+    if (xRot <= -4.0 && yRot <= 2.0) {
+      extQ3MaxZ = std::max(extQ3MaxZ, v.z);
+    }
     if (v.z >= 0.85 * H) {
-      const double distNormal = -sinA * v.x + cosA * v.y;
+      const double distNormal = yRot;
       if (std::fabs(distNormal) <= 2.0) {
-        const double proj = cosA * v.x + sinA * v.y;
+        const double proj = xRot;
         if (proj > 0.0)
           rRight = std::max(rRight, proj);
         else
@@ -2560,7 +2798,8 @@ double ArtifactDoc::angleDefectScore(double a) const {
       }
     }
   }
-  const double diaDiff = std::fabs(rRight - rLeft);
+  const double diaDiff =
+      (rRight > 0.0 && rLeft > 0.0) ? std::fabs(rRight - rLeft) : 0.0;
   double loopSpan = 0.0;
   if (!s.loops.empty() && !s.loops[0].empty()) {
     double yLo = s.loops[0].front().y, yHi = yLo;
@@ -2569,14 +2808,24 @@ double ArtifactDoc::angleDefectScore(double a) const {
       yHi = std::max(yHi, p.y);
     }
     loopSpan = yHi - yLo;
+  } else if (!s.solids.empty() && !s.solids[0].empty()) {
+    double yLo = s.solids[0].front().y, yHi = yLo;
+    for (const auto &p : s.solids[0]) {
+      yLo = std::min(yLo, p.y);
+      yHi = std::max(yHi, p.y);
+    }
+    loopSpan = yHi - yLo;
   }
   const double missingPenalty =
-      (H > 1.0 && loopSpan < 0.85 * H) ? 50.0 * (0.85 - loopSpan / H) : 0.0;
+      (H > 1.0 && loopSpan < 0.96 * H) ? 180.0 * (0.96 - loopSpan / H) : 0.0;
+  const double extMissingPenalty =
+      (H > 1.0 && extQ3MaxZ < 0.96 * H) ? 180.0 * (0.96 - extQ3MaxZ / H) : 0.0;
 
   const double score = 5.0 * breakCount + 5.0 * crackCount +
                        2.0 * std::min(5.0, wallVar) +
                        0.3 * (s.solids.empty() ? 0.0 : 1.0) + diaDiff +
-                       missingPenalty + 0.05 * (1.0 - std::cos(a * DEG));
+                       missingPenalty + extMissingPenalty +
+                       0.05 * (1.0 - std::cos(a * DEG));
   return score;
 }
 
@@ -2814,6 +3063,93 @@ int ArtifactDoc::addHorizontalSlotAt(double zMm) {
                        QStringLiteral("높이 H %1 mm 절단").arg(z, 0, 'f', 1),
                        SlotKind::Horizontal, 0.0, z});
   return int(slotList_.size()) - 1;
+}
+
+bool ArtifactDoc::alignCutToSurfacePoint(const KA::Point3 &worldPt) {
+  if (!isLoaded() || !poseConfirmed_)
+    return false;
+  const double r = std::hypot(worldPt.x, worldPt.y);
+  if (r < 1e-3)
+    return false;
+  // 현재 mesh_ 는 base_ 를 +frontAngle_ 만큼 회전한 상태이므로,
+  // 클릭한 점(worldPt)을 절단면 Y=0 위에 놓는 새 정면각을 계산한다.
+  const double curAng = previewAngle();
+  const double ptDeg = std::atan2(worldPt.y, worldPt.x) * (180.0 / std::numbers::pi);
+  // 클릭한 위치가 좌측(x < 0)이면 180° 축에, 우측(x >= 0)이면 0° 축에 놓아 시점 급반전을 막는다.
+  const double targetAxis = (worldPt.x < 0.0) ? 180.0 : 0.0;
+  const double deltaDeg = targetAxis - ptDeg;
+  const double newFront = std::remainder(curAng + deltaDeg, 360.0);
+  const double H = std::max(1.0, base_.bboxMax.z - base_.bboxMin.z);
+  cutMarkerZ_ = std::clamp(worldPt.z, 1.0, H - 1.0);
+  hasCutMarker_ = true;
+  setFrontAngle(newFront);
+  return true;
+}
+
+KA::Point3 ArtifactDoc::cutMarker3D() const {
+  if (!isLoaded())
+    return {0.0, 0.0, 0.0};
+  const double z = cutMarkerZ_;
+  double r = outerRadiusAt(z);
+  if (r <= 0.0) {
+    r = 0.5 * std::max(d5_.belly, 40.0);
+  }
+  return {sectionSign() * r, 0.0, z};
+}
+
+void ArtifactDoc::autoInitRubbingSpot() {
+  if (!isLoaded())
+    return;
+  const double H = std::max(1.0, base_.bboxMax.z - base_.bboxMin.z);
+  const double maxR = std::max({std::fabs(base_.bboxMin.x), std::fabs(base_.bboxMax.x),
+                                std::fabs(base_.bboxMin.y), std::fabs(base_.bboxMax.y)});
+  rubbingSpanW_ = std::clamp(0.68 * maxR, 32.0, 66.0);
+  rubbingSpanH_ = std::clamp(0.30 * H, 28.0, 56.0);
+  // 정면 좌측 외면(Quadrant 3: 195°~215°) 상부 경부/어깨 문양대(0.78 H)를 기본 정밀 탁본 영역으로 설정
+  rubbingBaseAzimuthDeg_ = 202.0;
+  rubbingZ_ = std::clamp(0.78 * H, rubbingSpanH_ * 0.5, H - rubbingSpanH_ * 0.35);
+  hasRubbingSpot_ = true;
+
+  // 기본 절단 확인 표지도 상부 경부/어깨(0.72 H) 절단선 위에 함께 표시하여 3D↔2D 절단 대응을 직관화
+  cutMarkerZ_ = std::clamp(0.72 * H, 1.0, H - 1.0);
+  hasCutMarker_ = true;
+}
+
+bool ArtifactDoc::selectRubbingSpot(const KA::Point3 &worldPt) {
+  if (!isLoaded() || !poseConfirmed_)
+    return false;
+  const double r = std::hypot(worldPt.x, worldPt.y);
+  if (r < 1e-3)
+    return false;
+  const double H = std::max(1.0, base_.bboxMax.z - base_.bboxMin.z);
+  const double maxR = std::max({std::fabs(base_.bboxMin.x), std::fabs(base_.bboxMax.x),
+                                std::fabs(base_.bboxMin.y), std::fabs(base_.bboxMax.y)});
+  rubbingSpanW_ = std::clamp(0.68 * maxR, 32.0, 66.0);
+  rubbingSpanH_ = std::clamp(0.30 * H, 28.0, 56.0);
+
+  double ptDeg = std::atan2(worldPt.y, worldPt.x) * (180.0 / std::numbers::pi);
+  if (ptDeg < 0.0)
+    ptDeg += 360.0;
+  rubbingBaseAzimuthDeg_ =
+      std::fmod(std::fmod(ptDeg - frontAngle_, 360.0) + 360.0, 360.0);
+  rubbingZ_ = std::clamp(worldPt.z, rubbingSpanH_ * 0.35, H - rubbingSpanH_ * 0.25);
+  hasRubbingSpot_ = true;
+  return true;
+}
+
+double ArtifactDoc::rubbingAzimuthDeg() const {
+  return std::fmod(std::fmod(rubbingBaseAzimuthDeg_ + frontAngle_, 360.0) + 360.0,
+                   360.0);
+}
+
+KA::Point3 ArtifactDoc::rubbingCenter3D() const {
+  if (!isLoaded())
+    return {0.0, 0.0, 0.0};
+  const double ang = rubbingAzimuthDeg() * (std::numbers::pi / 180.0);
+  double r = outerRadiusAt(rubbingZ_);
+  if (r <= 0.0)
+    r = 0.45 * std::max(d5_.belly, 50.0);
+  return {r * std::cos(ang), r * std::sin(ang), rubbingZ_};
 }
 
 } // namespace studio

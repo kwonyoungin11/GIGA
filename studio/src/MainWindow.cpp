@@ -213,6 +213,41 @@ MainWindow::MainWindow() {
     doc_.setFrontAngle(doc_.snapAngle(absDeg, 2.0));
     refreshAll(true);
   });
+  connect(view3d_, &View3DPane::cutPointPicked, this,
+          [this](KA::Point3 worldPt) {
+            if (!doc_.isLoaded() || !doc_.poseConfirmed())
+              return;
+            flushCut();
+            pushUndo();
+            fixedAngle_.reset();
+            if (firstVerticalSlot() >= 0)
+              slot_ = firstVerticalSlot();
+            if (doc_.alignCutToSurfacePoint(worldPt)) {
+              refreshAll(true);
+              setHint(QStringLiteral(
+                          "✂ 클릭한 지점(H %1 mm, %2°)으로 단면을 절단하여 도면에 표시했습니다.")
+                          .arg(doc_.cutMarkerZ(), 0, 'f', 1)
+                          .arg(doc_.frontAngle(), 0, 'f', 1));
+            }
+          });
+  connect(view3d_, &View3DPane::rubbingSpotPicked, this,
+          [this](KA::Point3 worldPt) {
+            if (!doc_.isLoaded() || !doc_.poseConfirmed())
+              return;
+            if (doc_.selectRubbingSpot(worldPt)) {
+              opts_.shadeMode = ShadeMode::DTak;
+              ribbon_->setText(
+                  "shadeMode",
+                  QString::fromUtf8(kShadeNames[int(opts_.shadeMode)]));
+              ribbon_->setState("shade", ToolState::On);
+              applyOptions();
+              refreshAll(true);
+              setHint(QStringLiteral(
+                          "◈ 선택한 문양 영역(H %1 mm, 방위 %2°)의 정밀 먹탁을 우측 도면에 출력했습니다.")
+                          .arg(doc_.rubbingZ(), 0, 'f', 1)
+                          .arg(doc_.rubbingAzimuthDeg(), 0, 'f', 0));
+            }
+          });
   connect(view3d_, &View3DPane::horizontalHeightSelected, this,
           [this](double zMm) {
             if (!doc_.isLoaded() || !doc_.poseConfirmed())

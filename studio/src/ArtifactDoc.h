@@ -150,6 +150,21 @@ public:
   int addVerticalSlotAt(double angleDeg);
   int addHorizontalSlotAt(double zMm);
 
+  // 3D 표면 1클릭 절단 위치 지정 (내가 여기를 잘랐구나 확인 마커 포함)
+  bool alignCutToSurfacePoint(const KA::Point3 &worldPt);
+  bool hasCutMarker() const { return hasCutMarker_; }
+  KA::Point3 cutMarker3D() const;
+  double cutMarkerZ() const { return cutMarkerZ_; }
+
+  // 3D 표면 1클릭 문양 탁본 부위 선택 (정밀 문양 먹탁 영역)
+  bool selectRubbingSpot(const KA::Point3 &worldPt);
+  bool hasRubbingSpot() const { return hasRubbingSpot_; }
+  KA::Point3 rubbingCenter3D() const;
+  double rubbingAzimuthDeg() const;
+  double rubbingZ() const { return rubbingZ_; }
+  double rubbingSpanW() const { return rubbingSpanW_; }
+  double rubbingSpanH() const { return rubbingSpanH_; }
+
   // 들어온 자세 그대로 보관한다(확정 전 — 단면·치수·도판을 계산하지 않음).
   // 경로·스캐너 프로파일·단위 메모는 바꾸지 않는다(loadFile/loadSample 몫).
   void loadMesh(KA::MeshData m, std::vector<QRgb> colors, const QString &name);
@@ -383,6 +398,7 @@ private:
   double pendingRmse_ = 0.0;
 
   void computeRimCircleFit();
+  void autoInitRubbingSpot();
 
   bool unitConfirmed_ = true;
   BaseTiltMode baseTiltMode_ = BaseTiltMode::RimHorizontal;
@@ -390,6 +406,14 @@ private:
   double estimatedRimDia_ = 0.0;
   double estimatedRimErr_ = 0.0;
   double rimArcDeg_ = 0.0;
+
+  bool hasCutMarker_ = false;
+  double cutMarkerZ_ = 0.0;
+  bool hasRubbingSpot_ = false;
+  double rubbingBaseAzimuthDeg_ = 215.0;
+  double rubbingZ_ = 0.0;
+  double rubbingSpanW_ = 54.0;
+  double rubbingSpanH_ = 46.0;
 };
 
 // 메시 m 의 Y=0 단면 x ≥ 0 반쪽 (+ inferInner 면 Artec 미스캔 내벽 추정, 씨앗
