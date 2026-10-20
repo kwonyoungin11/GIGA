@@ -160,6 +160,16 @@ int main(int argc, char **argv) {
           "full turn width %.2f mm vs circumference %.2f mm", fr.widthMm, circ);
     CHECK(fr.coverage > 0.97, "full turn coverage %.3f (seam closed)", fr.coverage);
     fr.image.save(outDir + QStringLiteral("/rubbing_fullturn.png"));
+    // 화소 상한: 배율이 낮아져도 실제 mm 크기·배율 기록은 맞아야 한다
+    RubbingParams p3;
+    p3.pxPerMm = 40.0;
+    p3.maxPixels = 200000;
+    const UnrolledRubbing cap = renderUnrolledRubbing(cyl, full, p3);
+    const double capPx = double(cap.image.width()) * cap.image.height();
+    CHECK(cap.ok() && capPx <= 1.02 * 200000 &&
+              std::fabs(cap.image.width() / cap.pxPerMm - circ) < 2.0,
+          "pixel cap %.0f px, ppm %.2f, width %.1f mm", capPx, cap.pxPerMm,
+          cap.image.width() / cap.pxPerMm);
   }
 
   // ---- AC-5 1:1 실제 크기 PNG ----------------------------------------------------

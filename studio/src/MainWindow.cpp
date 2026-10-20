@@ -1645,19 +1645,24 @@ void MainWindow::onAction(const QString &id) {
         QDir(dir.isEmpty() ? QDir::homePath() : dir)
             .filePath(QStringLiteral("%1_탁본.png").arg(doc_.name()));
     const QString path = QFileDialog::getSaveFileName(
-        this, QStringLiteral("탁본 저장 (1:1 실제 크기, 600 dpi)"), suggest,
+        this, QStringLiteral("탁본 저장 (1:1 실제 크기)"), suggest,
         QStringLiteral("PNG (*.png)"));
     if (path.isEmpty())
       return;
     QApplication::setOverrideCursor(Qt::WaitCursor);
     QString err;
-    const bool ok = saveRubbingPng(doc_.meshMaster(), doc_.rubbingRegion(), path, 600.0, &err);
+    double dpiOut = 0.0;
+    const RubbingRegion reg = doc_.rubbingRegion();
+    const double rr = doc_.outerRadiusAt(0.5 * (reg.zLo + reg.zHi));
+    const bool ok = saveRubbingPng(doc_.meshMaster(), reg, path, 600.0, &err, &dpiOut,
+                                   rr > 5.0 ? rr : 0.5 * doc_.dims().belly);
     QApplication::restoreOverrideCursor();
     if (!ok)
       QMessageBox::warning(this, QStringLiteral("탁본을 저장할 수 없습니다"), err);
     else
-      setHint(QStringLiteral("탁본을 실제 크기(600 dpi)로 저장했습니다: "
-                             "<span style='font-family:Consolas'>%1</span>")
+      setHint(QStringLiteral("탁본을 실제 크기(%1 dpi, 인쇄 시 1:1)로 저장했습니다: "
+                             "<span style='font-family:Consolas'>%2</span>")
+                  .arg(dpiOut, 0, 'f', 0)
                   .arg(QDir::toNativeSeparators(path)));
   } else if (id == "shade" || id == "lines" || id == "grid") {
     ribbon_->setState(id, ribbon_->state(id) == ToolState::On ? ToolState::Idle

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <exception>
 #include <limits>
 #include <numbers>
 #include <thread>
@@ -130,24 +131,28 @@ UnrolledRubbing renderUnrolledRubbing(const KA::MeshData &mesh,
   for (float b : binMax)
     if (b > 0.5f)
       filled.push_back(b);
-  if (filled.empty())
+  if (filled.empty() && params.fallbackRadiusMm <= 0.5)
     return out;
-  std::nth_element(filled.begin(), filled.begin() + filled.size() / 2, filled.end());
-  const double Rref = filled[filled.size() / 2];
+  double Rref = params.fallbackRadiusMm;
+  if (!filled.empty()) {
+    std::nth_element(filled.begin(), filled.begin() + filled.size() / 2, filled.end());
+    Rref = filled[filled.size() / 2];
+  }
 
-  // 3) 격자 크기 (가로 = 호 길이, 세로 = 높이)
+  // 3) 격자 크기 (가로 = 호 길이, 세로 = 높이) — 변 길이·전체 화소 상한
   double ppm = params.pxPerMm;
   const double widthMm = 2.0 * halfSpan * Rref, heightMm = zHi - zLo;
   ppm = std::min({ppm, params.maxSidePx / std::max(1.0, widthMm),
-                  params.maxSidePx / std::max(1.0, heightMm)});
+                  params.maxSidePx / std::max(1.0, heightMm),
+                  std::sqrt(double(params.maxPixels) / std::max(1.0, widthMm * heightMm))});
   const int W = std::max(2, int(std::lround(widthMm * ppm)));
   const int H = std::max(2, int(std::lround(heightMm * ppm)));
   const size_t N = size_t(W) * H;
   const double uScale = Rref * ppm; // 라디안 → 화소
 
   // 4) 면 래스터: 각 화소에서 가장 바깥 반경(외면)을 남긴다
-  // 스레드별 버퍼 합계가 256 MB 를 넘지 않게 (600 dpi 한 바퀴 전개는 수천만 화소)
-  const size_t budget = size_t(256) << 20;
+  // 스레드별 래스터 버퍼 합계 64 MB 안 (화소 상한 덕분에 버퍼 1개는 최대 64 MB)
+  const size_t budget = size_t(64) << 20;
   const unsigned T = std::max(
       1u, std::min(workerCount(),
                    unsigned(std::min<size_t>(16, budget / std::max<size_t>(1, N * sizeof(float))))));
@@ -309,9 +314,11 @@ UnrolledRubbing renderUnrolledRubbing(const KA::MeshData &mesh,
   QImage img(W, H, QImage::Format_RGB32);
   const QRgb noData = qRgb(203, 209, 217), noDataHatch = qRgb(176, 184, 195);
   const double paper = 0.965, ink = 0.10, w = 0.25 * s;
+  uchar *const bits = img.bits(); // 한 번만 detach — 스레드에서는 줄 주소만 계산
+  const qsizetype bpl = img.bytesPerLine();
   parallelRange(size_t(H), [&](size_t y0, size_t y1) {
     for (size_t y = y0; y < y1; ++y) {
-      auto *line = reinterpret_cast<QRgb *>(img.scanLine(int(y)));
+      auto *line = reinterpret_cast<QRgb *>(bits + qsizetype(y) * bpl);
       for (int x = 0; x < W; ++x) {
         const float d = D[y * W + x];
         if (d == kNoData) {
@@ -384,16 +391,27 @@ RubbingRegion regionFromScreenBox(const QRectF &box, const RasterView &v,
 }
 
 bool saveRubbingPng(const KA::MeshData &mesh, const RubbingRegion &region,
-                    const QString &path, double dpi, QString *err) {
+                    const QString &path, double dpi, QString *err, double *actualDpi,
+                    double fallbackRadiusMm) {
   RubbingParams p;
   p.pxPerMm = std::clamp(dpi, 72.0, 1200.0) / 25.4;
   p.maxSidePx = 20000;
-  UnrolledRubbing rub = renderUnrolledRubbing(mesh, region, p);
+  p.fallbackRadiusMm = fallbackRadiusMm;
+  UnrolledRubbing rub;
+  try {
+    rub = renderUnrolledRubbing(mesh, region, p);
+  } catch (const std::exception &) { // bad_alloc · 스레드 생성 실패 — 앱을 죽이지 않는다
+    if (err)
+      *err = QStringLiteral("메모리가 부족해 탁본을 만들 수 없습니다 — 범위를 줄이거나 dpi 를 낮추세요");
+    return false;
+  }
   if (!rub.ok()) {
     if (err)
       *err = QStringLiteral("선택한 범위에 스캔 면이 없습니다");
     return false;
   }
+  if (actualDpi)
+    *actualDpi = rub.pxPerMm * 25.4;
   const int dpm = int(std::lround(rub.pxPerMm * 1000.0)); // 실제 화소/mm → dots per meter
   rub.image.setDotsPerMeterX(dpm);
   rub.image.setDotsPerMeterY(dpm);

@@ -3200,7 +3200,13 @@ const UnrolledRubbing &ArtifactDoc::unrolledRubbing(double pxPerMm) const {
   RubbingParams p;
   p.pxPerMm = pxPerMm;
   p.maxSidePx = 6000; // 화면용 (저장은 saveRubbingPng 가 실제 dpi 로 다시 계산)
-  c.result = renderUnrolledRubbing(base_, reg, p);
+  const double rr = outerRadiusAt(0.5 * (reg.zLo + reg.zHi));
+  p.fallbackRadiusMm = rr > 5.0 ? rr : 0.5 * d5_.belly;
+  try {
+    c.result = renderUnrolledRubbing(base_, reg, p);
+  } catch (const std::exception &) { // 메모리 부족 — 도판은 탁본 없이 그린다
+    c.result = UnrolledRubbing{};
+  }
   c.region = reg;
   c.pxPerMm = pxPerMm;
   c.vertexCount = base_.vertices.size();

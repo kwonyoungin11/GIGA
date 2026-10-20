@@ -26,6 +26,10 @@ struct RubbingParams {
   double pxPerMm = 6.0;
   double baseSigmaMm = 1.5; // 기준면(넓은 곡면) 평활 폭 — 이보다 좁은 요철(인화문·파상문·침선)이 문양으로 드러난다
   int maxSidePx = 16000;
+  // 전체 화소 상한 — 중간 버퍼가 화소당 약 36 B 이므로 16 M 화소 ≈ 0.6 GB 가 최대.
+  // 넘으면 배율을 낮추고(결과의 pxPerMm 에 실제 값), 1:1 크기는 dpi 메타데이터로 지킨다.
+  size_t maxPixels = size_t(16) * 1000 * 1000;
+  double fallbackRadiusMm = 0.0; // 범위 안 정점이 없을 때 쓸 외면 반경 (> 0 일 때)
 };
 
 struct UnrolledRubbing {
@@ -49,9 +53,11 @@ RubbingRegion regionFromScreenBox(const QRectF &box, const RasterView &v,
                                   const std::function<double(double)> &outerRadiusAt,
                                   bool farSide = false);
 
-// 1:1 실제 크기 PNG (dpi 메타데이터 포함, 기본 600 dpi)
+// 1:1 실제 크기 PNG (dpi 메타데이터 포함, 기본 600 dpi). 범위가 아주 넓으면 화소 상한 때문에
+// 실제 dpi 가 낮아질 수 있어 actualDpi 로 돌려준다. 메모리가 부족하면 false + err.
 bool saveRubbingPng(const DongArch::KArch::MeshData &mesh,
                     const RubbingRegion &region, const QString &path,
-                    double dpi = 600.0, QString *err = nullptr);
+                    double dpi = 600.0, QString *err = nullptr,
+                    double *actualDpi = nullptr, double fallbackRadiusMm = 0.0);
 
 } // namespace studio
