@@ -3108,6 +3108,7 @@ void ArtifactDoc::autoInitRubbingSpot() {
   // 정면 좌측 외면(Quadrant 3: 195°~215°) 상부 경부/어깨 문양대(0.78 H)를 기본 정밀 탁본 영역으로 설정
   rubbingBaseAzimuthDeg_ = 202.0;
   rubbingZ_ = std::clamp(0.78 * H, rubbingSpanH_ * 0.5, H - rubbingSpanH_ * 0.35);
+  rubbingAzSpanDeg_ = -1.0;
   hasRubbingSpot_ = true;
 
   // 기본 절단 확인 표지도 상부 경부/어깨(0.72 H) 절단선 위에 함께 표시하여 3D↔2D 절단 대응을 직관화
@@ -3133,6 +3134,7 @@ bool ArtifactDoc::selectRubbingSpot(const KA::Point3 &worldPt) {
   rubbingBaseAzimuthDeg_ =
       std::fmod(std::fmod(ptDeg - frontAngle_, 360.0) + 360.0, 360.0);
   rubbingZ_ = std::clamp(worldPt.z, rubbingSpanH_ * 0.35, H - rubbingSpanH_ * 0.25);
+  rubbingAzSpanDeg_ = -1.0;
   hasRubbingSpot_ = true;
   return true;
 }
@@ -3140,6 +3142,73 @@ bool ArtifactDoc::selectRubbingSpot(const KA::Point3 &worldPt) {
 double ArtifactDoc::rubbingAzimuthDeg() const {
   return std::fmod(std::fmod(rubbingBaseAzimuthDeg_ + frontAngle_, 360.0) + 360.0,
                    360.0);
+}
+
+RubbingRegion ArtifactDoc::rubbingRegion() const {
+  RubbingRegion r;
+  r.azCenterDeg = std::fmod(std::fmod(rubbingBaseAzimuthDeg_, 360.0) + 360.0, 360.0);
+  r.zLo = rubbingZ_ - 0.5 * rubbingSpanH_;
+  r.zHi = rubbingZ_ + 0.5 * rubbingSpanH_;
+  if (rubbingAzSpanDeg_ > 0.0) {
+    r.azSpanDeg = rubbingAzSpanDeg_;
+  } else { // 점으로 고른 범위: 폭(mm)을 그 높이 외면 반경으로 방위각 폭으로 환산
+    const double rr = outerRadiusAt(rubbingZ_);
+    const double R = rr > 5.0 ? rr : std::max(5.0, 0.5 * d5_.belly);
+    r.azSpanDeg = std::clamp(rubbingSpanW_ / R * (180.0 / std::numbers::pi), 1.0, 360.0);
+  }
+  return r;
+}
+
+void ArtifactDoc::setRubbingRegion(const RubbingRegion &r) {
+  if (!isLoaded())
+    return;
+  const double zMin = base_.bboxMin.z, zMax = base_.bboxMax.z;
+  const double lo = std::clamp(std::min(r.zLo, r.zHi), zMin, zMax);
+  const double hi = std::clamp(std::max(r.zLo, r.zHi), zMin, zMax);
+  rubbingSpanH_ = std::max(1.0, hi - lo);
+  rubbingZ_ = std::min(zMax, lo + 0.5 * rubbingSpanH_);
+  rubbingBaseAzimuthDeg_ = std::fmod(std::fmod(r.azCenterDeg, 360.0) + 360.0, 360.0);
+  rubbingAzSpanDeg_ = std::clamp(r.azSpanDeg, 1.0, 360.0);
+  const double rr = outerRadiusAt(rubbingZ_);
+  const double R = rr > 5.0 ? rr : std::max(5.0, 0.5 * d5_.belly);
+  rubbingSpanW_ = R * rubbingAzSpanDeg_ * std::numbers::pi / 180.0;
+  hasRubbingSpot_ = true;
+}
+
+void ArtifactDoc::setRubbingFullTurn() {
+  if (!isLoaded())
+    return;
+  RubbingRegion r = rubbingRegion();
+  r.azSpanDeg = 360.0;
+  setRubbingRegion(r);
+}
+
+const UnrolledRubbing &ArtifactDoc::unrolledRubbing(double pxPerMm) const {
+  static const UnrolledRubbing kEmpty;
+  if (!isLoaded() || !poseConfirmed_ || !hasRubbingSpot_)
+    return kEmpty;
+  const RubbingRegion reg = rubbingRegion();
+  auto &c = rubbingCache_;
+  const auto same = [](const KA::Point3 &a, const KA::Point3 &b) {
+    return a.x == b.x && a.y == b.y && a.z == b.z;
+  };
+  const KA::Point3 v0 = base_.vertices.empty() ? KA::Point3{} : base_.vertices.front();
+  if (c.valid && c.region == reg && c.pxPerMm == pxPerMm &&
+      c.vertexCount == base_.vertices.size() && same(c.bboxMin, base_.bboxMin) &&
+      same(c.bboxMax, base_.bboxMax) && same(c.firstVertex, v0))
+    return c.result;
+  RubbingParams p;
+  p.pxPerMm = pxPerMm;
+  p.maxSidePx = 6000; // 화면용 (저장은 saveRubbingPng 가 실제 dpi 로 다시 계산)
+  c.result = renderUnrolledRubbing(base_, reg, p);
+  c.region = reg;
+  c.pxPerMm = pxPerMm;
+  c.vertexCount = base_.vertices.size();
+  c.bboxMin = base_.bboxMin;
+  c.bboxMax = base_.bboxMax;
+  c.firstVertex = v0;
+  c.valid = true;
+  return c.result;
 }
 
 KA::Point3 ArtifactDoc::rubbingCenter3D() const {

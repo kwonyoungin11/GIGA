@@ -6,6 +6,7 @@
 #pragma once
 #include "DimensionAnalyzer.h"
 #include "MeshSlicer.h"
+#include "Rubbing.h"
 #include "SectionComposer.h"
 #include "Silhouette.h"
 
@@ -164,6 +165,13 @@ public:
   double rubbingZ() const { return rubbingZ_; }
   double rubbingSpanW() const { return rubbingSpanW_; }
   double rubbingSpanH() const { return rubbingSpanH_; }
+
+  // [JOB-014] 탁본 범위 (확정 자세 기준 방위각 범위 × 높이 범위) — 끌어서 고른 그대로
+  RubbingRegion rubbingRegion() const;
+  void setRubbingRegion(const RubbingRegion &r);
+  void setRubbingFullTurn(); // 같은 높이 범위를 한 바퀴(360°) 펼친 문양 전개도
+  // 원통 전개 요철 탁본 (캐시 — 범위·배율·자세가 바뀔 때만 다시 계산)
+  const UnrolledRubbing &unrolledRubbing(double pxPerMm) const;
 
   // 들어온 자세 그대로 보관한다(확정 전 — 단면·치수·도판을 계산하지 않음).
   // 경로·스캐너 프로파일·단위 메모는 바꾸지 않는다(loadFile/loadSample 몫).
@@ -414,6 +422,18 @@ private:
   double rubbingZ_ = 0.0;
   double rubbingSpanW_ = 54.0;
   double rubbingSpanH_ = 46.0;
+  double rubbingAzSpanDeg_ = -1.0; // > 0: 사용자가 끌어 정한 방위각 폭 (≤ 0: 폭 mm 로 환산)
+
+  // [JOB-014] 전개 탁본 캐시 — 범위·배율·확정 자세가 같으면 다시 계산하지 않는다
+  struct RubbingCache {
+    bool valid = false;
+    RubbingRegion region;
+    double pxPerMm = 0.0;
+    size_t vertexCount = 0;
+    KA::Point3 bboxMin{}, bboxMax{}, firstVertex{};
+    UnrolledRubbing result;
+  };
+  mutable RubbingCache rubbingCache_;
 };
 
 // 메시 m 의 Y=0 단면 x ≥ 0 반쪽 (+ inferInner 면 Artec 미스캔 내벽 추정, 씨앗

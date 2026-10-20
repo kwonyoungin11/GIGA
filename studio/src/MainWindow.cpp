@@ -262,6 +262,29 @@ MainWindow::MainWindow() {
                           .arg(doc_.rubbingAzimuthDeg(), 0, 'f', 0));
             }
           });
+  connect(view3d_, &View3DPane::rubbingRegionPicked, this,
+          [this](RubbingRegion reg) {
+            if (!doc_.isLoaded() || !doc_.poseConfirmed())
+              return;
+            doc_.setRubbingRegion(reg);
+            opts_.shadeMode = ShadeMode::DTak;
+            ribbon_->setText("shadeMode",
+                             QString::fromUtf8(kShadeNames[int(opts_.shadeMode)]));
+            ribbon_->setState("shade", ToolState::On);
+            applyOptions();
+            refreshAll(false);
+            const RubbingRegion r = doc_.rubbingRegion();
+            const UnrolledRubbing &rub = doc_.unrolledRubbing(4.2);
+            setHint(QStringLiteral("◈ 끌어 고른 범위(방위 %1°, 폭 %2°, H %3–%4 mm)를 펼친 "
+                                   "실제 크기 탁본 %5×%6 mm 를 도판에 출력했습니다 · "
+                                   "「💾 탁본 저장」으로 1:1 PNG")
+                        .arg(r.azCenterDeg, 0, 'f', 0)
+                        .arg(r.azSpanDeg, 0, 'f', 0)
+                        .arg(r.zLo, 0, 'f', 1)
+                        .arg(r.zHi, 0, 'f', 1)
+                        .arg(rub.widthMm, 0, 'f', 1)
+                        .arg(rub.heightMm, 0, 'f', 1));
+          });
   connect(view3d_, &View3DPane::horizontalHeightSelected, this,
           [this](double zMm) {
             if (!doc_.isLoaded() || !doc_.poseConfirmed())
@@ -1603,6 +1626,39 @@ void MainWindow::onAction(const QString &id) {
     refreshAll(false);
     setHint(QStringLiteral("지금 자리(%1°)의 종단면을 도면 목록에 추가했습니다.")
                 .arg(doc_.frontAngle(), 0, 'f', 0));
+  } else if (id == "rubFullTurn") {
+    if (!doc_.poseConfirmed())
+      return;
+    doc_.setRubbingFullTurn();
+    refreshAll(false);
+    const UnrolledRubbing &rub = doc_.unrolledRubbing(4.2);
+    setHint(QStringLiteral("↔ H %1–%2 mm 띠를 한 바퀴 펼친 문양 전개도 탁본 %3×%4 mm")
+                .arg(doc_.rubbingRegion().zLo, 0, 'f', 1)
+                .arg(doc_.rubbingRegion().zHi, 0, 'f', 1)
+                .arg(rub.widthMm, 0, 'f', 1)
+                .arg(rub.heightMm, 0, 'f', 1));
+  } else if (id == "rubSave") {
+    if (!doc_.poseConfirmed() || !doc_.hasRubbingSpot())
+      return;
+    const QString dir = QFileInfo(doc_.path()).absolutePath();
+    const QString suggest =
+        QDir(dir.isEmpty() ? QDir::homePath() : dir)
+            .filePath(QStringLiteral("%1_탁본.png").arg(doc_.name()));
+    const QString path = QFileDialog::getSaveFileName(
+        this, QStringLiteral("탁본 저장 (1:1 실제 크기, 600 dpi)"), suggest,
+        QStringLiteral("PNG (*.png)"));
+    if (path.isEmpty())
+      return;
+    QApplication::setOverrideCursor(Qt::WaitCursor);
+    QString err;
+    const bool ok = saveRubbingPng(doc_.meshMaster(), doc_.rubbingRegion(), path, 600.0, &err);
+    QApplication::restoreOverrideCursor();
+    if (!ok)
+      QMessageBox::warning(this, QStringLiteral("탁본을 저장할 수 없습니다"), err);
+    else
+      setHint(QStringLiteral("탁본을 실제 크기(600 dpi)로 저장했습니다: "
+                             "<span style='font-family:Consolas'>%1</span>")
+                  .arg(QDir::toNativeSeparators(path)));
   } else if (id == "shade" || id == "lines" || id == "grid") {
     ribbon_->setState(id, ribbon_->state(id) == ToolState::On ? ToolState::Idle
                                                               : ToolState::On);

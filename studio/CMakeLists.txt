@@ -59,6 +59,7 @@ add_library(studio_core STATIC
   src/MeshIO.cpp src/MeshIO.h
   src/MeshRaster.cpp src/MeshRaster.h
   src/Plate.cpp src/Plate.h
+  src/Rubbing.cpp src/Rubbing.h
   src/Theme.h)
 set_target_properties(studio_core PROPERTIES AUTOMOC ON)
 target_include_directories(studio_core PUBLIC src)

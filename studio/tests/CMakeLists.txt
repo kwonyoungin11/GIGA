@@ -55,5 +55,11 @@ target_link_libraries(test_easy_workflow PRIVATE studio_core Qt6::Widgets)
 add_test(NAME studio_easy_workflow COMMAND test_easy_workflow ${CMAKE_CURRENT_BINARY_DIR})
 set_tests_properties(studio_easy_workflow PROPERTIES RUN_SERIAL TRUE)
 
+# [JOB-014] 원통 전개 요철 탁본 · 끌어서 범위 · 한 바퀴 전개 · 1:1 저장 · 캐시
+add_executable(test_rubbing ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_rubbing.cpp)
+target_link_libraries(test_rubbing PRIVATE studio_core)
+add_test(NAME studio_rubbing COMMAND test_rubbing ${CMAKE_CURRENT_BINARY_DIR})
+set_tests_properties(studio_rubbing PROPERTIES RUN_SERIAL TRUE)
+
 
 

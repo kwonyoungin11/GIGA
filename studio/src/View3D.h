@@ -84,6 +84,12 @@ public:
     update();
   }
   CutPickMode cutPickMode() const { return cutPickMode_; }
+  // 탁본 범위를 끌 때는 정면(수평 시선)에서 — 화면 상자 = 표면 범위가 정확히 맞도록
+  void levelView() {
+    pitch_ = 0.0;
+    dirty_ = true;
+    update();
+  }
 
 signals:
   void cutAngleDragged(double deltaDeg);
@@ -94,6 +100,7 @@ signals:
   void surfacePointPicked(KA::Point3 worldPt);
   void cutPointPicked(KA::Point3 worldPt);
   void rubbingSpotPicked(KA::Point3 worldPt);
+  void rubbingRegionPicked(studio::RubbingRegion region); // [JOB-014] 끌어서 고른 탁본 범위
   void horizontalHeightDragged(double zMm);
 
 protected:
@@ -123,6 +130,8 @@ private:
   bool horizDrag_ = false;
   PosePickMode posePickMode_ = PosePickMode::None;
   CutPickMode cutPickMode_ = CutPickMode::None;
+  bool rubBoxDrag_ = false; // [JOB-014] 탁본 범위 상자 끄는 중
+  QPointF rubBoxStart_, rubBoxEnd_;
   QPoint last_;
   std::vector<KA::Polyline3> cut_;
   mutable std::array<QRectF, 3> floorBadgeRects_{};
@@ -151,6 +160,7 @@ signals:
   void horizontalHeightSelected(double zMm);
   void cutPointPicked(KA::Point3 worldPt);
   void rubbingSpotPicked(KA::Point3 worldPt);
+  void rubbingRegionPicked(studio::RubbingRegion region);
 
 private:
   bool cutPage_ = false, editPage_ = false;

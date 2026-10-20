@@ -273,6 +273,30 @@ int main(int argc, char **argv) {
             "Clicking PlanViewWidget updated CutAngle label to %s",
             angleLbl ? qPrintable(angleLbl->text()) : "<null>");
     }
+
+    // [JOB-014] 「◈ 끌어서 탁본 범위」 → 3D 정면에서 상자 끌기 → 범위 탁본이 도판에 출력
+    auto *pickRub = winPlan.findChild<QPushButton *>(QStringLiteral("pickRubbing"));
+    auto *canvas3d = winPlan.findChild<View3DCanvas *>();
+    CHECK(pickRub != nullptr && canvas3d != nullptr, "rubbing drag button & 3D canvas exist");
+    if (pickRub && canvas3d) {
+      pickRub->click();
+      QApplication::processEvents();
+      const QPoint c = canvas3d->rect().center();
+      const QPoint a(c.x() - 30, c.y() - 25), b(c.x() + 30, c.y() + 10);
+      auto send = [&](QEvent::Type ty, QPoint pt, Qt::MouseButton btn, Qt::MouseButtons bs) {
+        QMouseEvent ev(ty, QPointF(pt), QPointF(canvas3d->mapToGlobal(pt)), btn, bs,
+                       Qt::NoModifier);
+        QApplication::sendEvent(canvas3d, &ev);
+      };
+      send(QEvent::MouseButtonPress, a, Qt::LeftButton, Qt::LeftButton);
+      send(QEvent::MouseMove, b, Qt::NoButton, Qt::LeftButton);
+      send(QEvent::MouseButtonRelease, b, Qt::LeftButton, Qt::NoButton);
+      QApplication::processEvents();
+      auto *hint = winPlan.findChild<QLabel *>(QStringLiteral("StHint"));
+      CHECK(hint && hint->text().contains(QStringLiteral("끌어 고른 범위")),
+            "drag box produced rubbing region hint: %s",
+            hint ? qPrintable(hint->text()) : "<null>");
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -294,6 +318,30 @@ int main(int argc, char **argv) {
           shotDir + QStringLiteral("/shot_%1_unified.png").arg(stem));
       win.grab().save(
           shotDir + QStringLiteral("/shot_%1_step2.png").arg(stem));
+
+      // [JOB-014] 실제 유물에서 상자로 탁본 범위 고르기 → 전개 탁본 / 한 바퀴 전개 캡처
+      if (auto *pr = win.findChild<QPushButton *>(QStringLiteral("pickRubbing"))) {
+        if (auto *cv = win.findChild<View3DCanvas *>()) {
+          pr->click();
+          QApplication::processEvents();
+          const QPoint c = cv->rect().center();
+          const QPoint a(c.x() - 45, c.y() - 70), b(c.x() + 20, c.y() - 25);
+          auto send = [&](QEvent::Type ty, QPoint pt, Qt::MouseButton btn,
+                          Qt::MouseButtons bs) {
+            QMouseEvent ev(ty, QPointF(pt), QPointF(cv->mapToGlobal(pt)), btn, bs,
+                           Qt::NoModifier);
+            QApplication::sendEvent(cv, &ev);
+          };
+          send(QEvent::MouseButtonPress, a, Qt::LeftButton, Qt::LeftButton);
+          send(QEvent::MouseMove, b, Qt::NoButton, Qt::LeftButton);
+          send(QEvent::MouseButtonRelease, b, Qt::LeftButton, Qt::NoButton);
+          QApplication::processEvents();
+          win.grab().save(shotDir + QStringLiteral("/shot_%1_rubbing.png").arg(stem));
+          win.triggerActionForTest("rubFullTurn");
+          QApplication::processEvents();
+          win.grab().save(shotDir + QStringLiteral("/shot_%1_fullturn.png").arg(stem));
+        }
+      }
 
       win.triggerActionForTest("toEdit");
       QApplication::processEvents();

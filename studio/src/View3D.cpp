@@ -798,23 +798,28 @@ void View3DCanvas::paintEvent(QPaintEvent *) {
   tag((quad[2] + quad[3]) / 2, a);
   tag((quad[0] + quad[1]) / 2, a + QStringLiteral("′"));
 
-  // [JOB-012] 3D 문양 탁본 선택 영역 표시 (황토·금색 점선 테두리 + 배지)
+  // [JOB-014] 3D 탁본 범위 표시 — 끌어 고른 방위각·높이 범위 그대로 (황토 점선 테두리 + 배지)
   if (doc_->hasRubbingSpot()) {
-    const double azRad = doc_->rubbingAzimuthDeg() * std::numbers::pi / 180.0;
-    const double zC = doc_->rubbingZ();
-    const double halfH = 0.45 * doc_->rubbingSpanH();
-    const double rSurf =
-        std::max(15.0, doc_->outerRadiusAt(zC) > 0.0 ? doc_->outerRadiusAt(zC)
-                                                     : 0.45 * doc_->dims().belly);
-    const double dAng = std::clamp(0.45 * doc_->rubbingSpanW() / rSurf, 0.12, 0.55);
+    const RubbingRegion reg = doc_->rubbingRegion();
+    const double front = doc_->previewAngle();
+    const double a0 = (reg.azCenterDeg - 0.5 * reg.azSpanDeg + front) * std::numbers::pi / 180.0;
+    const double a1 = (reg.azCenterDeg + 0.5 * reg.azSpanDeg + front) * std::numbers::pi / 180.0;
+    const double zC = 0.5 * (reg.zLo + reg.zHi);
+    auto surf = [&](double a, double z) {
+      const double rr = doc_->outerRadiusAt(z);
+      const double R = std::max(15.0, rr > 0.0 ? rr : 0.45 * doc_->dims().belly);
+      return projectPoint({R * std::cos(a), R * std::sin(a), z}, v);
+    };
+    const int nA = std::clamp(int(reg.azSpanDeg / 3.0), 6, 120), nZ = 12;
     QPolygonF patchPoly;
-    for (double ang : {azRad - dAng, azRad, azRad + dAng})
-      patchPoly << projectPoint(
-          {rSurf * std::cos(ang), rSurf * std::sin(ang), zC + halfH}, v);
-    for (double ang : {azRad + dAng, azRad, azRad - dAng})
-      patchPoly << projectPoint(
-          {rSurf * std::cos(ang), rSurf * std::sin(ang), zC - halfH}, v);
-    patchPoly << patchPoly.front();
+    for (int i = 0; i <= nA; ++i)
+      patchPoly << surf(a0 + (a1 - a0) * i / nA, reg.zHi);
+    for (int i = 0; i <= nZ; ++i)
+      patchPoly << surf(a1, reg.zHi - (reg.zHi - reg.zLo) * i / nZ);
+    for (int i = nA; i >= 0; --i)
+      patchPoly << surf(a0 + (a1 - a0) * i / nA, reg.zLo);
+    for (int i = 0; i <= nZ; ++i)
+      patchPoly << surf(a0, reg.zLo + (reg.zHi - reg.zLo) * i / nZ);
 
     p.setPen(QPen(QColor(255, 255, 255, 210), 3.2, Qt::SolidLine));
     p.setBrush(QColor(237, 137, 54, 34));
@@ -822,13 +827,16 @@ void View3DCanvas::paintEvent(QPaintEvent *) {
     p.setPen(QPen(QColor(0xb7, 0x55, 0x16), 1.8, Qt::DashLine));
     p.drawPolygon(patchPoly);
 
-    const QPointF rcPt = projectPoint(doc_->rubbingCenter3D(), v);
+    const QPointF rcPt = surf(0.5 * (a0 + a1), zC);
     p.setPen(QPen(Qt::white, 1.8));
     p.setBrush(QColor(0xb7, 0x55, 0x16));
     p.drawEllipse(rcPt, 4.5, 4.5);
     p.setFont(theme::uiFont(8, true));
     const QString rubLbl =
-        QStringLiteral("◈ 문양 탁본 (H%1)").arg(int(std::lround(zC)));
+        QStringLiteral("◈ 탁본 H%1–%2 · %3°")
+            .arg(int(std::lround(reg.zLo)))
+            .arg(int(std::lround(reg.zHi)))
+            .arg(int(std::lround(reg.azSpanDeg)));
     const QFontMetricsF rfm(p.font());
     const double rw = rfm.horizontalAdvance(rubLbl) + 10.0;
     const QRectF rBox(rcPt.x() - rw * 0.5, rcPt.y() - 22.0, rw, 16.0);
@@ -836,6 +844,14 @@ void View3DCanvas::paintEvent(QPaintEvent *) {
     p.setBrush(QColor(255, 252, 245, 235));
     p.drawRoundedRect(rBox, 3.0, 3.0);
     p.drawText(rBox, Qt::AlignCenter, rubLbl);
+  }
+
+  // [JOB-014] 끄는 중인 탁본 범위 상자
+  if (rubBoxDrag_) {
+    const QRectF box = QRectF(rubBoxStart_, rubBoxEnd_).normalized();
+    p.setPen(QPen(QColor(0xb7, 0x55, 0x16), 1.6, Qt::DashLine));
+    p.setBrush(QColor(237, 137, 54, 40));
+    p.drawRect(box);
   }
 
   // [JOB-012] 사용자가 클릭해 지정한 3D 절단 위치 표지 (내가 여기를 잘랐구나 확인)
@@ -939,7 +955,7 @@ void View3DCanvas::paintEvent(QPaintEvent *) {
         cutPickMode_ == CutPickMode::CutPoint1Click
             ? QStringLiteral("✂ 자르고 싶은 3D 유물 표면을 마우스로 클릭하세요")
             : QStringLiteral(
-                  "◈ 문양 탁본을 뜰 3D 유물 표면을 마우스로 클릭하세요");
+                  "◈ 탁본할 부분을 마우스로 끌어 상자로 고르세요 (짧게 클릭 = 자동 크기)");
     const QColor pickCol = cutPickMode_ == CutPickMode::CutPoint1Click
                                ? theme::ProfileRed
                                : QColor(0xb7, 0x55, 0x16);
@@ -1001,6 +1017,15 @@ void View3DCanvas::mousePressEvent(QMouseEvent *e) {
 
   // ②·③ 확정 후 단계
   if (e->button() == Qt::LeftButton) {
+    if (cutPickMode_ == CutPickMode::RubbingSpot1Click) {
+      // [JOB-014] 탁본 범위: 누른 곳부터 끌어 상자를 그린다 (놓을 때 범위 확정)
+      rubBoxDrag_ = true;
+      rubBoxStart_ = rubBoxEnd_ = e->position();
+      drag_ = true;
+      setCursor(Qt::CrossCursor);
+      update();
+      return;
+    }
     if (cutPickMode_ != CutPickMode::None) {
       KA::Point3 worldPt;
       if (pickSurfacePoint(e->position(), worldPt)) {
@@ -1048,6 +1073,11 @@ void View3DCanvas::mousePressEvent(QMouseEvent *e) {
 void View3DCanvas::mouseMoveEvent(QMouseEvent *e) {
   if (!drag_)
     return;
+  if (rubBoxDrag_) {
+    rubBoxEnd_ = e->position();
+    update();
+    return;
+  }
   const QPoint d = e->pos() - last_;
   last_ = e->pos();
 
@@ -1099,7 +1129,36 @@ void View3DCanvas::mouseMoveEvent(QMouseEvent *e) {
   update();
 }
 
-void View3DCanvas::mouseReleaseEvent(QMouseEvent *) {
+void View3DCanvas::mouseReleaseEvent(QMouseEvent *e) {
+  if (rubBoxDrag_) {
+    rubBoxDrag_ = false;
+    drag_ = false;
+    cutPickMode_ = CutPickMode::None;
+    setCursor(Qt::OpenHandCursor);
+    const QRectF box = QRectF(rubBoxStart_, e->position()).normalized();
+    if (doc_ && doc_->isLoaded() && doc_->poseConfirmed()) {
+      if (box.width() < 6.0 && box.height() < 6.0) {
+        KA::Point3 worldPt; // 짧은 클릭 = 예전처럼 그 점 둘레 자동 크기
+        if (pickSurfacePoint(e->position(), worldPt))
+          emit rubbingSpotPicked(worldPt);
+      } else {
+        const ArtifactDoc *d = doc_;
+        const RasterView vv = view();
+        // 상자 가운데 보이는 면이 뒤쪽 벽(깨진 편 너머 안쪽)인지 — 그 벽의 같은 자리를 뜬다
+        bool farSide = false;
+        KA::Point3 hit;
+        if (pickSurfacePoint(box.center(), hit)) {
+          const double yw = vv.yawDeg * std::numbers::pi / 180.0;
+          farSide = std::sin(yw) * hit.x + std::cos(yw) * hit.y > 0.0;
+        }
+        emit rubbingRegionPicked(regionFromScreenBox(
+            box, vv, d->previewAngle(),
+            [d](double z) { return d->outerRadiusAt(z); }, farSide));
+      }
+    }
+    update();
+    return;
+  }
   const bool cutDrag = drag_ && (cutDrag_ || minimapDrag_);
   drag_ = false;
   poseDrag_ = false;
@@ -1359,26 +1418,55 @@ View3DPane::View3DPane(QWidget *parent) : QWidget(parent) {
   pickBar_->setStyleSheet(
       QStringLiteral("background:%1; border-bottom:1px solid %2;")
           .arg(theme::hex(theme::Surface), theme::hex(theme::Line)));
-  auto *pk = new QHBoxLayout(pickBar_);
-  pk->setContentsMargins(6, 4, 6, 4);
+  auto *pkv = new QVBoxLayout(pickBar_);
+  pkv->setContentsMargins(6, 4, 6, 4);
+  pkv->setSpacing(3);
+  auto *pkRow1 = new QWidget(pickBar_);
+  auto *pk = new QHBoxLayout(pkRow1);
+  pk->setContentsMargins(0, 0, 0, 0);
   pk->setSpacing(4);
   btnPickCut_ = makeMiniBtn(
       QStringLiteral("✂ 클릭해 단면 위치 지정"),
       QStringLiteral(
           "3D 유물에서 자르고 싶은 곳을 마우스로 클릭하면 정확히 그 자리로 "
           "단면을 자르고 도면에 표시합니다"),
-      pickBar_);
+      pkRow1);
   btnPickCut_->setCheckable(true);
   btnPickRubbing_ = makeMiniBtn(
-      QStringLiteral("◈ 클릭해 문양 탁본 선택"),
+      QStringLiteral("◈ 끌어서 탁본 범위"),
       QStringLiteral(
-          "3D 유물에서 탁본을 뜰 문양 부위를 마우스로 클릭하면 옆 도면에 "
-          "계산·색표현이 완료된 정밀 문양 탁본을 출력합니다"),
-      pickBar_);
+          "누른 뒤 3D 유물 표면에서 탁본할 부분을 마우스로 끌어 상자로 고르면, "
+          "그 범위를 펼친(전개) 실제 크기 탁본을 옆 도면에 바로 출력합니다"),
+      pkRow1);
   btnPickRubbing_->setCheckable(true);
+  btnPickRubbing_->setObjectName("pickRubbing");
   pk->addWidget(btnPickCut_);
   pk->addWidget(btnPickRubbing_);
   pk->addStretch();
+  pkv->addWidget(pkRow1);
+
+  auto *pkRow2 = new QWidget(pickBar_);
+  auto *pk2 = new QHBoxLayout(pkRow2);
+  pk2->setContentsMargins(0, 0, 0, 0);
+  pk2->setSpacing(4);
+  auto *btnRubFull = makeMiniBtn(
+      QStringLiteral("↔ 한 바퀴 전개"),
+      QStringLiteral("고른 높이 범위를 360° 한 바퀴 펼친 문양 전개도 탁본을 만듭니다"),
+      pkRow2);
+  btnRubFull->setObjectName("rubFullTurn");
+  auto *btnRubSave = makeMiniBtn(
+      QStringLiteral("💾 탁본 저장 (1:1)"),
+      QStringLiteral("지금 탁본을 실제 크기(600 dpi) PNG 로 저장합니다 — 인쇄하면 실물 크기"),
+      pkRow2);
+  btnRubSave->setObjectName("rubSave");
+  connect(btnRubFull, &QPushButton::clicked, this,
+          [this] { emit actionRequested(QStringLiteral("rubFullTurn")); });
+  connect(btnRubSave, &QPushButton::clicked, this,
+          [this] { emit actionRequested(QStringLiteral("rubSave")); });
+  pk2->addWidget(btnRubFull);
+  pk2->addWidget(btnRubSave);
+  pk2->addStretch();
+  pkv->addWidget(pkRow2);
   pickBar_->hide();
   v->addWidget(pickBar_);
 
@@ -1407,7 +1495,11 @@ View3DPane::View3DPane(QWidget *parent) : QWidget(parent) {
       btnPickCut_->setChecked(false);
     canvas_->setCutPickMode(checked ? CutPickMode::RubbingSpot1Click
                                     : CutPickMode::None);
+    if (checked)
+      canvas_->levelView(); // 정면 시선에서 끌어야 화면 상자 = 표면 범위
   });
+  connect(canvas_, &View3DCanvas::rubbingRegionPicked, this,
+          &View3DPane::rubbingRegionPicked);
   connect(canvas_, &View3DCanvas::cutPointPicked, this,
           &View3DPane::cutPointPicked);
   connect(canvas_, &View3DCanvas::rubbingSpotPicked, this,
