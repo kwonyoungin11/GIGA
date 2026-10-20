@@ -164,6 +164,255 @@ void AngleStripWidget::mousePressEvent(QMouseEvent *e) {
   emit angleClicked(cells_[size_t(idx)].angleDeg);
 }
 
+// ---- PlanViewWidget (왼쪽 상단: 위에서 내려다본 실제 유물 평면도) ----------
+PlanViewWidget::PlanViewWidget(QWidget *parent) : QWidget(parent) {
+  setObjectName("PlanViewWidget");
+  setMinimumSize(200, 175);
+  setMaximumHeight(255);
+  setCursor(Qt::CrossCursor);
+  setToolTip(QStringLiteral(
+      "위에서 내려다본 실제 유물 평면도 — 자르고 싶은 방향을 마우스로 클릭하거나 "
+      "끌면 즉시 그 자리의 세로 단면(A–A′)이 오른쪽 도면에 나타납니다"));
+}
+
+void PlanViewWidget::setDoc(const ArtifactDoc *doc) {
+  const bool docChanged = (doc_ != doc);
+  doc_ = doc;
+  if (!doc_ || !doc_->isLoaded()) {
+    baseTopImg_ = QImage();
+    dirty_ = true;
+    update();
+    return;
+  }
+  const auto &m = doc_->meshMaster();
+  if (docChanged || m.vertices.size() != cachedVertCount_ ||
+      std::fabs(m.bboxMax.z - cachedBboxZ_) > 1e-4) {
+    cachedVertCount_ = m.vertices.size();
+    cachedBboxZ_ = m.bboxMax.z;
+    dirty_ = true;
+  }
+  update();
+}
+
+void PlanViewWidget::rebuildTopImage() {
+  dirty_ = false;
+  if (!doc_ || !doc_->isLoaded() || width() < 32 || height() < 40) {
+    baseTopImg_ = QImage();
+    return;
+  }
+  // 확정 자세(frontAngle 회전 전)의 정지된 유물 메시를 위에서 내려다본 평면 영상으로 캐싱
+  const auto &m = doc_->meshMaster();
+  if (m.vertices.empty()) {
+    baseTopImg_ = QImage();
+    return;
+  }
+  maxR_ = std::max({20.0, std::fabs(m.bboxMin.x), std::fabs(m.bboxMax.x),
+                    std::fabs(m.bboxMin.y), std::fabs(m.bboxMax.y)});
+  const int headerH = 22;
+  const int availW = std::max(32, width() - 12);
+  const int availH = std::max(32, height() - headerH - 8);
+  const int side = std::min(availW, availH);
+  const double spanMm = 2.0 * (maxR_ + 14.0);
+  pxPerMm_ = double(side) / std::max(1.0, spanMm);
+  ctrPx_ = QPointF(width() * 0.5, headerH + (height() - headerH) * 0.5);
+
+  RasterView v;
+  v.yawDeg = 0.0;
+  v.pitchDeg = -90.0;
+  v.pxPerMm = pxPerMm_;
+  v.centerPx = ctrPx_;
+  v.centerX = 0.0;
+  v.centerY = 0.0;
+  v.centerZ = 0.5 * (m.bboxMin.z + m.bboxMax.z);
+
+  // 초고해상도 메시는 1회 캐싱 시 원본 또는 LOD에서 빠르게 렌더링
+  KA::MeshData topMesh;
+  const KA::MeshData *srcMesh = &m;
+  if (m.faces.size() > 350000 && !doc_->lodMesh().faces.empty()) {
+    // lodMesh()는 previewAngle 회전이 포함되어 있으므로 역회전하여 정지 좌표계로 복원
+    topMesh = doc_->lodMesh();
+    const double curAng = doc_->previewAngle();
+    if (std::fabs(curAng) > 1e-9) {
+      const double rad = -curAng * std::numbers::pi / 180.0;
+      const double c = std::cos(rad), s = std::sin(rad);
+      for (auto &pt : topMesh.vertices) {
+        const double x = c * pt.x - s * pt.y;
+        const double y = s * pt.x + c * pt.y;
+        pt.x = x;
+        pt.y = y;
+      }
+    }
+    srcMesh = &topMesh;
+  }
+  baseTopImg_ = renderMesh(*srcMesh, size(), v, ShadeMode::Real,
+                           theme::ModelClay, nullptr, nullptr);
+}
+
+double PlanViewWidget::angleForScreenPt(const QPointF &pt) const {
+  if (!doc_ || !doc_->isLoaded())
+    return 0.0;
+  const double dx = pt.x() - ctrPx_.x();
+  const double dy = -(pt.y() - ctrPx_.y());
+  if (std::hypot(dx, dy) < 2.0)
+    return doc_->previewAngle();
+  const double thetaDeg = std::atan2(dy, dx) * (180.0 / std::numbers::pi);
+  // 클릭한 방향(thetaDeg)과 반대 방향(thetaDeg + 180°)의 높이 범위를 비교해
+  // 자른 단면이 정확히 클릭한 방향을 나타내도록 정면각(frontAngle)을 산출
+  const auto &m = doc_->meshMaster();
+  const double thRad = thetaDeg * (std::numbers::pi / 180.0);
+  const double ux = std::cos(thRad), uy = std::sin(thRad);
+  double zMinClick = 1e18, zMaxClick = -1e18;
+  double zMinOpp = 1e18, zMaxOpp = -1e18;
+  const size_t step = std::max<size_t>(1, m.vertices.size() / 8000);
+  for (size_t i = 0; i < m.vertices.size(); i += step) {
+    const auto &v = m.vertices[i];
+    const double perp = -uy * v.x + ux * v.y;
+    if (std::fabs(perp) <= 3.0) {
+      const double proj = ux * v.x + uy * v.y;
+      if (proj >= 0.0) {
+        zMinClick = std::min(zMinClick, v.z);
+        zMaxClick = std::max(zMaxClick, v.z);
+      } else {
+        zMinOpp = std::min(zMinOpp, v.z);
+        zMaxOpp = std::max(zMaxOpp, v.z);
+      }
+    }
+  }
+  const double spanClick = (zMaxClick > zMinClick) ? (zMaxClick - zMinClick) : 0.0;
+  const double spanOpp = (zMaxOpp > zMinOpp) ? (zMaxOpp - zMinOpp) : 0.0;
+  if (spanClick > spanOpp + 5.0) {
+    return std::remainder(180.0 - thetaDeg, 360.0);
+  }
+  return std::remainder(-thetaDeg, 360.0);
+}
+
+void PlanViewWidget::paintEvent(QPaintEvent *) {
+  QPainter p(this);
+  p.setRenderHint(QPainter::Antialiasing, true);
+  p.fillRect(rect(), theme::Ground);
+
+  // 상단 제목 줄
+  const QRectF hdr(0, 0, width(), 22);
+  p.fillRect(hdr, theme::Surface);
+  p.setPen(QPen(theme::Line, 1.0));
+  p.drawLine(0, 22, width(), 22);
+  p.setFont(theme::uiFont(9, true));
+  p.setPen(theme::Ink);
+  p.drawText(QRectF(8, 0, width() - 90, 22), Qt::AlignVCenter | Qt::AlignLeft,
+             QStringLiteral("◉ 위에서 본 유물 평면도 (클릭·끌어 단면 회전)"));
+
+  if (!doc_ || !doc_->isLoaded())
+    return;
+  if (dirty_ || baseTopImg_.size() != size())
+    rebuildTopImage();
+
+  const double curAng =
+      std::fmod(std::fmod(doc_->previewAngle(), 360.0) + 360.0, 360.0);
+  p.setFont(theme::monoFont(9, true));
+  p.setPen(theme::ProfileRed);
+  p.drawText(QRectF(width() - 82, 0, 74, 22), Qt::AlignVCenter | Qt::AlignRight,
+             QStringLiteral("막 %1°").arg(int(std::lround(curAng)) % 360));
+
+  // 중심 십자선 및 방위 눈금 원
+  const double ringR = (maxR_ + 6.0) * pxPerMm_;
+  p.setPen(QPen(theme::Grid10mm, 1.0, Qt::DashLine));
+  p.drawLine(QPointF(ctrPx_.x() - ringR - 8, ctrPx_.y()),
+             QPointF(ctrPx_.x() + ringR + 8, ctrPx_.y()));
+  p.drawLine(QPointF(ctrPx_.x(), ctrPx_.y() - ringR - 8),
+             QPointF(ctrPx_.x(), ctrPx_.y() + ringR + 8));
+
+  if (!baseTopImg_.isNull())
+    p.drawImage(0, 0, baseTopImg_);
+
+  // 구연부 측정 원 (점선)
+  if (doc_->poseConfirmed() && doc_->dims().rim > 5.0) {
+    const double rimR = 0.5 * doc_->dims().rim * pxPerMm_;
+    p.setPen(QPen(theme::Ink2, 1.1, Qt::DotLine));
+    p.setBrush(Qt::NoBrush);
+    p.drawEllipse(ctrPx_, rimR, rimR);
+  }
+
+  // 바깥 회전 안내 링
+  p.setPen(QPen(theme::Line, 1.0));
+  p.setBrush(Qt::NoBrush);
+  p.drawEllipse(ctrPx_, ringR, ringR);
+
+  // 절단선 A-A' 표시 (정지된 base_ 좌표계에서 절단선은 -frontAngle 방위각)
+  const double angRad = -doc_->previewAngle() * (std::numbers::pi / 180.0);
+  const QPointF dir(std::cos(angRad), -std::sin(angRad));
+  const QPointF ptPos = ctrPx_ + dir * ringR;
+  const QPointF ptNeg = ctrPx_ - dir * ringR;
+
+  // 어느 쪽 반평면이 주 단면인지 판정
+  const auto &m = doc_->lodMesh().faces.empty() ? doc_->mesh() : doc_->lodMesh();
+  double zMinP = 1e18, zMaxP = -1e18, zMinN = 1e18, zMaxN = -1e18;
+  for (const auto &v : m.vertices) {
+    if (std::fabs(v.y) <= 2.5) {
+      if (v.x >= 0.0) {
+        zMinP = std::min(zMinP, v.z);
+        zMaxP = std::max(zMaxP, v.z);
+      } else {
+        zMinN = std::min(zMinN, v.z);
+        zMaxN = std::max(zMaxN, v.z);
+      }
+    }
+  }
+  const bool preferNeg =
+      ((zMaxN > zMinN ? zMaxN - zMinN : 0.0) >
+       (zMaxP > zMinP ? zMaxP - zMinP : 0.0) + 5.0);
+  const QPointF &ptActive = preferNeg ? ptNeg : ptPos;
+  const QPointF &ptOther = preferNeg ? ptPos : ptNeg;
+
+  p.setPen(QPen(theme::ProfileRed, 1.4, Qt::DashLine));
+  p.drawLine(ctrPx_, ptOther);
+  p.setPen(QPen(Qt::white, 4.5, Qt::SolidLine, Qt::RoundCap));
+  p.drawLine(ctrPx_, ptActive);
+  p.setPen(QPen(theme::ProfileRed, 2.4, Qt::SolidLine, Qt::RoundCap));
+  p.drawLine(ctrPx_, ptActive);
+
+  // 중심점 및 손잡이
+  p.setPen(QPen(Qt::white, 1.5));
+  p.setBrush(theme::ProfileRed);
+  p.drawEllipse(ctrPx_, 3.5, 3.5);
+  p.drawEllipse(ptActive, 6.0, 6.0);
+  p.setFont(theme::monoFont(8, true));
+  p.setPen(Qt::white);
+  p.drawText(QRectF(ptActive.x() - 6, ptActive.y() - 6, 12, 12),
+             Qt::AlignCenter, QStringLiteral("A"));
+
+  p.setPen(QPen(theme::Line, 1.0));
+  p.drawLine(0, height() - 1, width(), height() - 1);
+}
+
+void PlanViewWidget::mousePressEvent(QMouseEvent *e) {
+  if (!doc_ || !doc_->isLoaded() || !doc_->poseConfirmed() ||
+      e->button() != Qt::LeftButton)
+    return;
+  dragging_ = true;
+  const double newAng = angleForScreenPt(e->position());
+  emit anglePreviewed(newAng);
+  update();
+}
+
+void PlanViewWidget::mouseMoveEvent(QMouseEvent *e) {
+  if (!dragging_ || !doc_ || !doc_->isLoaded() || !doc_->poseConfirmed())
+    return;
+  const double newAng = angleForScreenPt(e->position());
+  emit anglePreviewed(newAng);
+  update();
+}
+
+void PlanViewWidget::mouseReleaseEvent(QMouseEvent *e) {
+  if (!dragging_ || e->button() != Qt::LeftButton)
+    return;
+  dragging_ = false;
+  if (doc_ && doc_->isLoaded() && doc_->poseConfirmed()) {
+    const double newAng = angleForScreenPt(e->position());
+    emit angleCommitted(newAng);
+    update();
+  }
+}
+
 // ---- View3DCanvas ----------------------------------------------------------
 View3DCanvas::View3DCanvas(QWidget *parent) : QWidget(parent) {
   setMinimumSize(200, 180);
@@ -682,38 +931,6 @@ void View3DCanvas::paintEvent(QPaintEvent *) {
       p.setPen(QColor(0x6b, 0x4f, 0xc0));
       p.drawText(pPurple + QPointF(8, 3), QStringLiteral("H 95 짝"));
     }
-
-    // 우상단 2D 평면도 미니맵 (위에서 본 자리 · 클릭/드래그로 즉시 단면 방향 지정)
-    if (width() >= 220 && height() >= 200) {
-      const double mw = 78.0, mh = 86.0;
-      minimapRect_ = QRectF(width() - mw - 8.0, 8.0, mw, mh);
-      p.setPen(QPen(theme::Line, 1.0));
-      p.setBrush(QColor(255, 255, 255, 232));
-      p.drawRoundedRect(minimapRect_, 5.0, 5.0);
-
-      p.setFont(theme::uiFont(8, true));
-      p.setPen(theme::Muted);
-      p.drawText(QRectF(minimapRect_.left(), minimapRect_.top() + 3.0, mw, 13.0),
-                 Qt::AlignCenter, QStringLiteral("위에서 본 자리"));
-
-      const QPointF mc(minimapRect_.center().x(),
-                       minimapRect_.top() + 16.0 + (mh - 18.0) * 0.5);
-      const double mr = 25.0;
-      p.setPen(QPen(theme::Line, 1.2));
-      p.setBrush(theme::Wash);
-      p.drawEllipse(mc, mr, mr);
-      p.setPen(QPen(theme::Ink2, 1.0, Qt::DotLine));
-      p.drawEllipse(mc, mr * 0.72, mr * 0.72);
-
-      // 절단선 A-A' 및 빨간 손잡이
-      const QPointF pA(mc.x() + mr * std::cos(fa), mc.y() - mr * std::sin(fa));
-      const QPointF pA2(mc.x() - mr * std::cos(fa), mc.y() + mr * std::sin(fa));
-      p.setPen(QPen(theme::ProfileRed, 1.8));
-      p.drawLine(pA2, pA);
-      p.setPen(QPen(Qt::white, 1.5));
-      p.setBrush(QColor(0xd8, 0x35, 0x2a));
-      p.drawEllipse(pA, 4.5, 4.5);
-    }
   }
 
   // 단면 위치 / 문양 탁본 1클릭 지정 모드 상단 안내 배지
@@ -969,34 +1186,34 @@ View3DPane::View3DPane(QWidget *parent) : QWidget(parent) {
     b->setFocusPolicy(Qt::NoFocus);
     b->setToolTip(tip);
     b->setStyleSheet(QStringLiteral(
-        "padding:2px 5px; font-size:11px; min-height:22px; min-width:24px;"));
+        "padding:1px 4px; font-size:10px; min-height:20px; min-width:18px;"));
     return b;
   };
 
   auto *poseRow1 = new QWidget(poseBar_);
   auto *pr1 = new QHBoxLayout(poseRow1);
   pr1->setContentsMargins(0, 0, 0, 0);
-  pr1->setSpacing(3);
+  pr1->setSpacing(2);
   auto addAxisStepper = [&](const QString &axName, PoseAxis ax,
                             const QString &colorHex) {
     auto *lbl = new QLabel(
         QStringLiteral("<b style='color:%1'>%2</b>").arg(colorHex, axName),
         poseRow1);
-    lbl->setStyleSheet(QStringLiteral("font-size:11px;"));
+    lbl->setStyleSheet(QStringLiteral("font-size:10px;"));
     pr1->addWidget(lbl);
     for (double deg : {-15.0, -5.0, -1.0, 1.0, 5.0, 15.0}) {
       const QString s =
-          deg > 0 ? QStringLiteral("+%1°").arg(int(deg))
-                  : QStringLiteral("%1°").arg(int(deg));
+          deg > 0 ? QStringLiteral("+%1").arg(int(deg))
+                  : QStringLiteral("%1").arg(int(deg));
       auto *b = makeMiniBtn(
-          s, QStringLiteral("%1축 %2 미세 회전").arg(axName, s), poseRow1);
+          s, QStringLiteral("%1축 %2° 미세 회전").arg(axName, s), poseRow1);
       connect(b, &QPushButton::clicked, this,
               [this, ax, deg] { emit poseRotateRequested(ax, deg); });
       pr1->addWidget(b);
     }
   };
   addAxisStepper(QStringLiteral("X"), PoseAxis::X, QStringLiteral("#c8641e"));
-  pr1->addSpacing(4);
+  pr1->addSpacing(3);
   addAxisStepper(QStringLiteral("Y"), PoseAxis::Y, QStringLiteral("#3f8f4f"));
   pr1->addStretch();
   pv->addWidget(poseRow1);
@@ -1004,21 +1221,21 @@ View3DPane::View3DPane(QWidget *parent) : QWidget(parent) {
   auto *poseRow2 = new QWidget(poseBar_);
   auto *pr2 = new QHBoxLayout(poseRow2);
   pr2->setContentsMargins(0, 0, 0, 0);
-  pr2->setSpacing(4);
+  pr2->setSpacing(3);
   auto *btnAuto = makeMiniBtn(
       QStringLiteral("⚡ 자동 세우기"),
       QStringLiteral("구연부·대칭축을 자동으로 찾아 바르게 세웁니다"), poseRow2);
   auto *btnCenter = makeMiniBtn(
-      QStringLiteral("⊕ 바닥 중앙 맞춤"),
+      QStringLiteral("⊕ 중앙 맞춤"),
       QStringLiteral("유물을 바닥판 한가운데(XY=0, Z=0)에 반듯하게 놓습니다"),
       poseRow2);
   btnSurfacePick_ = makeMiniBtn(
-      QStringLiteral("👇 이 면을 바닥으로"),
+      QStringLiteral("👇 바닥 1클릭"),
       QStringLiteral("3D 유물에서 바닥이 될 면을 클릭하면 즉시 그 면으로 세웁니다"),
       poseRow2);
   btnSurfacePick_->setCheckable(true);
   btn3PtPick_ = makeMiniBtn(
-      QStringLiteral("①②③ 3점 바닥 찍기"),
+      QStringLiteral("①②③ 3점 바닥"),
       QStringLiteral("바닥 둘레 3점을 클릭해 수평 바닥면을 지정합니다"),
       poseRow2);
   btn3PtPick_->setCheckable(true);
@@ -1165,8 +1382,19 @@ View3DPane::View3DPane(QWidget *parent) : QWidget(parent) {
   pickBar_->hide();
   v->addWidget(pickBar_);
 
+  // [JOB-013] 왼쪽 상단: 위에서 본 실제 유물 평면도 (클릭·끌어 세로단면 회전)
+  planView_ = new PlanViewWidget(this);
+  planView_->hide();
+  v->addWidget(planView_);
+
+  // [JOB-013] 왼쪽 하단: 앞에서 본 유물 정면·3D (가로단면 높이 · 문양 탁본 선택)
   canvas_ = new View3DCanvas(this);
   v->addWidget(canvas_, 1);
+
+  connect(planView_, &PlanViewWidget::anglePreviewed, this,
+          &View3DPane::anglePreviewed);
+  connect(planView_, &PlanViewWidget::angleCommitted, this,
+          &View3DPane::angleSelected);
 
   connect(btnPickCut_, &QPushButton::clicked, this, [this](bool checked) {
     if (checked)
@@ -1218,6 +1446,10 @@ void View3DPane::setCutPage(bool on) {
 
 void View3DPane::refresh(const ArtifactDoc &doc, int slot) {
   canvas_->setDoc(&doc, slot);
+  if (planView_) {
+    planView_->setDoc(&doc);
+    planView_->setVisible(doc.isLoaded() && doc.poseConfirmed());
+  }
   const QString mu = theme::hex(theme::Muted);
   const bool base = doc.isLoaded() && !doc.poseConfirmed();
   const bool showCutControls = doc.isLoaded() && doc.poseConfirmed() && cutPage_;

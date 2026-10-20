@@ -275,6 +275,122 @@ QImage Plate::renderRubbingPatch(const ArtifactDoc &doc, double pxPerMm) {
   return out;
 }
 
+QImage Plate::renderPlanView(const ArtifactDoc &doc, double pxPerMm) {
+  if (!doc.isLoaded())
+    return {};
+  const auto &m =
+      !doc.lodMesh().faces.empty() ? doc.lodMesh() : doc.mesh();
+  if (m.vertices.empty())
+    return {};
+  const double maxR = std::max(
+      {20.0, std::fabs(m.bboxMin.x), std::fabs(m.bboxMax.x),
+       std::fabs(m.bboxMin.y), std::fabs(m.bboxMax.y)});
+  const double spanMm = 2.0 * (maxR + 14.0);
+  pxPerMm = std::clamp(pxPerMm, 0.6, 320.0 / std::max(1.0, spanMm));
+  const int sidePx = std::clamp(int(std::ceil(spanMm * pxPerMm)), 64, 360);
+  const QSize sz(sidePx, sidePx);
+
+  RasterView v;
+  // 위에서 내려다본 정사영 평면도 (pitch = -90°: +X 우측, +Y 상단, +Z 위쪽이 카메라에 가까움)
+  v.yawDeg = 0.0;
+  v.pitchDeg = -90.0;
+  v.pxPerMm = double(sidePx) / spanMm;
+  v.centerPx = QPointF(sidePx * 0.5, sidePx * 0.5);
+  v.centerX = 0.0;
+  v.centerY = 0.0;
+  v.centerZ = 0.5 * (m.bboxMin.z + m.bboxMax.z);
+
+  QImage raw =
+      renderMesh(m, sz, v, ShadeMode::Real, QColor(210, 206, 198), nullptr, nullptr);
+  // 도판 조화를 위해 평면 영상을 차분한 먹색 톤으로 정제
+  for (int y = 0; y < raw.height(); ++y) {
+    QRgb *row = reinterpret_cast<QRgb *>(raw.scanLine(y));
+    for (int x = 0; x < raw.width(); ++x) {
+      const int a = qAlpha(row[x]);
+      if (a == 0)
+        continue;
+      const int g = std::clamp(
+          int((qRed(row[x]) * 0.30 + qGreen(row[x]) * 0.59 + qBlue(row[x]) * 0.11) *
+              0.92),
+          28, 238);
+      row[x] = qRgba(int(g * 0.99), int(g * 0.98), int(g * 0.95), a);
+    }
+  }
+
+  QImage out(sz, QImage::Format_RGB32);
+  out.fill(QColor(250, 248, 243));
+  QPainter p(&out);
+  p.setRenderHint(QPainter::Antialiasing, true);
+
+  const QPointF ctr(sidePx * 0.5, sidePx * 0.5);
+  // 중심 십자 기준선
+  p.setPen(QPen(theme::Grid10mm, 1.0, Qt::DashLine));
+  p.drawLine(QPointF(6.0, ctr.y()), QPointF(sidePx - 6.0, ctr.y()));
+  p.drawLine(QPointF(ctr.x(), 6.0), QPointF(ctr.x(), sidePx - 6.0));
+
+  p.drawImage(0, 0, raw);
+
+  // 구연부 측정 원 (점선) 표시
+  if (doc.poseConfirmed() && doc.dims().rim > 5.0) {
+    const double rimRpx = 0.5 * doc.dims().rim * v.pxPerMm;
+    p.setPen(QPen(theme::Ink2, 1.0, Qt::DotLine));
+    p.setBrush(Qt::NoBrush);
+    p.drawEllipse(ctr, rimRpx, rimRpx);
+  }
+
+  // 문양 탁본 선택 호 표시 (황토색 점선 호)
+  if (doc.poseConfirmed() && doc.hasRubbingSpot()) {
+    const double azDeg = doc.rubbingAzimuthDeg();
+    const double rRpx =
+        std::max(12.0, (doc.outerRadiusAt(doc.rubbingZ()) > 0.0
+                            ? doc.outerRadiusAt(doc.rubbingZ())
+                            : 0.45 * doc.dims().belly) *
+                           v.pxPerMm);
+    const QRectF arcRect(ctr.x() - rRpx, ctr.y() - rRpx, 2.0 * rRpx, 2.0 * rRpx);
+    p.setPen(QPen(QColor(0xb7, 0x55, 0x16), 2.2, Qt::SolidLine));
+    p.drawArc(arcRect, int((azDeg - 20.0) * 16.0), int(40.0 * 16.0));
+  }
+
+  // 절단선 A-A' 표시 (m 은 이미 frontAngle 회전이 반영되어 Y=0 이 절단선)
+  if (doc.poseConfirmed()) {
+    double zMinPos = 1e18, zMaxPos = -1e18, zMinNeg = 1e18, zMaxNeg = -1e18;
+    for (const auto &vtx : m.vertices) {
+      if (std::fabs(vtx.y) <= 2.5) {
+        if (vtx.x >= 0.0) {
+          zMinPos = std::min(zMinPos, vtx.z);
+          zMaxPos = std::max(zMaxPos, vtx.z);
+        } else {
+          zMinNeg = std::min(zMinNeg, vtx.z);
+          zMaxNeg = std::max(zMaxNeg, vtx.z);
+        }
+      }
+    }
+    const double spanPos = (zMaxPos > zMinPos) ? (zMaxPos - zMinPos) : 0.0;
+    const double spanNeg = (zMaxNeg > zMinNeg) ? (zMaxNeg - zMinNeg) : 0.0;
+    const bool preferNeg = (spanNeg > spanPos + 5.0);
+
+    const double lineR = maxR * v.pxPerMm * 1.02;
+    const QPointF ptNeg(ctr.x() - lineR, ctr.y());
+    const QPointF ptPos(ctr.x() + lineR, ctr.y());
+    const QPointF &ptSolid = preferNeg ? ptNeg : ptPos;
+    const QPointF &ptDash = preferNeg ? ptPos : ptNeg;
+
+    p.setPen(QPen(theme::ProfileRed, 1.3, Qt::DashLine));
+    p.drawLine(ctr, ptDash);
+    p.setPen(QPen(Qt::white, 4.0, Qt::SolidLine, Qt::RoundCap));
+    p.drawLine(ctr, ptSolid);
+    p.setPen(QPen(theme::ProfileRed, 2.2, Qt::SolidLine, Qt::RoundCap));
+    p.drawLine(ctr, ptSolid);
+
+    p.setPen(QPen(Qt::white, 1.5));
+    p.setBrush(theme::ProfileRed);
+    p.drawEllipse(ptSolid, 4.0, 4.0);
+    p.drawEllipse(ctr, 2.5, 2.5);
+  }
+  p.end();
+  return out;
+}
+
 void Plate::paint(QPainter &p, const ArtifactDoc &doc, const QTransform &t,
                   double px1mm, double textPx, const PlateOptions &o,
                   const ShadeImage *shade) {
@@ -553,52 +669,85 @@ void Plate::paint(QPainter &p, const ArtifactDoc &doc, const QTransform &t,
     scaleBar(p, lb, px1mm, len, mono, QString());
   }
 
-  // 6) 선택 부위 정밀 문양 탁본 콜아웃 박스 & 3D 절단 위치 확인 표지 -----------
-  if (o.shade && doc.hasRubbingSpot() && !horiz && Edev.width() >= 180.0) {
-    const QImage rubImg = renderRubbingPatch(doc, 4.2);
-    if (!rubImg.isNull()) {
-      const double boxW = std::clamp(Edev.width() * 0.24, 76.0, 148.0);
-      const double boxH = boxW * double(rubImg.height()) /
-                          std::max(1.0, double(rubImg.width()));
-      const double capH = std::max(16.0, textPx * 1.45);
-      const bool onRight = (doc.sectionSide() == SectionSide::Left);
-      const double bx =
-          onRight ? (Edev.right() - boxW - 8.0) : (Edev.left() + 8.0);
-      const double by = std::clamp(
-          t.map(QPointF(0.0, doc.rubbingZ())).y() - (boxH + capH) * 0.5,
-          Edev.top() + 34.0, Edev.bottom() - boxH - capH - 28.0);
-      const QRectF cardRect(bx, by, boxW, boxH + capH);
-      const QRectF imgRect(bx + 3.0, by + capH, boxW - 6.0, boxH - 3.0);
+  // 6) 위에서 본 평면도 + 선택 부위 정밀 문양 탁본 콜아웃 + 3D 절단 위치 표지 ---
+  if (o.shade && !horiz && Edev.width() >= 180.0) {
+    const double boxW = std::clamp(Edev.width() * 0.22, 74.0, 136.0);
+    const double capH = std::max(15.0, textPx * 1.35);
+    const bool onRight = (doc.sectionSide() == SectionSide::Left);
+    const double bx =
+        onRight ? (Edev.right() - boxW - 8.0) : (Edev.left() + 8.0);
+    double nextTopY = Edev.top() + 26.0;
 
-      // 외면 선택 높이(rubbingZ)로 이어지는 인출선
-      const double rAtZ = std::max(8.0, doc.outerRadiusAt(doc.rubbingZ()) * 0.65);
-      const double srcX =
-          (doc.sectionSide() == SectionSide::Right ? -1.0 : 1.0) * rAtZ;
-      const QPointF srcPt = t.map(QPointF(srcX, doc.rubbingZ()));
-      const QPointF dstPt(onRight ? cardRect.left() : cardRect.right(),
-                          cardRect.center().y());
-
+    // 6-a) 위에서 본 실제 유물 평면도 (구연·외곽 평면 + 절단선 A-A')
+    const QImage planImg = renderPlanView(doc, 1.4);
+    if (!planImg.isNull()) {
+      const double planH = boxW;
+      const QRectF planCard(bx, nextTopY, boxW, planH + capH);
+      const QRectF planImgRect(bx + 3.0, nextTopY + capH, boxW - 6.0, planH - 3.0);
       p.save();
-      p.setPen(QPen(theme::OuterInk, 1.0, Qt::DashLine));
-      p.drawLine(srcPt, dstPt);
-      p.setBrush(theme::OuterInk);
-      p.drawEllipse(srcPt, 2.5, 2.5);
-
-      p.setPen(QPen(theme::OuterInk, 1.2));
+      p.setPen(QPen(theme::OuterInk, 1.1));
       p.setBrush(theme::Surface);
-      p.drawRect(cardRect);
-      p.drawImage(imgRect, rubImg);
+      p.drawRect(planCard);
+      p.drawImage(planImgRect, planImg);
       p.setPen(QPen(theme::Edge, 0.8));
       p.setBrush(Qt::NoBrush);
-      p.drawRect(imgRect);
+      p.drawRect(planImgRect);
 
       p.setFont(mono);
       p.setPen(theme::Ink);
-      const QString rubTitle =
-          QStringLiteral("◈ 문양 탁본 (H %1)").arg(num(doc.rubbingZ(), 0));
-      p.drawText(QRectF(bx + 3.0, by + 1.0, boxW - 6.0, capH - 2.0),
-                 Qt::AlignCenter, rubTitle);
+      const QString planTitle =
+          QStringLiteral("◉ 평면도 (막 %1°)")
+              .arg(num(std::fmod(doc.previewAngle() + 360.0, 360.0), 0));
+      p.drawText(QRectF(bx + 2.0, nextTopY + 1.0, boxW - 4.0, capH - 2.0),
+                 Qt::AlignCenter, planTitle);
       p.restore();
+      nextTopY = planCard.bottom() + 8.0;
+    }
+
+    // 6-b) 선택 부위 정밀 문양 탁본 콜아웃 박스
+    if (doc.hasRubbingSpot()) {
+      const QImage rubImg = renderRubbingPatch(doc, 4.2);
+      if (!rubImg.isNull()) {
+        const double boxH = boxW * double(rubImg.height()) /
+                            std::max(1.0, double(rubImg.width()));
+        const double by = std::clamp(
+            std::max(nextTopY,
+                     t.map(QPointF(0.0, doc.rubbingZ())).y() - (boxH + capH) * 0.5),
+            nextTopY, Edev.bottom() - boxH - capH - 24.0);
+        const QRectF cardRect(bx, by, boxW, boxH + capH);
+        const QRectF imgRect(bx + 3.0, by + capH, boxW - 6.0, boxH - 3.0);
+
+        // 외면 선택 높이(rubbingZ)로 이어지는 인출선
+        const double rAtZ =
+            std::max(8.0, doc.outerRadiusAt(doc.rubbingZ()) * 0.65);
+        const double srcX =
+            (doc.sectionSide() == SectionSide::Right ? -1.0 : 1.0) * rAtZ;
+        const QPointF srcPt = t.map(QPointF(srcX, doc.rubbingZ()));
+        const QPointF dstPt(onRight ? cardRect.left() : cardRect.right(),
+                            cardRect.center().y());
+
+        p.save();
+        p.setPen(QPen(theme::OuterInk, 1.0, Qt::DashLine));
+        p.drawLine(srcPt, dstPt);
+        p.setBrush(theme::OuterInk);
+        p.drawEllipse(srcPt, 2.5, 2.5);
+
+        p.setPen(QPen(theme::OuterInk, 1.2));
+        p.setBrush(theme::Surface);
+        p.drawRect(cardRect);
+        p.drawImage(imgRect, rubImg);
+        p.setPen(QPen(theme::Edge, 0.8));
+        p.setBrush(Qt::NoBrush);
+        p.drawRect(imgRect);
+
+        p.setFont(mono);
+        p.setPen(theme::Ink);
+        const QString rubTitle =
+            QStringLiteral("◈ 문양 탁본 (H %1)").arg(num(doc.rubbingZ(), 0));
+        p.drawText(QRectF(bx + 3.0, by + 1.0, boxW - 6.0, capH - 2.0),
+                   Qt::AlignCenter, rubTitle);
+        p.restore();
+      }
     }
   }
 

@@ -14,6 +14,8 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QLabel>
+#include <QMouseEvent>
 #include <QPushButton>
 #include <QSlider>
 #include <algorithm>
@@ -238,10 +240,43 @@ int main(int argc, char **argv) {
     CHECK(!plateImg.isNull() && plateImg.width() == 840 && plateImg.height() == 1188,
           "paintSheet with rubbing callout succeeded (%dx%d)",
           plateImg.width(), plateImg.height());
+
+    // 4) [JOB-013] 위에서 본 유물 평면도(Plate::renderPlanView) 및 PlanViewWidget 검증
+    const QImage planImg = Plate::renderPlanView(doc, 1.5);
+    CHECK(!planImg.isNull() && planImg.width() >= 64 && planImg.height() >= 64,
+          "renderPlanView produced valid top-down plan image (%dx%d)",
+          planImg.width(), planImg.height());
+
+    MainWindow winPlan;
+    winPlan.resize(1560, 920);
+    winPlan.show();
+    winPlan.openSample(false);
+    QApplication::processEvents();
+    auto *planWidget = winPlan.findChild<PlanViewWidget *>();
+    CHECK(planWidget != nullptr && planWidget->isVisible(),
+          "PlanViewWidget exists and is visible in left pane");
+    if (planWidget) {
+      // PlanViewWidget의 우상단(예: +45° 방향)을 클릭하면 절단 각도가 즉시 갱신되어야 함
+      const QPoint clickPt(planWidget->width() / 2 + 45,
+                           planWidget->height() / 2 - 45);
+      QMouseEvent press(QEvent::MouseButtonPress, QPointF(clickPt),
+                        QPointF(planWidget->mapToGlobal(clickPt)),
+                        Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+      QMouseEvent release(QEvent::MouseButtonRelease, QPointF(clickPt),
+                          QPointF(planWidget->mapToGlobal(clickPt)),
+                          Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+      QApplication::sendEvent(planWidget, &press);
+      QApplication::sendEvent(planWidget, &release);
+      QApplication::processEvents();
+      auto *angleLbl = winPlan.findChild<QLabel *>(QStringLiteral("CutAngle"));
+      CHECK(angleLbl != nullptr && angleLbl->text() != QStringLiteral("0°"),
+            "Clicking PlanViewWidget updated CutAngle label to %s",
+            angleLbl ? qPrintable(angleLbl->text()) : "<null>");
+    }
   }
 
   // -------------------------------------------------------------------------
-  // 선택적 실제 유물(argv[2]) 스크린샷 캡처 (① 바닥 정하기 직립 -> ② 막으로 자르기 -> ③ 도면 편집)
+  // 선택적 실제 유물(argv[2]) 스크린샷 캡처 (열자마자 자동 직립·완성 도판 즉시 표시 검증)
   // -------------------------------------------------------------------------
   if (argc > 2) {
     const QString realObj = QString::fromLocal8Bit(argv[2]);
@@ -249,18 +284,14 @@ int main(int argc, char **argv) {
         argc > 3 ? QString::fromLocal8Bit(argv[3]) : outDir;
     if (QFileInfo(realObj).isFile()) {
       MainWindow win;
-      win.resize(1560, 920);
+      win.resize(1640, 960);
       win.show();
       const QString stem = QFileInfo(realObj).completeBaseName();
+      // [JOB-013] openPath 한 번만으로 자동 세우기 + 확정 + 평면·단면·탁본 통합 도판 즉시 표시
       win.openPath(realObj);
-      win.triggerActionForTest("poseAuto");
       QApplication::processEvents();
       win.grab().save(
-          shotDir + QStringLiteral("/shot_%1_step1.png").arg(stem));
-
-      win.triggerActionForTest("poseConfirm");
-      // 기본 음영 모드가 이미 디지털 탁본(D-Tak)이므로 그대로 외면 먹탁 + 문양 탁본 콜아웃 + 절단면 캡처
-      QApplication::processEvents();
+          shotDir + QStringLiteral("/shot_%1_unified.png").arg(stem));
       win.grab().save(
           shotDir + QStringLiteral("/shot_%1_step2.png").arg(stem));
 

@@ -198,6 +198,20 @@ MainWindow::MainWindow() {
               }
             }
           });
+  connect(view3d_, &View3DPane::anglePreviewed, this, [this](double absDeg) {
+    if (!doc_.isLoaded() || !doc_.poseConfirmed())
+      return;
+    fixedAngle_.reset();
+    const auto &sl = doc_.slotList();
+    if (slot_ >= 0 && slot_ < int(sl.size()) &&
+        sl[size_t(slot_)].kind == SlotKind::Horizontal &&
+        firstVerticalSlot() >= 0) {
+      slot_ = firstVerticalSlot();
+    }
+    doc_.previewFrontAngle(doc_.snapAngle(absDeg, 2.0));
+    sheet_->refresh(doc_, slot_);
+    view3d_->refresh(doc_, slot_);
+  });
   connect(view3d_, &View3DPane::angleSelected, this, [this](double absDeg) {
     if (!doc_.isLoaded() || !doc_.poseConfirmed())
       return;
@@ -800,7 +814,13 @@ bool MainWindow::openPath(const QString &path) {
   cancelCut(); // 문서가 바뀌므로 막 각도는 계산하지 않는다
   QApplication::setOverrideCursor(Qt::WaitCursor);
   QString err;
-  const bool ok = doc_.loadFile(path, &err); // 들어온 자세 그대로 (확정 전)
+  const bool ok = doc_.loadFile(path, &err);
+  if (ok && !QCoreApplication::arguments().contains(QStringLiteral("--base"))) {
+    // [JOB-013] 유물 파일을 열면 자동으로 바르게 세우고(autoAlign) 즉시 자세 확정(confirmPose)하여
+    // 평면도·종단면도·외면 먹탁·문양 탁본이 완성된 화면을 첫 화면에 바로 보여준다.
+    doc_.autoAlign();
+    doc_.confirmPose();
+  }
   QApplication::restoreOverrideCursor();
   if (!ok) {
     if (doc_.isPreviewing()) { // 열지 못해 문서가 그대로면 움직이던 막을 놓은
@@ -819,9 +839,20 @@ bool MainWindow::openPath(const QString &path) {
   slot_ = 0;
   fixedAngle_.reset(); // 새 문서 = 고정 풀림
   pages_->setCurrentIndex(1);
-  ribbon_->setCurrentPage(pBase_); // ① 바닥 정하기
+  if (doc_.poseConfirmed()) {
+    opts_.shade = true;
+    opts_.shadeMode = ShadeMode::DTak;
+    ribbon_->setText("shadeMode",
+                     QString::fromUtf8(kShadeNames[int(opts_.shadeMode)]));
+    ribbon_->setState("shade", ToolState::On);
+    applyOptions();
+    ribbon_->setCurrentPage(pCut_); // ② 막으로 자르기 (평면·단면·탁본 통합 화면)
+  } else {
+    ribbon_->setCurrentPage(pBase_); // ① 바닥 정하기 (--base 지정 시)
+  }
   sheet_->canvas()->setDoc(&doc_);
   refreshAll(true);
+  sheet_->canvas()->fitView();
   return true;
 }
 

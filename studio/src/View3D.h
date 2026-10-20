@@ -34,6 +34,39 @@ private:
   double currentAngleDeg_ = 0.0;
 };
 
+// [JOB-013] 왼쪽 상단: 위에서 내려다본 실제 유물 평면도 (클릭·드래그로 단면선 A-A' 회전)
+class PlanViewWidget : public QWidget {
+  Q_OBJECT
+public:
+  explicit PlanViewWidget(QWidget *parent = nullptr);
+  void setDoc(const ArtifactDoc *doc);
+
+signals:
+  void anglePreviewed(double absDeg);
+  void angleCommitted(double absDeg);
+
+protected:
+  void paintEvent(QPaintEvent *) override;
+  void mousePressEvent(QMouseEvent *) override;
+  void mouseMoveEvent(QMouseEvent *) override;
+  void mouseReleaseEvent(QMouseEvent *) override;
+  void resizeEvent(QResizeEvent *) override { dirty_ = true; }
+
+private:
+  double angleForScreenPt(const QPointF &pt) const;
+  void rebuildTopImage();
+
+  const ArtifactDoc *doc_ = nullptr;
+  QImage baseTopImg_;
+  double pxPerMm_ = 1.0;
+  double maxR_ = 50.0;
+  QPointF ctrPx_;
+  bool dirty_ = true;
+  bool dragging_ = false;
+  size_t cachedVertCount_ = 0;
+  double cachedBboxZ_ = 0.0;
+};
+
 class View3DCanvas : public QWidget {
   Q_OBJECT
 public:
@@ -102,6 +135,7 @@ class View3DPane : public QWidget {
 public:
   explicit View3DPane(QWidget *parent = nullptr);
   View3DCanvas *canvas() const { return canvas_; }
+  PlanViewWidget *planWidget() const { return planView_; }
   void refresh(const ArtifactDoc &doc, int slot);
   void setCutPage(bool on); // ② 막으로 자르기: 머리 제목·3D 끌기 툴팁
   void setEditPage(bool on) {
@@ -112,6 +146,7 @@ signals:
   void collapseRequested();
   void actionRequested(const QString &id);
   void poseRotateRequested(PoseAxis axis, double deg);
+  void anglePreviewed(double absDeg);
   void angleSelected(double absDeg);
   void horizontalHeightSelected(double zMm);
   void cutPointPicked(KA::Point3 worldPt);
@@ -119,6 +154,7 @@ signals:
 
 private:
   bool cutPage_ = false, editPage_ = false;
+  PlanViewWidget *planView_ = nullptr;
   View3DCanvas *canvas_ = nullptr;
   QLabel *title_ = nullptr;
   QLabel *info_ = nullptr;

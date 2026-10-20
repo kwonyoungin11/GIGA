@@ -65,6 +65,8 @@ public:
   // 3D에서 선택한 문양 부위의 정면 법선 방향 정밀 먹탁 패치 영상 생성
   static QImage renderRubbingPatch(const ArtifactDoc &doc,
                                    double pxPerMm = 4.0);
+  // 위에서 내려다본 실제 유물 평면도(구연·외곽 평면 + 절단선 A-A' + 문양 위치) 영상 생성
+  static QImage renderPlanView(const ArtifactDoc &doc, double pxPerMm = 1.6);
   // mmToDev: 도면 mm(y 위로 +) → 장치 좌표. px1mm: 장치에서 도면 1 mm 의 길이,
   // textPx: 글자 크기(장치 px).
   static void paint(QPainter &p, const ArtifactDoc &doc,
