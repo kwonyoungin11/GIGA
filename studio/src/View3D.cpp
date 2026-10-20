@@ -3,13 +3,20 @@
 #include "CutPageText.h"
 #include "Theme.h"
 
+#include <QGuiApplication>
 #include <QHBoxLayout>
 #include <QLocale>
 #include <QMouseEvent>
 #include <QPainter>
+#include <QPainterPath>
 #include <QPushButton>
+#include <QSignalBlocker>
+#include <QSlider>
 #include <QVBoxLayout>
+#include <QWheelEvent>
+#include <algorithm>
 #include <cmath>
+#include <numbers>
 
 namespace studio {
 
@@ -26,10 +33,140 @@ FloorPlate floorPlate(const KA::MeshData &m) {
   return {0.5 * (m.bboxMin.x + m.bboxMax.x), 0.5 * (m.bboxMin.y + m.bboxMax.y),
           std::ceil((std::max(hx, hy) + 20.0) / 10.0) * 10.0};
 }
+
+double distToPolyline(const QPointF &pt, const QPolygonF &poly) {
+  if (poly.empty())
+    return 1e9;
+  double best = 1e9;
+  for (int i = 0; i + 1 < poly.size(); ++i) {
+    const QPointF a = poly[i], b = poly[i + 1];
+    const double dx = b.x() - a.x(), dy = b.y() - a.y();
+    const double l2 = dx * dx + dy * dy;
+    const double t =
+        l2 > 1e-9
+            ? std::clamp(((pt.x() - a.x()) * dx + (pt.y() - a.y()) * dy) / l2,
+                         0.0, 1.0)
+            : 0.0;
+    best = std::min(best,
+                    std::hypot(pt.x() - (a.x() + t * dx),
+                               pt.y() - (a.y() + t * dy)));
+  }
+  return best;
+}
 } // namespace
 
+// ---- AngleStripWidget (30° 간격 12칸 미니 단면 띠) -------------------------
+AngleStripWidget::AngleStripWidget(QWidget *parent) : QWidget(parent) {
+  setFixedHeight(64);
+  setMinimumWidth(180);
+  setCursor(Qt::PointingHandCursor);
+  setToolTip(QStringLiteral(
+      "각도 띠 (0°~330°, 30° 간격) — 원하는 단면 모양을 클릭하면 즉시 그 각도로 "
+      "이동합니다 (★ = 추천 각도)"));
+}
+
+void AngleStripWidget::setCells(std::vector<AngleStripCell> cells,
+                                double currentAngleDeg) {
+  cells_ = std::move(cells);
+  currentAngleDeg_ =
+      std::fmod(std::fmod(currentAngleDeg, 360.0) + 360.0, 360.0);
+  update();
+}
+
+void AngleStripWidget::paintEvent(QPaintEvent *) {
+  QPainter p(this);
+  p.setRenderHint(QPainter::Antialiasing);
+  p.fillRect(rect(), theme::Surface);
+  p.setPen(QPen(theme::Line, 1));
+  p.drawLine(0, 0, width(), 0);
+
+  if (cells_.empty())
+    return;
+
+  const int n = int(cells_.size());
+  const double pad = 4.0;
+  const double cw = std::max(12.0, (width() - 2.0 * pad) / double(n));
+  const double ch = height() - 8.0;
+
+  for (int i = 0; i < n; ++i) {
+    const auto &c = cells_[size_t(i)];
+    const QRectF r(pad + i * cw + 1.0, 4.0, cw - 2.0, ch);
+    const double diff =
+        std::fabs(std::remainder(c.angleDeg - currentAngleDeg_, 360.0));
+    const bool active = diff <= 15.0;
+
+    p.setPen(QPen(active            ? theme::ProfileRed
+                  : c.isRecommended ? QColor(0x2f, 0x7a, 0x4f)
+                                    : theme::Line,
+                  active ? 1.8 : 1.0));
+    p.setBrush(active            ? QColor(253, 242, 241)
+               : c.isRecommended ? QColor(242, 250, 245)
+                                 : theme::Ground);
+    p.drawRoundedRect(r, 3.0, 3.0);
+
+    // 미니 단면 윤곽선 그리기
+    if (!c.outerPts.empty()) {
+      double minX = 1e18, maxX = -1e18, minY = 1e18, maxY = -1e18;
+      for (const auto &pt : c.outerPts) {
+        minX = std::min(minX, pt.x);
+        maxX = std::max(maxX, pt.x);
+        minY = std::min(minY, pt.y);
+        maxY = std::max(maxY, pt.y);
+      }
+      const double spanX = std::max(1.0, maxX - minX);
+      const double spanY = std::max(1.0, maxY - minY);
+      const QRectF drawBox(r.left() + 3.0, r.top() + 14.0,
+                           std::max(4.0, r.width() - 6.0),
+                           std::max(8.0, r.height() - 26.0));
+      const double sc =
+          std::min(drawBox.width() / spanX, drawBox.height() / spanY);
+      QPolygonF poly;
+      const size_t step = std::max<size_t>(1, c.outerPts.size() / 24);
+      for (size_t k = 0; k < c.outerPts.size(); k += step) {
+        const auto &pt = c.outerPts[k];
+        const double sx =
+            drawBox.center().x() + (pt.x - 0.5 * (minX + maxX)) * sc;
+        const double sy = drawBox.bottom() - (pt.y - minY) * sc;
+        poly << QPointF(sx, sy);
+      }
+      p.setPen(QPen(active ? theme::ProfileRed : theme::Ink2, 1.2));
+      p.setBrush(Qt::NoBrush);
+      p.drawPolyline(poly);
+    }
+
+    // 각도 숫자 + ★ 표시
+    p.setFont(theme::monoFont(8, active || c.isRecommended));
+    p.setPen(active            ? theme::ProfileRed
+             : c.isRecommended ? QColor(0x2f, 0x7a, 0x4f)
+                               : theme::Ink2);
+    const QString topTxt =
+        c.isRecommended
+            ? QStringLiteral("★%1°").arg(int(std::lround(c.angleDeg)))
+            : QStringLiteral("%1°").arg(int(std::lround(c.angleDeg)));
+    p.drawText(QRectF(r.left(), r.top() + 1.0, r.width(), 12.0),
+               Qt::AlignCenter, topTxt);
+
+    p.setFont(theme::uiFont(7));
+    p.setPen(c.hasError ? theme::ProfileRed : theme::Muted);
+    p.drawText(QRectF(r.left(), r.bottom() - 11.0, r.width(), 10.0),
+               Qt::AlignCenter, c.statusLabel);
+  }
+}
+
+void AngleStripWidget::mousePressEvent(QMouseEvent *e) {
+  if (cells_.empty() || e->button() != Qt::LeftButton)
+    return;
+  const double pad = 4.0;
+  const double cw =
+      std::max(12.0, (width() - 2.0 * pad) / double(cells_.size()));
+  const int idx = std::clamp(int((e->position().x() - pad) / cw), 0,
+                             int(cells_.size()) - 1);
+  emit angleClicked(cells_[size_t(idx)].angleDeg);
+}
+
+// ---- View3DCanvas ----------------------------------------------------------
 View3DCanvas::View3DCanvas(QWidget *parent) : QWidget(parent) {
-  setMinimumSize(200, 200);
+  setMinimumSize(200, 180);
   setAttribute(Qt::WA_OpaquePaintEvent);
   setCursor(Qt::OpenHandCursor);
 }
@@ -96,6 +233,64 @@ RasterView View3DCanvas::view() const {
   return v;
 }
 
+int View3DCanvas::hitGizmoAxis(const QPointF &screenPt) const {
+  if (!doc_ || !doc_->isLoaded() || doc_->poseConfirmed())
+    return -1;
+  const auto &m = doc_->mesh();
+  const RasterView v = view();
+  const KA::Point3 ctr{0.5 * (m.bboxMin.x + m.bboxMax.x),
+                       0.5 * (m.bboxMin.y + m.bboxMax.y),
+                       0.5 * (m.bboxMin.z + m.bboxMax.z)};
+  const double rad = 0.58 * std::max({m.bboxMax.x - m.bboxMin.x,
+                                      m.bboxMax.y - m.bboxMin.y,
+                                      m.bboxMax.z - m.bboxMin.z});
+  QPolygonF ringX, ringY, ringZ;
+  for (int deg = 0; deg <= 360; deg += 10) {
+    const double a = deg * std::numbers::pi / 180.0;
+    const double ca = std::cos(a) * rad, sa = std::sin(a) * rad;
+    ringX << projectPoint({ctr.x, ctr.y + ca, ctr.z + sa}, v);
+    ringY << projectPoint({ctr.x + ca, ctr.y, ctr.z + sa}, v);
+    ringZ << projectPoint({ctr.x + ca, ctr.y + sa, 0.0}, v);
+  }
+  const double dx = distToPolyline(screenPt, ringX);
+  const double dy = distToPolyline(screenPt, ringY);
+  const double dz = distToPolyline(screenPt, ringZ);
+  const double minD = std::min({dx, dy, dz});
+  if (minD > 12.0)
+    return -1;
+  if (dx <= dy && dx <= dz)
+    return 0;
+  if (dy <= dx && dy <= dz)
+    return 1;
+  return 2;
+}
+
+bool View3DCanvas::pickSurfacePoint(const QPointF &screenPt,
+                                    KA::Point3 &outWorld) const {
+  if (!doc_ || !doc_->isLoaded())
+    return false;
+  const auto &m = doc_->lodMesh().faces.empty() ? doc_->mesh() : doc_->lodMesh();
+  if (m.vertices.empty())
+    return false;
+  const RasterView v = view();
+  double bestDist2 = 1e18;
+  size_t bestIdx = 0;
+  const size_t step = std::max<size_t>(1, m.vertices.size() / 8000);
+  for (size_t i = 0; i < m.vertices.size(); i += step) {
+    const QPointF sp = projectPoint(m.vertices[i], v);
+    const double dx = sp.x() - screenPt.x(), dy = sp.y() - screenPt.y();
+    const double d2 = dx * dx + dy * dy;
+    if (d2 < bestDist2) {
+      bestDist2 = d2;
+      bestIdx = i;
+    }
+  }
+  if (bestDist2 > 45.0 * 45.0)
+    return false;
+  outWorld = m.vertices[bestIdx];
+  return true;
+}
+
 void View3DCanvas::paintEvent(QPaintEvent *) {
   QPainter p(this);
   p.fillRect(rect(), theme::Ground);
@@ -114,7 +309,8 @@ void View3DCanvas::paintEvent(QPaintEvent *) {
   if (!doc_->poseConfirmed()) {
     // ① 바닥 정하기: 바닥판(Wash) + 1 cm 방안(Grid10mm) + 테두리(Edge) 를
     // 유물보다 먼저(뒤쪽에) 그린다
-    const FloorPlate f = floorPlate(doc_->mesh());
+    const auto &m = doc_->mesh();
+    const FloorPlate f = floorPlate(m);
     auto at = [&](double x, double y) {
       return projectPoint({f.cx + x, f.cy + y, 0.0}, v);
     };
@@ -135,7 +331,38 @@ void View3DCanvas::paintEvent(QPaintEvent *) {
     p.drawPolygon(plate);
     p.drawImage(0, 0, img_);
 
-    // Feature 14: 바닥 후보 평면 배지 ①②③
+    // 3D 직관 회전 기즈모 링 (X: 주황 #c8641e, Y: 초록 #3f8f4f, Z: 파랑 #3f6fb5)
+    const KA::Point3 ctr{0.5 * (m.bboxMin.x + m.bboxMax.x),
+                         0.5 * (m.bboxMin.y + m.bboxMax.y),
+                         0.5 * (m.bboxMin.z + m.bboxMax.z)};
+    const double rad = 0.58 * std::max({m.bboxMax.x - m.bboxMin.x,
+                                        m.bboxMax.y - m.bboxMin.y,
+                                        m.bboxMax.z - m.bboxMin.z});
+    QPolygonF ringX, ringY, ringZ;
+    for (int deg = 0; deg <= 360; deg += 8) {
+      const double a = deg * std::numbers::pi / 180.0;
+      const double ca = std::cos(a) * rad, sa = std::sin(a) * rad;
+      ringX << projectPoint({ctr.x, ctr.y + ca, ctr.z + sa}, v);
+      ringY << projectPoint({ctr.x + ca, ctr.y, ctr.z + sa}, v);
+      ringZ << projectPoint({ctr.x + ca, ctr.y + sa, 0.0}, v);
+    }
+    p.setPen(QPen(QColor(0xc8, 0x64, 0x1e, 190),
+                  poseDragAxis_ == 0 ? 2.6 : 1.4, Qt::DashLine));
+    p.drawPolyline(ringX);
+    p.setPen(QPen(QColor(0x3f, 0x8f, 0x4f, 190),
+                  poseDragAxis_ == 1 ? 2.6 : 1.4, Qt::DashLine));
+    p.drawPolyline(ringY);
+    p.setPen(QPen(QColor(0x3f, 0x6f, 0xb5, 190),
+                  poseDragAxis_ == 2 ? 2.6 : 1.4, Qt::SolidLine));
+    p.drawPolyline(ringZ);
+
+    // 수직 기준축 점선 (+Z)
+    p.setPen(QPen(theme::Ink2, 1.0, Qt::DashDotLine));
+    p.drawLine(projectPoint({ctr.x, ctr.y, 0.0}, v),
+               projectPoint({ctr.x, ctr.y, m.bboxMax.z + 20.0}, v));
+
+    // Feature 14: 바닥 후보 평면 배지 ①②③ (클릭 가능)
+    floorBadgeRects_.fill(QRectF{});
     const auto cands = doc_->floorCandidates();
     for (size_t i = 0; i < cands.size() && i < 3; ++i) {
       const auto &c = cands[i];
@@ -148,21 +375,64 @@ void View3DCanvas::paintEvent(QPaintEvent *) {
               .arg(badgeNum)
               .arg(c.flatness, 0, 'f', 0)
               .arg(c.areaCm2, 0, 'f', 1)
-              .arg(c.recommended ? QStringLiteral(" [추천]") : QString());
+              .arg(c.recommended ? QStringLiteral(" [추천·클릭]")
+                                 : QStringLiteral(" [클릭]"));
       p.setFont(theme::uiFont(10, true));
       const QFontMetricsF fm(p.font());
       const double bw = fm.horizontalAdvance(label) + 12;
       const QRectF br(pt.x() - bw / 2, pt.y() - 11, bw, 22);
+      floorBadgeRects_[i] = br;
       p.setPen(QPen(c.recommended ? QColor(0x2f, 0x7a, 0x4f) : theme::Line,
-                    c.recommended ? 1.5 : 1.0));
-      p.setBrush(c.recommended ? QColor(240, 250, 244, 230)
-                               : QColor(255, 255, 255, 220));
+                    c.recommended ? 1.6 : 1.0));
+      p.setBrush(c.recommended ? QColor(240, 250, 244, 235)
+                               : QColor(255, 255, 255, 225));
       p.drawRoundedRect(br, 4, 4);
       p.setPen(c.recommended ? QColor(0x2f, 0x7a, 0x4f) : theme::Ink);
       p.drawText(br, Qt::AlignCenter, label);
     }
+
+    // 3점 바닥 찍기 표시점
+    const auto &picks = doc_->floorPickPoints();
+    for (size_t i = 0; i < picks.size(); ++i) {
+      const QPointF sp = projectPoint(picks[i], v);
+      p.setPen(QPen(Qt::white, 2.0));
+      p.setBrush(QColor(0x2f, 0x7a, 0x4f));
+      p.drawEllipse(sp, 7.0, 7.0);
+      p.setFont(theme::monoFont(9, true));
+      p.setPen(Qt::white);
+      p.drawText(QRectF(sp.x() - 7, sp.y() - 7, 14, 14), Qt::AlignCenter,
+                 QString::number(i + 1));
+    }
+
+    // 상단 안내 배지
+    const QString guideTxt =
+        posePickMode_ == PosePickMode::Surface1Click
+            ? QStringLiteral("🎯 바닥으로 쓸 유물 표면을 마우스로 클릭하세요")
+        : posePickMode_ == PosePickMode::Floor3Point
+            ? QStringLiteral("🎯 바닥 둘레 3점을 차례로 클릭하세요 (%1/3)")
+                  .arg(picks.size())
+            : QStringLiteral(
+                  "💡 마우스 드래그: 유물 기울이기 (Shift 15°) · 우클릭 드래그: "
+                  "시점 회전 · ①②③ 클릭: 바로 세우기");
+    p.setFont(theme::uiFont(9, posePickMode_ != PosePickMode::None));
+    const QFontMetricsF gfm(p.font());
+    const double gw = std::min<double>(width() - 16,
+                                       gfm.horizontalAdvance(guideTxt) + 16);
+    const QRectF gr(8, 8, gw, 22);
+    p.setPen(QPen(posePickMode_ != PosePickMode::None ? QColor(0x2f, 0x7a, 0x4f)
+                                                      : theme::Line,
+                  1.0));
+    p.setBrush(QColor(255, 255, 255, 225));
+    p.drawRoundedRect(gr, 4, 4);
+    p.setPen(posePickMode_ != PosePickMode::None ? QColor(0x2f, 0x7a, 0x4f)
+                                                 : theme::Ink2);
+    p.drawText(gr, Qt::AlignCenter, guideTxt);
     return;
   }
+
+  minimapRect_ = QRectF{};
+  horizHandleRect_ = QRectF{};
+
   const auto &m = doc_->mesh();
   const double R = std::max({std::fabs(m.bboxMin.x), std::fabs(m.bboxMax.x),
                              std::fabs(m.bboxMin.y), std::fabs(m.bboxMax.y)}) +
@@ -183,10 +453,11 @@ void View3DCanvas::paintEvent(QPaintEvent *) {
       quad << projectPoint({x, 0, z}, v);
   }
   p.setPen(Qt::NoPen);
-  p.setBrush(QColor(255, 0, 0, 22));
+  p.setBrush(horiz ? QColor(43, 108, 176, 28) : QColor(255, 0, 0, 22));
   p.drawPolygon(quad);
   p.drawImage(0, 0, img_);
-  p.setPen(QPen(theme::ProfileRed, 1, Qt::DashLine));
+  p.setPen(QPen(horiz ? QColor(0x2b, 0x6c, 0xb0) : theme::ProfileRed, 1,
+                Qt::DashLine));
   p.setBrush(Qt::NoBrush);
   p.drawPolygon(quad);
 
@@ -194,9 +465,7 @@ void View3DCanvas::paintEvent(QPaintEvent *) {
   p.setPen(QPen(theme::Ink, 1, Qt::DashDotLine));
   p.drawLine(projectPoint({0, 0, z0}, v), projectPoint({0, 0, z1}, v));
 
-  // 절단 단면선. 종단면(수직 슬롯)은 선분 중점의 월드 x 로 나눠 단면 쪽 반(x ≥
-  // 0 = 도판의 단면)만 흰 3 px 테 + 빨강으로 굵게, 반대쪽 반(x < 0 = 도판의
-  // 외면)은 가는 빨강 파선. 수평 슬롯은 전부 굵게.
+  // 절단 단면선
   std::vector<QPolygonF> thick, thin;
   for (const auto &pl : cut_) {
     for (size_t i = 0; i + 1 < pl.pts.size(); ++i) {
@@ -234,12 +503,28 @@ void View3DCanvas::paintEvent(QPaintEvent *) {
   tag((quad[2] + quad[3]) / 2, a);
   tag((quad[0] + quad[1]) / 2, a + QStringLiteral("′"));
 
-  // Feature 18: 3D 회전판 및 빨간 손잡이 (#d8352a)
+  // 수평 슬롯(Z 막 높이로)일 때 파란 높이 조절 손잡이(↕) 표시
+  if (horiz) {
+    const double z = sl[size_t(slot_)].z;
+    const QPointF hPt = projectPoint({R, 0.0, z}, v);
+    const QString hTxt = QStringLiteral("↕ H %1 mm").arg(z, 0, 'f', 1);
+    p.setFont(theme::monoFont(10, true));
+    const QFontMetricsF fm(p.font());
+    const double hw = fm.horizontalAdvance(hTxt) + 14;
+    horizHandleRect_ = QRectF(hPt.x() - hw / 2, hPt.y() - 12, hw, 24);
+    p.setPen(QPen(Qt::white, 2.0));
+    p.setBrush(QColor(0x2b, 0x6c, 0xb0));
+    p.drawRoundedRect(horizHandleRect_, 5, 5);
+    p.setPen(Qt::white);
+    p.drawText(horizHandleRect_, Qt::AlignCenter, hTxt);
+  }
+
+  // Feature 18: 3D 회전판 및 빨간 손잡이 (#d8352a) + 우상단 2D 평면도 미니맵
   if (!horiz) {
     const double ringR = R * 1.12;
     QPolygonF ringPoly;
     for (int deg = 0; deg <= 360; deg += 6) {
-      const double rad = deg * M_PI / 180.0;
+      const double rad = deg * std::numbers::pi / 180.0;
       ringPoly << projectPoint(
           {ringR * std::cos(rad), ringR * std::sin(rad), z0}, v);
     }
@@ -250,7 +535,7 @@ void View3DCanvas::paintEvent(QPaintEvent *) {
     // 눈금 (30° 간격)
     p.setPen(QPen(theme::Muted, 1.0));
     for (int deg = 0; deg < 360; deg += 30) {
-      const double rad = deg * M_PI / 180.0;
+      const double rad = deg * std::numbers::pi / 180.0;
       const QPointF p0 = projectPoint(
           {ringR * 0.96 * std::cos(rad), ringR * 0.96 * std::sin(rad), z0}, v);
       const QPointF p1 = projectPoint(
@@ -259,15 +544,15 @@ void View3DCanvas::paintEvent(QPaintEvent *) {
     }
 
     // 현재 각도 빨간 손잡이 (Red Knob #d8352a)
-    const double fa = doc_->frontAngle() * M_PI / 180.0;
+    const double curAng = doc_->previewAngle();
+    const double fa = curAng * std::numbers::pi / 180.0;
     const QPointF knobPt =
         projectPoint({ringR * std::cos(fa), ringR * std::sin(fa), z0}, v);
     p.setPen(QPen(Qt::white, 2.0));
     p.setBrush(QColor(0xd8, 0x35, 0x2a));
     p.drawEllipse(knobPt, 7.0, 7.0);
 
-    const QString angStr =
-        QStringLiteral("%1°").arg(doc_->frontAngle(), 0, 'f', 0);
+    const QString angStr = QStringLiteral("%1°").arg(curAng, 0, 'f', 0);
     p.setFont(theme::monoFont(10, true));
     p.setPen(QColor(0xd8, 0x35, 0x2a));
     p.drawText(knobPt + QPointF(10, 4), angStr);
@@ -283,13 +568,114 @@ void View3DCanvas::paintEvent(QPaintEvent *) {
       p.setPen(QColor(0x6b, 0x4f, 0xc0));
       p.drawText(pPurple + QPointF(8, 3), QStringLiteral("H 95 짝"));
     }
+
+    // 우상단 2D 평면도 미니맵 (위에서 본 자리 · 클릭/드래그로 즉시 단면 방향 지정)
+    if (width() >= 220 && height() >= 200) {
+      const double mw = 78.0, mh = 86.0;
+      minimapRect_ = QRectF(width() - mw - 8.0, 8.0, mw, mh);
+      p.setPen(QPen(theme::Line, 1.0));
+      p.setBrush(QColor(255, 255, 255, 232));
+      p.drawRoundedRect(minimapRect_, 5.0, 5.0);
+
+      p.setFont(theme::uiFont(8, true));
+      p.setPen(theme::Muted);
+      p.drawText(QRectF(minimapRect_.left(), minimapRect_.top() + 3.0, mw, 13.0),
+                 Qt::AlignCenter, QStringLiteral("위에서 본 자리"));
+
+      const QPointF mc(minimapRect_.center().x(),
+                       minimapRect_.top() + 16.0 + (mh - 18.0) * 0.5);
+      const double mr = 25.0;
+      p.setPen(QPen(theme::Line, 1.2));
+      p.setBrush(theme::Wash);
+      p.drawEllipse(mc, mr, mr);
+      p.setPen(QPen(theme::Ink2, 1.0, Qt::DotLine));
+      p.drawEllipse(mc, mr * 0.72, mr * 0.72);
+
+      // 절단선 A-A' 및 빨간 손잡이
+      const QPointF pA(mc.x() + mr * std::cos(fa), mc.y() - mr * std::sin(fa));
+      const QPointF pA2(mc.x() - mr * std::cos(fa), mc.y() + mr * std::sin(fa));
+      p.setPen(QPen(theme::ProfileRed, 1.8));
+      p.drawLine(pA2, pA);
+      p.setPen(QPen(Qt::white, 1.5));
+      p.setBrush(QColor(0xd8, 0x35, 0x2a));
+      p.drawEllipse(pA, 4.5, 4.5);
+    }
   }
 }
 
 void View3DCanvas::mousePressEvent(QMouseEvent *e) {
+  last_ = e->pos();
+  poseDrag_ = false;
+  poseDragAxis_ = -1;
+  cutDrag_ = false;
+  minimapDrag_ = false;
+  horizDrag_ = false;
+
+  if (!doc_ || !doc_->isLoaded()) {
+    drag_ = true;
+    setCursor(Qt::ClosedHandCursor);
+    return;
+  }
+
+  // ① 바닥 정하기 단계: 배지 클릭 / 표면 찍기 / 기즈모·유물 직접 드래그 회전
+  if (!doc_->poseConfirmed()) {
+    if (e->button() == Qt::LeftButton) {
+      for (int i = 0; i < 3; ++i) {
+        if (floorBadgeRects_[size_t(i)].isValid() &&
+            floorBadgeRects_[size_t(i)].contains(e->position())) {
+          emit floorCandidateClicked(i);
+          return;
+        }
+      }
+      if (posePickMode_ != PosePickMode::None) {
+        KA::Point3 worldPt;
+        if (pickSurfacePoint(e->position(), worldPt)) {
+          emit surfacePointPicked(worldPt);
+          return;
+        }
+      }
+      poseDragAxis_ = hitGizmoAxis(e->position());
+      poseDrag_ = true;
+      drag_ = true;
+      setCursor(Qt::ClosedHandCursor);
+      update();
+      return;
+    }
+    drag_ = true;
+    setCursor(Qt::ClosedHandCursor);
+    return;
+  }
+
+  // ②·③ 확정 후 단계
+  if (e->button() == Qt::LeftButton) {
+    if (minimapRect_.isValid() && minimapRect_.contains(e->position())) {
+      minimapDrag_ = true;
+      drag_ = true;
+      const QPointF mc(minimapRect_.center().x(),
+                       minimapRect_.top() + 16.0 +
+                           (minimapRect_.height() - 18.0) * 0.5);
+      double deg = std::atan2(mc.y() - e->position().y(),
+                              e->position().x() - mc.x()) *
+                   180.0 / std::numbers::pi;
+      if (deg < 0.0)
+        deg += 360.0;
+      emit cutAngleSelected(deg);
+      return;
+    }
+    const auto &sl = doc_->slotList();
+    const bool horiz = slot_ >= 0 && slot_ < int(sl.size()) &&
+                       sl[size_t(slot_)].kind == SlotKind::Horizontal;
+    if (horiz && (cutTool_ || (horizHandleRect_.isValid() &&
+                               horizHandleRect_.contains(e->position())))) {
+      horizDrag_ = true;
+      drag_ = true;
+      setCursor(Qt::SizeVerCursor);
+      return;
+    }
+  }
+
   drag_ = true;
   cutDrag_ = cutTool_ && e->button() == Qt::LeftButton;
-  last_ = e->pos();
   setCursor(Qt::ClosedHandCursor);
 }
 
@@ -298,6 +684,50 @@ void View3DCanvas::mouseMoveEvent(QMouseEvent *e) {
     return;
   const QPoint d = e->pos() - last_;
   last_ = e->pos();
+
+  if (minimapDrag_ && minimapRect_.isValid() && doc_) {
+    const QPointF mc(minimapRect_.center().x(),
+                     minimapRect_.top() + 16.0 +
+                         (minimapRect_.height() - 18.0) * 0.5);
+    double deg = std::atan2(mc.y() - e->position().y(),
+                            e->position().x() - mc.x()) *
+                 180.0 / std::numbers::pi;
+    if (deg < 0.0)
+      deg += 360.0;
+    emit cutAngleDragged(std::remainder(deg - doc_->previewAngle(), 360.0));
+    return;
+  }
+
+  if (horizDrag_ && doc_ && doc_->isLoaded()) {
+    const auto &sl = doc_->slotList();
+    if (slot_ >= 0 && slot_ < int(sl.size()) &&
+        sl[size_t(slot_)].kind == SlotKind::Horizontal) {
+      const RasterView v = view();
+      const double dz = -double(d.y()) / std::max(0.2, v.pxPerMm);
+      emit horizontalHeightDragged(sl[size_t(slot_)].z + dz);
+      return;
+    }
+  }
+
+  if (poseDrag_ && doc_ && doc_->isLoaded() && !doc_->poseConfirmed()) {
+    const bool snap15 =
+        QGuiApplication::keyboardModifiers().testFlag(Qt::ShiftModifier);
+    const double scale = snap15 ? 1.0 : 0.45;
+    if (poseDragAxis_ == 0) {
+      emit poseRotated(PoseAxis::X, (d.y() + d.x()) * scale);
+    } else if (poseDragAxis_ == 1) {
+      emit poseRotated(PoseAxis::Y, (d.x() - d.y()) * scale);
+    } else if (poseDragAxis_ == 2) {
+      emit poseRotated(PoseAxis::Z, d.x() * scale);
+    } else {
+      if (std::abs(d.y()) >= std::abs(d.x()))
+        emit poseRotated(PoseAxis::X, d.y() * scale);
+      else
+        emit poseRotated(PoseAxis::Y, d.x() * scale);
+    }
+    return;
+  }
+
   if (cutDrag_) {
     emit cutAngleDragged(d.x() * 0.5);
     return;
@@ -309,11 +739,30 @@ void View3DCanvas::mouseMoveEvent(QMouseEvent *e) {
 }
 
 void View3DCanvas::mouseReleaseEvent(QMouseEvent *) {
-  const bool cutDrag = drag_ && cutDrag_;
+  const bool cutDrag = drag_ && (cutDrag_ || minimapDrag_);
   drag_ = false;
+  poseDrag_ = false;
+  poseDragAxis_ = -1;
+  minimapDrag_ = false;
+  horizDrag_ = false;
   setCursor(Qt::OpenHandCursor);
+  update();
   if (cutDrag)
     emit cutDragReleased();
+}
+
+void View3DCanvas::wheelEvent(QWheelEvent *e) {
+  if (doc_ && doc_->isLoaded() && !doc_->poseConfirmed()) {
+    const double sign = e->angleDelta().y() > 0 ? 1.0 : -1.0;
+    const auto mod = e->modifiers();
+    const double step = (mod & Qt::ShiftModifier)     ? 15.0
+                        : (mod & Qt::ControlModifier) ? 1.0
+                                                      : 5.0;
+    emit poseRotated(PoseAxis::X, sign * step);
+    e->accept();
+    return;
+  }
+  QWidget::wheelEvent(e);
 }
 
 // ---- View3DPane -----------------------------------------------------------
@@ -368,8 +817,212 @@ View3DPane::View3DPane(QWidget *parent) : QWidget(parent) {
   ih->addWidget(info2_);
   v->addWidget(info);
 
+  // ① 바닥 정하기 전용 빠른 자세 조절 막대 (미세 각도 · 중앙 맞춤 · 표면 클릭 · 3점 찍기)
+  poseBar_ = new QWidget(this);
+  poseBar_->setObjectName("PoseQuickBar");
+  poseBar_->setStyleSheet(
+      QStringLiteral("background:%1; border-bottom:1px solid %2;")
+          .arg(theme::hex(theme::Surface), theme::hex(theme::Line)));
+  auto *pv = new QVBoxLayout(poseBar_);
+  pv->setContentsMargins(8, 6, 8, 6);
+  pv->setSpacing(4);
+
+  auto makeMiniBtn = [&](const QString &txt, const QString &tip,
+                         QWidget *rowParent) {
+    auto *b = new QPushButton(txt, rowParent);
+    b->setProperty("sbtn", true);
+    b->setFocusPolicy(Qt::NoFocus);
+    b->setToolTip(tip);
+    b->setStyleSheet(QStringLiteral(
+        "padding:2px 5px; font-size:11px; min-height:22px; min-width:24px;"));
+    return b;
+  };
+
+  auto *poseRow1 = new QWidget(poseBar_);
+  auto *pr1 = new QHBoxLayout(poseRow1);
+  pr1->setContentsMargins(0, 0, 0, 0);
+  pr1->setSpacing(3);
+  auto addAxisStepper = [&](const QString &axName, PoseAxis ax,
+                            const QString &colorHex) {
+    auto *lbl = new QLabel(
+        QStringLiteral("<b style='color:%1'>%2</b>").arg(colorHex, axName),
+        poseRow1);
+    lbl->setStyleSheet(QStringLiteral("font-size:11px;"));
+    pr1->addWidget(lbl);
+    for (double deg : {-15.0, -5.0, -1.0, 1.0, 5.0, 15.0}) {
+      const QString s =
+          deg > 0 ? QStringLiteral("+%1°").arg(int(deg))
+                  : QStringLiteral("%1°").arg(int(deg));
+      auto *b = makeMiniBtn(
+          s, QStringLiteral("%1축 %2 미세 회전").arg(axName, s), poseRow1);
+      connect(b, &QPushButton::clicked, this,
+              [this, ax, deg] { emit poseRotateRequested(ax, deg); });
+      pr1->addWidget(b);
+    }
+  };
+  addAxisStepper(QStringLiteral("X"), PoseAxis::X, QStringLiteral("#c8641e"));
+  pr1->addSpacing(4);
+  addAxisStepper(QStringLiteral("Y"), PoseAxis::Y, QStringLiteral("#3f8f4f"));
+  pr1->addStretch();
+  pv->addWidget(poseRow1);
+
+  auto *poseRow2 = new QWidget(poseBar_);
+  auto *pr2 = new QHBoxLayout(poseRow2);
+  pr2->setContentsMargins(0, 0, 0, 0);
+  pr2->setSpacing(4);
+  auto *btnAuto = makeMiniBtn(
+      QStringLiteral("⚡ 자동 세우기"),
+      QStringLiteral("구연부·대칭축을 자동으로 찾아 바르게 세웁니다"), poseRow2);
+  auto *btnCenter = makeMiniBtn(
+      QStringLiteral("⊕ 바닥 중앙 맞춤"),
+      QStringLiteral("유물을 바닥판 한가운데(XY=0, Z=0)에 반듯하게 놓습니다"),
+      poseRow2);
+  btnSurfacePick_ = makeMiniBtn(
+      QStringLiteral("👇 이 면을 바닥으로"),
+      QStringLiteral("3D 유물에서 바닥이 될 면을 클릭하면 즉시 그 면으로 세웁니다"),
+      poseRow2);
+  btnSurfacePick_->setCheckable(true);
+  btn3PtPick_ = makeMiniBtn(
+      QStringLiteral("①②③ 3점 바닥 찍기"),
+      QStringLiteral("바닥 둘레 3점을 클릭해 수평 바닥면을 지정합니다"),
+      poseRow2);
+  btn3PtPick_->setCheckable(true);
+
+  connect(btnAuto, &QPushButton::clicked, this,
+          [this] { emit actionRequested(QStringLiteral("poseAuto")); });
+  connect(btnCenter, &QPushButton::clicked, this,
+          [this] { emit actionRequested(QStringLiteral("poseCenter")); });
+  connect(btnSurfacePick_, &QPushButton::clicked, this, [this](bool checked) {
+    if (checked)
+      btn3PtPick_->setChecked(false);
+    canvas_->setPosePickMode(checked ? PosePickMode::Surface1Click
+                                     : PosePickMode::None);
+  });
+  connect(btn3PtPick_, &QPushButton::clicked, this, [this](bool checked) {
+    if (checked)
+      btnSurfacePick_->setChecked(false);
+    canvas_->setPosePickMode(checked ? PosePickMode::Floor3Point
+                                     : PosePickMode::None);
+    emit actionRequested(QStringLiteral("pose3PtClear"));
+  });
+
+  pr2->addWidget(btnAuto);
+  pr2->addWidget(btnCenter);
+  pr2->addWidget(btnSurfacePick_);
+  pr2->addWidget(btn3PtPick_);
+  pr2->addStretch();
+  pv->addWidget(poseRow2);
+  poseBar_->hide();
+  v->addWidget(poseBar_);
+
+  // ② 막으로 자르기 전용 빠른 단면 자리 선택 막대 (각도 슬라이더 · Z막 높이 슬라이더 · 단면 원클릭 추가)
+  cutBar_ = new QWidget(this);
+  cutBar_->setObjectName("CutQuickBar");
+  cutBar_->setStyleSheet(
+      QStringLiteral("background:%1; border-bottom:1px solid %2;")
+          .arg(theme::hex(theme::Surface), theme::hex(theme::Line)));
+  auto *cv = new QVBoxLayout(cutBar_);
+  cv->setContentsMargins(8, 5, 8, 5);
+  cv->setSpacing(4);
+
+  auto *angRow = new QWidget(cutBar_);
+  auto *ah = new QHBoxLayout(angRow);
+  ah->setContentsMargins(0, 0, 0, 0);
+  ah->setSpacing(4);
+  auto *angTitle = new QLabel(QStringLiteral("<b>단면 각도</b>"), angRow);
+  angTitle->setStyleSheet(QStringLiteral("font-size:11px;"));
+  angleSlider_ = new QSlider(Qt::Horizontal, angRow);
+  angleSlider_->setRange(0, 360);
+  angleSlider_->setToolTip(
+      QStringLiteral("슬라이더를 끌어 0°~360° 어디든 쉽게 단면 자리를 고릅니다"));
+  angleSliderLbl_ = new QLabel(QStringLiteral("0°"), angRow);
+  angleSliderLbl_->setFont(theme::monoFont(10, true));
+  angleSliderLbl_->setFixedWidth(36);
+  auto *btnAddVert = makeMiniBtn(
+      QStringLiteral("+ 이 자리 종단면 추가"),
+      QStringLiteral("지금 보고 있는 각도의 종단면을 도면 목록에 추가합니다"),
+      angRow);
+  auto *btnZMode = makeMiniBtn(
+      QStringLiteral("↕ Z 막 높이로"),
+      QStringLiteral("수평 횡단면(Z 막) 모드로 전환하여 높이를 위아래로 골라 자릅니다"),
+      angRow);
+  ah->addWidget(angTitle);
+  ah->addWidget(angleSlider_, 1);
+  ah->addWidget(angleSliderLbl_);
+  ah->addWidget(btnAddVert);
+  ah->addWidget(btnZMode);
+  cv->addWidget(angRow);
+
+  heightRow_ = new QWidget(cutBar_);
+  auto *hh = new QHBoxLayout(heightRow_);
+  hh->setContentsMargins(0, 0, 0, 0);
+  hh->setSpacing(4);
+  auto *hTitle =
+      new QLabel(QStringLiteral("<b style='color:#2b6cb0'>횡단면 높이 H</b>"),
+                 heightRow_);
+  hTitle->setStyleSheet(QStringLiteral("font-size:11px;"));
+  heightSlider_ = new QSlider(Qt::Horizontal, heightRow_);
+  heightSlider_->setRange(5, 2000);
+  heightSlider_->setToolTip(
+      QStringLiteral("수평 절단면(Z 막)의 높이를 위아래로 쉽게 조절합니다"));
+  heightSliderLbl_ = new QLabel(QStringLiteral("95.0 mm"), heightRow_);
+  heightSliderLbl_->setFont(theme::monoFont(10, true));
+  heightSliderLbl_->setFixedWidth(56);
+  auto *btnAddHoriz = makeMiniBtn(
+      QStringLiteral("+ 이 높이 횡단면 추가"),
+      QStringLiteral("지금 높이의 수평 횡단면을 도면 목록에 추가합니다"),
+      heightRow_);
+  hh->addWidget(hTitle);
+  hh->addWidget(heightSlider_, 1);
+  hh->addWidget(heightSliderLbl_);
+  hh->addWidget(btnAddHoriz);
+  cv->addWidget(heightRow_);
+
+  connect(angleSlider_, &QSlider::valueChanged, this, [this](int val) {
+    if (angleSlider_->isSliderDown()) {
+      angleSliderLbl_->setText(QStringLiteral("%1°").arg(val % 360));
+    } else {
+      emit angleSelected(double(val));
+    }
+  });
+  connect(angleSlider_, &QSlider::sliderReleased, this, [this] {
+    emit angleSelected(double(angleSlider_->value()));
+  });
+  connect(heightSlider_, &QSlider::valueChanged, this, [this](int tenthsMm) {
+    emit horizontalHeightSelected(double(tenthsMm) * 0.1);
+  });
+  connect(btnAddVert, &QPushButton::clicked, this,
+          [this] { emit actionRequested(QStringLiteral("addVerticalSlot")); });
+  connect(btnZMode, &QPushButton::clicked, this,
+          [this] { emit actionRequested(QStringLiteral("axZ")); });
+  connect(btnAddHoriz, &QPushButton::clicked, this,
+          [this] { emit actionRequested(QStringLiteral("addSlot")); });
+
+  cutBar_->hide();
+  v->addWidget(cutBar_);
+
   canvas_ = new View3DCanvas(this);
   v->addWidget(canvas_, 1);
+
+  angleStrip_ = new AngleStripWidget(this);
+  angleStrip_->setObjectName("AngleStrip");
+  angleStrip_->hide();
+  v->addWidget(angleStrip_);
+
+  connect(angleStrip_, &AngleStripWidget::angleClicked, this,
+          &View3DPane::angleSelected);
+  connect(canvas_, &View3DCanvas::cutAngleSelected, this,
+          &View3DPane::angleSelected);
+  connect(canvas_, &View3DCanvas::poseRotated, this,
+          &View3DPane::poseRotateRequested);
+  connect(canvas_, &View3DCanvas::floorCandidateClicked, this, [this](int idx) {
+    emit actionRequested(idx == 0   ? QStringLiteral("floorCand1")
+                         : idx == 1 ? QStringLiteral("floorCand2")
+                                    : QStringLiteral("floorCand3"));
+  });
+  connect(canvas_, &View3DCanvas::horizontalHeightDragged, this,
+          &View3DPane::horizontalHeightSelected);
+
   connect(front, &QPushButton::clicked, this,
           [this] { canvas_->setView(0, 0); });
   connect(top, &QPushButton::clicked, this,
@@ -386,6 +1039,54 @@ void View3DPane::refresh(const ArtifactDoc &doc, int slot) {
   canvas_->setDoc(&doc, slot);
   const QString mu = theme::hex(theme::Muted);
   const bool base = doc.isLoaded() && !doc.poseConfirmed();
+  const bool showCutControls = doc.isLoaded() && doc.poseConfirmed() && cutPage_;
+
+  poseBar_->setVisible(base);
+  if (btnSurfacePick_) {
+    QSignalBlocker b(btnSurfacePick_);
+    btnSurfacePick_->setChecked(canvas_->posePickMode() ==
+                                PosePickMode::Surface1Click);
+  }
+  if (btn3PtPick_) {
+    QSignalBlocker b(btn3PtPick_);
+    btn3PtPick_->setChecked(canvas_->posePickMode() ==
+                            PosePickMode::Floor3Point);
+  }
+  cutBar_->setVisible(showCutControls);
+  angleStrip_->setVisible(showCutControls);
+
+  if (showCutControls) {
+    const double curAng =
+        std::fmod(std::fmod(doc.previewAngle(), 360.0) + 360.0, 360.0);
+    {
+      QSignalBlocker b(angleSlider_);
+      angleSlider_->setValue(int(std::lround(curAng)) % 360);
+    }
+    angleSliderLbl_->setText(
+        QStringLiteral("%1°").arg(int(std::lround(curAng)) % 360));
+
+    const auto &sl = doc.slotList();
+    const bool horiz = slot >= 0 && slot < int(sl.size()) &&
+                       sl[size_t(slot)].kind == SlotKind::Horizontal;
+    heightRow_->setVisible(true);
+    const double maxH = std::max(
+        10.0, doc.dims().height > 1.0
+                  ? doc.dims().height
+                  : (doc.mesh().bboxMax.z - doc.mesh().bboxMin.z));
+    {
+      QSignalBlocker b(heightSlider_);
+      heightSlider_->setRange(5, int(std::lround(maxH * 10.0)) - 5);
+      const double curZ = horiz ? sl[size_t(slot)].z
+                                : (doc.dims().bellyZ > 0.0 ? doc.dims().bellyZ
+                                                           : maxH * 0.5);
+      heightSlider_->setValue(int(std::lround(curZ * 10.0)));
+      heightSliderLbl_->setText(QStringLiteral("%1 mm").arg(curZ, 0, 'f', 1));
+    }
+    if (!doc.isPreviewing()) {
+      angleStrip_->setCells(doc.angleStripCells(), curAng);
+    }
+  }
+
   title_->setText(
       base       ? QStringLiteral("<b>3D — 바닥판(실측판)에 올려놓기</b>")
       : cutPage_ ? QStringLiteral("<b>%1</b>").arg(cutpage::k3dTitle)

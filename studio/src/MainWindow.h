@@ -37,6 +37,8 @@ public:
   void openSample(bool poseStage = false);
   void openArtecBlindSample(bool poseStage = false);
   void showHome();
+  void triggerActionForTest(const QString &id) { onAction(id); }
+  const ArtifactDoc &doc() const { return doc_; }
 
 protected:
   void keyPressEvent(QKeyEvent *) override;

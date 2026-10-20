@@ -72,6 +72,17 @@ struct CutCheckStatus {
   QString statusText;
 };
 
+struct AngleStripCell {
+  double angleDeg = 0.0;
+  QString statusLabel;
+  bool isRecommended = false;
+  bool hasError = false;
+  bool hasWarn = false;
+  std::vector<KA::Point2> outerPts;
+  std::vector<KA::Point2> innerPts;
+  std::vector<KA::Point2> extPts;
+};
+
 struct Dims5 {
   double height = 0, rim = 0, belly = 0, bellyZ = 0, base = 0, meanWall = 0;
   bool ok = false;
@@ -129,9 +140,15 @@ public:
   std::vector<AngleRecommendation> recommendAngles() const;
   double angleDefectScore(double angleDeg) const;
   double snapAngle(double deg, double tol = 2.0) const;
+  std::vector<AngleStripCell> angleStripCells() const;
 
   // Feature 21: 실시간 단면 상태 검사선
   CutCheckStatus checkCutStatus() const;
+
+  // 슬롯 높이·단면 빠른 조작 (② 막으로 자르기 · ③ 도면 편집)
+  void setSlotHorizontalZ(int slotIdx, double zMm);
+  int addVerticalSlotAt(double angleDeg);
+  int addHorizontalSlotAt(double zMm);
 
   // 들어온 자세 그대로 보관한다(확정 전 — 단면·치수·도판을 계산하지 않음).
   // 경로·스캐너 프로파일·단위 메모는 바꾸지 않는다(loadFile/loadSample 몫).
@@ -153,6 +170,15 @@ public:
   void flipPose();    // 뒤집기 = X 축 180°
   void resetPose();   // 처음 자세로: 읽은 정점 좌표 그대로 (접지 안 함)
   void dropToFloor(); // 바닥에 내려놓기: z 만 평행이동해 bboxMin.z = 0
+  void centerOnFloor(); // 바닥판 중앙(XY=0) + 바닥(Z=0) 맞춤
+  void alignNormalToFloor(const KA::Point3 &downNormal);
+  bool alignSurfacePointToFloor(const KA::Point3 &worldPt,
+                                double radiusMm = 15.0);
+  void clearFloorPickPoints();
+  int addFloorPickPoint(const KA::Point3 &pt);
+  const std::vector<KA::Point3> &floorPickPoints() const {
+    return floorPickPts_;
+  }
   // 자동 세우기: 구연부 PCA → 회전 중심축(ODR) 정밀화 → 축을 R 0, 바닥을 H 0
   // 으로. 확정은 하지 않는다.
   void autoAlign();
@@ -348,6 +374,7 @@ private:
   std::vector<KA::Point3> rawVertices_; // 들어온 자세의 정점 (면은 공유)
   KA::MeshData rawLod_;                 // 들어온 자세의 LOD
   std::vector<QRgb> rawLodColors_;
+  std::vector<KA::Point3> floorPickPts_;
   bool poseConfirmed_ = false;
   bool centered_ = false; // 직전 자세 조작이 자동 세우기(중심 맞춤 끝남)
   // 자동 세우기 결과 — 확정 때 aligned_/alignNote_/axisRmse_ 로 옮긴다

@@ -31,7 +31,7 @@ void rotateZ(KA::MeshData &m, double deg) {
   }
 }
 
-// 방향 d 를 +Z 로 보내는 회전 (Rodrigues)
+// 방향 d 를 +Z 로 보내는 회전 (Rodrigues, d.z < 0 이면 반전하여 위쪽 방향 유지)
 void rotateDirToZ(KA::MeshData &m, KA::Point3 d) {
   const double n = std::sqrt(d.x * d.x + d.y * d.y + d.z * d.z);
   if (n < 1e-12)
@@ -51,6 +51,272 @@ void rotateDirToZ(KA::MeshData &m, KA::Point3 d) {
                        p.y * c + cy * s + uy * dot * (1 - c), p.z * c + cz * s};
     p = q;
   }
+}
+
+// 유향 단위벡터 up 을 +Z(0,0,1) 로 보내는 3x3 회전 행렬 생성 (up.z < 0 도 부호 유지)
+void buildRotationToPlusZ(KA::Point3 up, double (&R)[3][3]) {
+  R[0][0] = 1.0, R[0][1] = 0.0, R[0][2] = 0.0;
+  R[1][0] = 0.0, R[1][1] = 1.0, R[1][2] = 0.0;
+  R[2][0] = 0.0, R[2][1] = 0.0, R[2][2] = 1.0;
+  const double n = std::sqrt(up.x * up.x + up.y * up.y + up.z * up.z);
+  if (n < 1e-12)
+    return;
+  up = {up.x / n, up.y / n, up.z / n};
+  if (up.z > 1.0 - 1e-9) {
+    return;
+  }
+  if (up.z < -1.0 + 1e-9) {
+    R[1][1] = -1.0;
+    R[2][2] = -1.0;
+    return;
+  }
+  const double kx = up.y, ky = -up.x;
+  const double s = std::hypot(kx, ky), c = up.z;
+  const double ux = kx / s, uy = ky / s;
+  R[0][0] = c + ux * ux * (1.0 - c);
+  R[0][1] = ux * uy * (1.0 - c);
+  R[0][2] = uy * s;
+  R[1][0] = uy * ux * (1.0 - c);
+  R[1][1] = c + uy * uy * (1.0 - c);
+  R[1][2] = -ux * s;
+  R[2][0] = -uy * s;
+  R[2][1] = ux * s;
+  R[2][2] = c;
+}
+
+void applyMat3(KA::MeshData &m, const double (&R)[3][3],
+               const KA::Point3 &ctr) {
+  for (auto &p : m.vertices) {
+    const double dx = p.x - ctr.x, dy = p.y - ctr.y, dz = p.z - ctr.z;
+    p = {ctr.x + (R[0][0] * dx + R[0][1] * dy + R[0][2] * dz),
+         ctr.y + (R[1][0] * dx + R[1][1] * dy + R[1][2] * dz),
+         ctr.z + (R[2][0] * dx + R[2][1] * dy + R[2][2] * dz)};
+  }
+}
+
+// 수밀(Watertight) 메시 또는 비스듬히 누운 유물의 회전 대칭축(입구 +Z, 바닥 -Z)을
+// 구면 후보 탐색 + 층별 외곽 원 적합(Taubin) + 상하 공동(구연 개구부 vs 저부 바닥) 비교로 찾는다.
+bool findCoarseVesselAxis(const KA::MeshData &work, KA::Point3 &outUpAxis) {
+  if (work.vertices.size() < 60)
+    return false;
+  std::vector<KA::Point3> pts;
+  const size_t stride = std::max<size_t>(1, work.vertices.size() / 4000);
+  pts.reserve(work.vertices.size() / stride + 1);
+  for (size_t i = 0; i < work.vertices.size(); i += stride)
+    pts.push_back(work.vertices[i]);
+
+  auto makeBasis = [](const KA::Point3 &u, KA::Point3 &e1, KA::Point3 &e2) {
+    const KA::Point3 ref =
+        (std::fabs(u.z) < 0.85) ? KA::Point3{0, 0, 1} : KA::Point3{1, 0, 0};
+    const double d = ref.x * u.x + ref.y * u.y + ref.z * u.z;
+    KA::Point3 a{ref.x - d * u.x, ref.y - d * u.y, ref.z - d * u.z};
+    const double la = std::sqrt(a.x * a.x + a.y * a.y + a.z * a.z);
+    e1 = (la > 1e-12) ? KA::Point3{a.x / la, a.y / la, a.z / la}
+                      : KA::Point3{1, 0, 0};
+    e2 = {u.y * e1.z - u.z * e1.y, u.z * e1.x - u.x * e1.z,
+          u.x * e1.y - u.y * e1.x};
+  };
+
+  auto scoreAxis = [&](const KA::Point3 &u) -> double {
+    KA::Point3 e1, e2;
+    makeBasis(u, e1, e2);
+    double zMin = 1e18, zMax = -1e18;
+    for (const auto &p : pts) {
+      const double z = p.x * u.x + p.y * u.y + p.z * u.z;
+      zMin = std::min(zMin, z);
+      zMax = std::max(zMax, z);
+    }
+    const double H = zMax - zMin;
+    if (H < 10.0)
+      return -1e9;
+
+    constexpr int kBands = 8;
+    constexpr int kSectors = 24;
+    const double b0 = zMin + 0.14 * H;
+    const double b1 = zMin + 0.82 * H;
+    const double bw = (b1 - b0) / double(kBands);
+    if (bw <= 0.5)
+      return -1e9;
+
+    struct BandPt {
+      double x, y;
+    };
+    std::array<std::vector<BandPt>, kBands> bins;
+    for (const auto &p : pts) {
+      const double z = p.x * u.x + p.y * u.y + p.z * u.z;
+      if (z < b0 || z >= b1)
+        continue;
+      const int bi = std::clamp(int((z - b0) / bw), 0, kBands - 1);
+      bins[size_t(bi)].push_back(
+          {p.x * e1.x + p.y * e1.y + p.z * e1.z,
+           p.x * e2.x + p.y * e2.y + p.z * e2.z});
+    }
+
+    int okCount = 0;
+    double sumRelErr = 0.0;
+    double sumCov = 0.0;
+    double sumR = 0.0;
+    std::vector<KA::Point2> centers;
+    centers.reserve(kBands);
+
+    for (int bi = 0; bi < kBands; ++bi) {
+      const auto &bp = bins[size_t(bi)];
+      if (bp.size() < 16)
+        continue;
+      double cx = 0.0, cy = 0.0;
+      for (const auto &q : bp) {
+        cx += q.x;
+        cy += q.y;
+      }
+      cx /= double(bp.size());
+      cy /= double(bp.size());
+
+      std::array<double, kSectors> bestR2{};
+      bestR2.fill(-1.0);
+      std::array<KA::Point2, kSectors> bestPt{};
+      for (const auto &q : bp) {
+        const double dx = q.x - cx, dy = q.y - cy;
+        const double r2 = dx * dx + dy * dy;
+        double ang = std::atan2(dy, dx);
+        if (ang < 0.0)
+          ang += 2.0 * std::numbers::pi;
+        const int si = std::clamp(
+            int(ang / (2.0 * std::numbers::pi) * kSectors), 0, kSectors - 1);
+        if (r2 > bestR2[size_t(si)]) {
+          bestR2[size_t(si)] = r2;
+          bestPt[size_t(si)] = {q.x, q.y};
+        }
+      }
+      std::vector<KA::Point2> ring;
+      ring.reserve(kSectors);
+      for (int si = 0; si < kSectors; ++si) {
+        if (bestR2[size_t(si)] > 0.0)
+          ring.push_back(bestPt[size_t(si)]);
+      }
+      if (ring.size() < 11)
+        continue;
+      const KA::Circle2D c = KA::FitCircleTaubin(ring);
+      if (!c.ok || c.r < 5.0 || c.r > H * 2.5)
+        continue;
+      const double relErr = c.rmse / c.r;
+      if (relErr > 0.12)
+        continue;
+      ++okCount;
+      sumRelErr += relErr;
+      sumCov += double(ring.size()) / double(kSectors);
+      sumR += c.r;
+      centers.push_back({c.xc, c.yc});
+    }
+    if (okCount < 4)
+      return -1e9;
+    const double meanR = sumR / double(okCount);
+    const double meanErr = sumRelErr / double(okCount);
+    double mx = 0.0, my = 0.0;
+    for (const auto &c : centers) {
+      mx += c.x;
+      my += c.y;
+    }
+    mx /= double(centers.size());
+    my /= double(centers.size());
+    double cVar = 0.0;
+    for (const auto &c : centers)
+      cVar += std::hypot(c.x - mx, c.y - my);
+    cVar /= (double(centers.size()) * std::max(10.0, meanR));
+
+    return double(okCount) * 2.0 + sumCov - 35.0 * meanErr - 18.0 * cVar;
+  };
+
+  KA::Point3 bestU{0, 0, 1};
+  double bestScore = scoreAxis(bestU);
+
+  // 상반구 피보나치 격자 64방향 탐색
+  constexpr int kDirs = 64;
+  const double golden = std::numbers::pi * (3.0 - std::sqrt(5.0));
+  for (int i = 0; i < kDirs; ++i) {
+    const double z = 1.0 - (double(i) + 0.5) / double(kDirs);
+    const double r = std::sqrt(std::max(0.0, 1.0 - z * z));
+    const double phi = golden * double(i);
+    const KA::Point3 cand{r * std::cos(phi), r * std::sin(phi), z};
+    const double sc = scoreAxis(cand);
+    if (sc > bestScore) {
+      bestScore = sc;
+      bestU = cand;
+    }
+  }
+
+  // 국소 2단계 정밀 탐색 (±12° -> ±3°)
+  for (double stepDeg : {4.0, 1.2}) {
+    KA::Point3 e1, e2;
+    makeBasis(bestU, e1, e2);
+    KA::Point3 stageBest = bestU;
+    for (int ix = -3; ix <= 3; ++ix) {
+      for (int iy = -3; iy <= 3; ++iy) {
+        if (ix == 0 && iy == 0)
+          continue;
+        const double ax = double(ix) * stepDeg * kDeg;
+        const double ay = double(iy) * stepDeg * kDeg;
+        KA::Point3 cand{bestU.x + ax * e1.x + ay * e2.x,
+                        bestU.y + ax * e1.y + ay * e2.y,
+                        bestU.z + ax * e1.z + ay * e2.z};
+        const double len =
+            std::sqrt(cand.x * cand.x + cand.y * cand.y + cand.z * cand.z);
+        if (len < 1e-12)
+          continue;
+        cand = {cand.x / len, cand.y / len, cand.z / len};
+        const double sc = scoreAxis(cand);
+        if (sc > bestScore) {
+          bestScore = sc;
+          stageBest = cand;
+        }
+      }
+    }
+    bestU = stageBest;
+  }
+
+  if (bestScore < -1e8)
+    return false;
+
+  // 상하(+bestU vs -bestU) 판별:
+  // 토기 저부(바닥)는 중심축 근처(r ≈ 0)까지 메워져 있어 최소 반경(하위 10% 반경)이 작고,
+  // 구연부(입구)는 가운데가 비어 있는 개구부이므로 중심축 근처 정점이 없어 하위 10% 반경이 크다.
+  KA::Point3 e1, e2;
+  makeBasis(bestU, e1, e2);
+  double zMin = 1e18, zMax = -1e18;
+  double cx = 0.0, cy = 0.0;
+  for (const auto &p : pts) {
+    const double x = p.x * e1.x + p.y * e1.y + p.z * e1.z;
+    const double y = p.x * e2.x + p.y * e2.y + p.z * e2.z;
+    const double z = p.x * bestU.x + p.y * bestU.y + p.z * bestU.z;
+    cx += x;
+    cy += y;
+    zMin = std::min(zMin, z);
+    zMax = std::max(zMax, z);
+  }
+  cx /= double(pts.size());
+  cy /= double(pts.size());
+  const double H = zMax - zMin;
+  std::vector<double> rTop, rBot;
+  for (const auto &p : pts) {
+    const double x = p.x * e1.x + p.y * e1.y + p.z * e1.z;
+    const double y = p.x * e2.x + p.y * e2.y + p.z * e2.z;
+    const double z = p.x * bestU.x + p.y * bestU.y + p.z * bestU.z;
+    const double r = std::hypot(x - cx, y - cy);
+    if (z >= zMax - 0.16 * H)
+      rTop.push_back(r);
+    if (z <= zMin + 0.16 * H)
+      rBot.push_back(r);
+  }
+  if (rTop.size() >= 8 && rBot.size() >= 8) {
+    std::sort(rTop.begin(), rTop.end());
+    std::sort(rBot.begin(), rBot.end());
+    const double qTop = rTop[rTop.size() / 10];
+    const double qBot = rBot[rBot.size() / 10];
+    if (qTop < qBot) {
+      bestU = {-bestU.x, -bestU.y, -bestU.z};
+    }
+  }
+  outUpAxis = bestU;
+  return true;
 }
 
 void translate(KA::MeshData &m, double dx, double dy, double dz) {
@@ -723,6 +989,7 @@ void ArtifactDoc::resetPose() {
   updateBbox(base_);
   lodBase_ = rawLod_;
   lodColors_ = rawLodColors_;
+  floorPickPts_.clear();
   unconfirm();
   centered_ = false;
 }
@@ -733,6 +1000,127 @@ void ArtifactDoc::dropToFloor() {
   shiftBoth(0, 0, -base_.bboxMin.z);
   unconfirm();
   centered_ = false;
+}
+
+void ArtifactDoc::centerOnFloor() {
+  if (!isLoaded())
+    return;
+  const double cx = 0.5 * (base_.bboxMin.x + base_.bboxMax.x);
+  const double cy = 0.5 * (base_.bboxMin.y + base_.bboxMax.y);
+  shiftBoth(-cx, -cy, -base_.bboxMin.z);
+  unconfirm();
+  centered_ = false;
+}
+
+void ArtifactDoc::alignNormalToFloor(const KA::Point3 &downNormal) {
+  if (!isLoaded())
+    return;
+  const KA::Point3 up{-downNormal.x, -downNormal.y, -downNormal.z};
+  const double len = std::sqrt(up.x * up.x + up.y * up.y + up.z * up.z);
+  if (len < 1e-12)
+    return;
+  double R[3][3];
+  buildRotationToPlusZ(up, R);
+  const KA::Point3 ctr{0.5 * (base_.bboxMin.x + base_.bboxMax.x),
+                       0.5 * (base_.bboxMin.y + base_.bboxMax.y),
+                       0.5 * (base_.bboxMin.z + base_.bboxMax.z)};
+  rotateAbout(R, ctr);
+  centerOnFloor();
+}
+
+bool ArtifactDoc::alignSurfacePointToFloor(const KA::Point3 &worldPt,
+                                           double radiusMm) {
+  if (!isLoaded())
+    return false;
+  const KA::MeshData &m =
+      (!lodBase_.faces.empty() && base_.faces.size() > 250000) ? lodBase_
+                                                               : base_;
+  if (m.faces.empty() || m.vertices.empty())
+    return false;
+  const KA::Point3 g = KA::MeshCentroid(m);
+  const double r2Max = std::max(1.0, radiusMm) * std::max(1.0, radiusMm);
+
+  KA::Point3 nSum{0, 0, 0};
+  double bestDist2 = 1e30;
+  KA::Point3 closestN{0, 0, -1};
+  const int nv = int(m.vertices.size());
+
+  for (const auto &f : m.faces) {
+    if (f[0] < 0 || f[1] < 0 || f[2] < 0 || f[0] >= nv || f[1] >= nv ||
+        f[2] >= nv)
+      continue;
+    const auto &p0 = m.vertices[size_t(f[0])];
+    const auto &p1 = m.vertices[size_t(f[1])];
+    const auto &p2 = m.vertices[size_t(f[2])];
+    const KA::Point3 fc{(p0.x + p1.x + p2.x) / 3.0, (p0.y + p1.y + p2.y) / 3.0,
+                        (p0.z + p1.z + p2.z) / 3.0};
+    const double dx = fc.x - worldPt.x, dy = fc.y - worldPt.y,
+                 dz = fc.z - worldPt.z;
+    const double d2 = dx * dx + dy * dy + dz * dz;
+    const double e1x = p1.x - p0.x, e1y = p1.y - p0.y, e1z = p1.z - p0.z;
+    const double e2x = p2.x - p0.x, e2y = p2.y - p0.y, e2z = p2.z - p0.z;
+    KA::Point3 fn{e1y * e2z - e1z * e2y, e1z * e2x - e1x * e2z,
+                  e1x * e2y - e1y * e2x};
+    const double fnLen = std::sqrt(fn.x * fn.x + fn.y * fn.y + fn.z * fn.z);
+    if (fnLen < 1e-12)
+      continue;
+    // 바깥쪽(중심 g 에서 먼 쪽)을 향하도록 부호 정렬
+    if (fn.x * (fc.x - g.x) + fn.y * (fc.y - g.y) + fn.z * (fc.z - g.z) < 0.0) {
+      fn = {-fn.x, -fn.y, -fn.z};
+    }
+    if (d2 < bestDist2) {
+      bestDist2 = d2;
+      closestN = {fn.x / fnLen, fn.y / fnLen, fn.z / fnLen};
+    }
+    if (d2 <= r2Max) {
+      nSum.x += fn.x;
+      nSum.y += fn.y;
+      nSum.z += fn.z;
+    }
+  }
+
+  const double sumLen =
+      std::sqrt(nSum.x * nSum.x + nSum.y * nSum.y + nSum.z * nSum.z);
+  const KA::Point3 chosen = (sumLen > 1e-9)
+                                ? KA::Point3{nSum.x / sumLen, nSum.y / sumLen,
+                                             nSum.z / sumLen}
+                                : closestN;
+  alignNormalToFloor(chosen);
+  return true;
+}
+
+void ArtifactDoc::clearFloorPickPoints() { floorPickPts_.clear(); }
+
+int ArtifactDoc::addFloorPickPoint(const KA::Point3 &pt) {
+  if (!isLoaded())
+    return 0;
+  if (floorPickPts_.size() >= 3)
+    floorPickPts_.clear();
+  floorPickPts_.push_back(pt);
+  if (floorPickPts_.size() == 3) {
+    const auto &p0 = floorPickPts_[0];
+    const auto &p1 = floorPickPts_[1];
+    const auto &p2 = floorPickPts_[2];
+    const KA::Point3 u{p1.x - p0.x, p1.y - p0.y, p1.z - p0.z};
+    const KA::Point3 v{p2.x - p0.x, p2.y - p0.y, p2.z - p0.z};
+    KA::Point3 n{u.y * v.z - u.z * v.y, u.z * v.x - u.x * v.z,
+                 u.x * v.y - u.y * v.x};
+    const double len = std::sqrt(n.x * n.x + n.y * n.y + n.z * n.z);
+    if (len > 1e-6) {
+      const KA::Point3 g =
+          KA::MeshCentroid(lodBase_.vertices.empty() ? base_ : lodBase_);
+      const KA::Point3 pBar{(p0.x + p1.x + p2.x) / 3.0,
+                            (p0.y + p1.y + p2.y) / 3.0,
+                            (p0.z + p1.z + p2.z) / 3.0};
+      // 찍은 3점 평면에서 유물 무게중심 g 로 향하는 쪽이 위(+Z), 반대쪽이 바닥(-Z)
+      const double toCenter =
+          n.x * (g.x - pBar.x) + n.y * (g.y - pBar.y) + n.z * (g.z - pBar.z);
+      const KA::Point3 downNormal =
+          (toCenter >= 0.0) ? KA::Point3{-n.x, -n.y, -n.z} : n;
+      alignNormalToFloor(downNormal);
+    }
+  }
+  return int(floorPickPts_.size());
 }
 
 bool ArtifactDoc::isGrounded() const {
@@ -777,16 +1165,23 @@ void ArtifactDoc::confirmPose() {
                                                                  : base_;
     const auto fits =
         KA::FitHorizontalOuters(centerMesh, zBand(centerMesh, 12));
+    const double bx = 0.5 * (base_.bboxMin.x + base_.bboxMax.x);
+    const double by = 0.5 * (base_.bboxMin.y + base_.bboxMax.y);
+    const double maxSpan = std::max(base_.bboxMax.x - base_.bboxMin.x,
+                                    base_.bboxMax.y - base_.bboxMin.y);
     double sx = 0, sy = 0;
     int n = 0;
-    for (const auto &f : fits)
-      if (f.circle.ok)
+    for (const auto &f : fits) {
+      if (f.circle.ok && f.circle.r <= 0.75 * maxSpan &&
+          (f.circle.rmse / std::max(1.0, f.circle.r)) <= 0.05 &&
+          std::hypot(f.circle.xc - bx, f.circle.yc - by) <= 0.25 * maxSpan) {
         sx += f.circle.xc, sy += f.circle.yc, ++n;
+      }
+    }
     if (n > 0)
       shiftBoth(-sx / n, -sy / n, 0);
     else
-      shiftBoth(-0.5 * (base_.bboxMin.x + base_.bboxMax.x),
-                -0.5 * (base_.bboxMin.y + base_.bboxMax.y), 0);
+      shiftBoth(-bx, -by, 0);
     aligned_ = n > 0;
     alignNote_ =
         n > 0 ? QStringLiteral("바닥판 기준 (사람 확정) · 중심선 원 맞춤")
@@ -830,8 +1225,42 @@ void ArtifactDoc::autoAlign() {
     buildLodMesh(m, {}, proxy, dummyCol, 50000);
   KA::MeshData &work = useProxy ? proxy : m;
 
-  // 1) 구연부 → PCA 로 입구를 위로
-  const KA::RimResult rim = KA::DetectRim(work, KA::RimMode::Auto);
+  // 1) 열린 경계(구연부)가 있는 경우 구연부 PCA 로 입구를 위로,
+  //    수밀(Watertight) 메시이거나 비스듬히 누워 구연 경계를 못 찾는 경우
+  //    구면 대칭축 탐색(findCoarseVesselAxis)으로 입구를 위로 세운다.
+  const KA::RimResult boundaryRim = KA::DetectRimBoundary(work);
+  bool coarseAligned = false;
+  if (boundaryRim.error != KA::RimError::Ok) {
+    // 현재 +Z 가 이미 양호한 회전 대칭축인지 먼저 확인
+    const auto curFits = KA::FitHorizontalOuters(work, zBand(work, 12));
+    int goodCircles = 0;
+    for (const auto &f : curFits) {
+      if (f.circle.ok && f.circle.r > 5.0 && (f.circle.rmse / f.circle.r) < 0.03)
+        ++goodCircles;
+    }
+    const double curH = work.bboxMax.z - work.bboxMin.z;
+    const double curW = std::max(work.bboxMax.x - work.bboxMin.x,
+                                 work.bboxMax.y - work.bboxMin.y);
+    if (goodCircles < 8 || curH < curW * 0.85) {
+      KA::Point3 upAxis{0, 0, 1};
+      if (findCoarseVesselAxis(work, upAxis)) {
+        double R[3][3];
+        buildRotationToPlusZ(upAxis, R);
+        const KA::Point3 ctr = KA::MeshCentroid(work);
+        applyMat3(work, R, ctr);
+        updateBbox(work);
+        if (useProxy) {
+          applyMat3(m, R, ctr);
+          updateBbox(m);
+        }
+        coarseAligned = true;
+      }
+    }
+  }
+
+  const KA::RimResult rim = coarseAligned
+                                ? KA::DetectRimBoundary(work)
+                                : KA::DetectRim(work, KA::RimMode::Auto);
   if (rim.error == KA::RimError::Ok) {
     const auto pca =
         KA::ComputePcaAlignment(rim.rimPoints, KA::MeshCentroid(work));
@@ -846,10 +1275,43 @@ void ArtifactDoc::autoAlign() {
       }
     }
   }
+
+  // 만약 열린 경계 PCA 후에도 유물이 옆으로 누워 있다면(예: 측면 파손 구멍 오검출),
+  // 회전 대칭축 탐색으로 바로잡는다.
+  {
+    const double curH = work.bboxMax.z - work.bboxMin.z;
+    const double curW = std::max(work.bboxMax.x - work.bboxMin.x,
+                                 work.bboxMax.y - work.bboxMin.y);
+    if (curH < curW * 0.75) {
+      KA::Point3 upAxis{0, 0, 1};
+      if (findCoarseVesselAxis(work, upAxis)) {
+        double R[3][3];
+        buildRotationToPlusZ(upAxis, R);
+        const KA::Point3 ctr = KA::MeshCentroid(work);
+        applyMat3(work, R, ctr);
+        updateBbox(work);
+        if (useProxy) {
+          applyMat3(m, R, ctr);
+          updateBbox(m);
+        }
+        coarseAligned = true;
+      }
+    }
+  }
   // 2) 수평 외곽 원들로 회전 중심축 정밀화
   const KA::Axis3D ax =
       KA::OptimizeRotationAxis(KA::FitHorizontalOuters(work, zBand(work, 24)));
-  if (ax.ok) {
+  const double workSpan = std::max(work.bboxMax.x - work.bboxMin.x,
+                                   work.bboxMax.y - work.bboxMin.y);
+  const double workBx = 0.5 * (work.bboxMin.x + work.bboxMax.x);
+  const double workBy = 0.5 * (work.bboxMin.y + work.bboxMax.y);
+  const bool odrSane =
+      ax.ok &&
+      (!coarseAligned ||
+       (ax.rmse <= 3.0 && std::fabs(ax.direction.z) >= 0.94 &&
+        std::hypot(ax.origin.x - workBx, ax.origin.y - workBy) <=
+            0.25 * workSpan));
+  if (odrSane) {
     translate(work, -ax.origin.x, -ax.origin.y, -ax.origin.z);
     rotateDirToZ(work, ax.direction);
     updateBbox(work);
@@ -859,13 +1321,24 @@ void ArtifactDoc::autoAlign() {
       updateBbox(m);
     }
     const auto fits = KA::FitHorizontalOuters(work, zBand(work, 12));
+    const double bx = 0.5 * (m.bboxMin.x + m.bboxMax.x);
+    const double by = 0.5 * (m.bboxMin.y + m.bboxMax.y);
+    const double maxSpan =
+        std::max(m.bboxMax.x - m.bboxMin.x, m.bboxMax.y - m.bboxMin.y);
     double sx = 0, sy = 0;
     int n = 0;
-    for (const auto &f : fits)
-      if (f.circle.ok)
+    for (const auto &f : fits) {
+      if (f.circle.ok && f.circle.r <= 0.75 * maxSpan &&
+          (f.circle.rmse / std::max(1.0, f.circle.r)) <= 0.05 &&
+          std::hypot(f.circle.xc - bx, f.circle.yc - by) <= 0.25 * maxSpan) {
         sx += f.circle.xc, sy += f.circle.yc, ++n;
+      }
+    }
     if (n > 0) {
       translate(m, -sx / n, -sy / n, 0);
+      updateBbox(m);
+    } else {
+      translate(m, -bx, -by, 0);
       updateBbox(m);
     }
     aligned = true;
@@ -873,6 +1346,14 @@ void ArtifactDoc::autoAlign() {
     note = rim.error == KA::RimError::Ok
                ? QStringLiteral("바닥 수평(0 mm) · 회전 중심축 정렬됨")
                : QStringLiteral("회전 중심축 정렬됨 (구연부 미검출)");
+  } else if (coarseAligned) {
+    const double cx = 0.5 * (m.bboxMin.x + m.bboxMax.x),
+                 cy = 0.5 * (m.bboxMin.y + m.bboxMax.y);
+    translate(m, -cx, -cy, 0);
+    updateBbox(m);
+    aligned = true;
+    rmse = 0.0;
+    note = QStringLiteral("바닥 수평(0 mm) · 대칭축 자동 직립 정렬됨");
   } else {
     const double cx = 0.5 * (m.bboxMin.x + m.bboxMax.x),
                  cy = 0.5 * (m.bboxMin.y + m.bboxMax.y);
@@ -1208,7 +1689,89 @@ SectionLines sliceSectionY0(const KA::MeshData &m, bool inferInner,
     cutPlane.d = 0.0;
   }
 
-  for (const auto &pl : KA::Slice(m, cutPlane, bvh)) {
+  auto rawSlices = KA::Slice(m, cutPlane, bvh);
+  // 대용량 실측 스캔(수백만 면)에서 미세 비매니폴드 틈이나 꼭짓점 스침으로
+  // 단면 윤곽선이 여러 열린 선분(open Polyline3)으로 쪼개진 경우 끝점을 이어 붙인다.
+  std::vector<KA::Polyline3> closedSlices;
+  std::vector<KA::Polyline3> openSlices;
+  auto dist3 = [](const KA::Point3 &a, const KA::Point3 &b) {
+    return std::hypot(a.x - b.x, a.y - b.y, a.z - b.z);
+  };
+  auto spanZ3 = [](const std::vector<KA::Point3> &pts) {
+    if (pts.empty())
+      return 0.0;
+    double zLo = pts.front().z, zHi = zLo;
+    for (const auto &p : pts) {
+      zLo = std::min(zLo, p.z);
+      zHi = std::max(zHi, p.z);
+    }
+    return zHi - zLo;
+  };
+  for (auto &pl : rawSlices) {
+    if (pl.pts.size() < 2)
+      continue;
+    const double endGap = dist3(pl.pts.front(), pl.pts.back());
+    if (pl.pts.size() >= 3 &&
+        (endGap <= 0.05 || (endGap <= 3.0 && spanZ3(pl.pts) >= 20.0))) {
+      closedSlices.push_back(std::move(pl));
+    } else {
+      double len = 0.0;
+      for (size_t i = 1; i < pl.pts.size(); ++i)
+        len += dist3(pl.pts[i - 1], pl.pts[i]);
+      if (len >= 0.3 || rawSlices.size() <= 4)
+        openSlices.push_back(std::move(pl));
+    }
+  }
+  if (openSlices.size() >= 2) {
+    constexpr double kStitchMaxMm = 15.0;
+    while (openSlices.size() >= 2) {
+      double bestD = kStitchMaxMm + 1.0;
+      size_t bi = 0, bj = 0;
+      int bMode = 0;
+      for (size_t i = 0; i < openSlices.size(); ++i) {
+        for (size_t j = i + 1; j < openSlices.size(); ++j) {
+          const auto &pi = openSlices[i].pts;
+          const auto &pj = openSlices[j].pts;
+          const double d0 = dist3(pi.back(), pj.front());
+          if (d0 < bestD) {
+            bestD = d0, bi = i, bj = j, bMode = 0;
+          }
+          const double d1 = dist3(pi.back(), pj.back());
+          if (d1 < bestD) {
+            bestD = d1, bi = i, bj = j, bMode = 1;
+          }
+          const double d2 = dist3(pi.front(), pj.back());
+          if (d2 < bestD) {
+            bestD = d2, bi = i, bj = j, bMode = 2;
+          }
+          const double d3 = dist3(pi.front(), pj.front());
+          if (d3 < bestD) {
+            bestD = d3, bi = i, bj = j, bMode = 3;
+          }
+        }
+      }
+      if (bestD > kStitchMaxMm)
+        break;
+      auto &pi = openSlices[bi].pts;
+      auto &pj = openSlices[bj].pts;
+      if (bMode == 1) {
+        std::reverse(pj.begin(), pj.end());
+      } else if (bMode == 2) {
+        pj.insert(pj.end(), pi.begin(), pi.end());
+        pi = std::move(pj);
+      } else if (bMode == 3) {
+        std::reverse(pi.begin(), pi.end());
+      }
+      if (bMode != 2) {
+        pi.insert(pi.end(), pj.begin(), pj.end());
+      }
+      openSlices.erase(openSlices.begin() + long(bj));
+    }
+  }
+  for (auto &op : openSlices)
+    closedSlices.push_back(std::move(op));
+
+  for (const auto &pl : closedSlices) {
     if (pl.pts.size() < 3)
       continue;
     std::vector<KA::Point2> in;
@@ -1292,8 +1855,78 @@ SectionLines sliceSectionY0(const KA::MeshData &m, bool inferInner,
     }
   }
 
-  if (!inferInner || !s.loops.empty() || openBranches.empty())
+  auto polySpanY = [](const std::vector<KA::Point2> &poly) {
+    if (poly.empty())
+      return 0.0;
+    double yLo = poly.front().y, yHi = yLo;
+    for (const auto &p : poly) {
+      yLo = std::min(yLo, p.y);
+      yHi = std::max(yHi, p.y);
+    }
+    return yHi - yLo;
+  };
+  if (s.loops.size() > 1) {
+    std::stable_sort(s.loops.begin(), s.loops.end(),
+                     [&](const auto &a, const auto &b) {
+                       return polySpanY(a) > polySpanY(b);
+                     });
+  }
+  const double maxLoopSpan =
+      s.loops.empty() ? 0.0 : polySpanY(s.loops.front());
+  double maxBranchSpan = 0.0;
+  for (const auto &b : openBranches)
+    maxBranchSpan = std::max(maxBranchSpan, polySpanY(b));
+
+  // 주 단면 고리가 따로 열린 가지(openBranches)에 있고 s.loops 에는 미세 노이즈 섬만 있는 경우 제거
+  if (maxLoopSpan < 15.0 && maxBranchSpan >= 20.0) {
+    s.loops.clear();
+  } else if (maxLoopSpan >= 20.0 && s.loops.size() > 1) {
+    s.loops.erase(
+        std::remove_if(s.loops.begin() + 1, s.loops.end(),
+                       [&](const auto &l) { return polySpanY(l) < 5.0; }),
+        s.loops.end());
+  }
+
+  if (!s.loops.empty() || openBranches.empty())
     return s;
+  if (!inferInner) {
+    // 외벽과 내벽이 모두 스캔되었으나 구연·저부 결실(>25mm)로 열린 가지로 나뉜 경우 닫힌 단면 고리로 결합
+    if (openBranches.size() >= 2 && maxBranchSpan >= 20.0) {
+      size_t oIdx = 0;
+      double bestSc = -1e18;
+      for (size_t i = 0; i < openBranches.size(); ++i) {
+        double mx = 0.0;
+        for (const auto &p : openBranches[i])
+          mx += p.x;
+        mx /= double(openBranches[i].size());
+        const double sc = polySpanY(openBranches[i]) * 2.0 + mx;
+        if (sc > bestSc) {
+          bestSc = sc;
+          oIdx = i;
+        }
+      }
+      size_t iIdx = oIdx;
+      double bestInSpan = 0.0;
+      for (size_t i = 0; i < openBranches.size(); ++i) {
+        if (i == oIdx)
+          continue;
+        const double sp = polySpanY(openBranches[i]);
+        if (sp > bestInSpan) {
+          bestInSpan = sp;
+          iIdx = i;
+        }
+      }
+      if (iIdx != oIdx && bestInSpan >= 0.45 * polySpanY(openBranches[oIdx])) {
+        std::vector<KA::Point2> closedPoly = openBranches[oIdx];
+        const auto &inBr = openBranches[iIdx];
+        for (auto it = inBr.rbegin(); it != inBr.rend(); ++it)
+          closedPoly.push_back(*it);
+        if (closedPoly.size() >= 3)
+          s.loops.push_back(std::move(closedPoly));
+      }
+    }
+    return s;
+  }
 
   // 가장 바닥(minY)까지 내려가고 평균 반경이 바깥쪽인 가지를 외벽(outer)으로,
   // 나머지를 스캔된 상부 내벽(innerScanned)으로 결합
@@ -1928,11 +2561,22 @@ double ArtifactDoc::angleDefectScore(double a) const {
     }
   }
   const double diaDiff = std::fabs(rRight - rLeft);
+  double loopSpan = 0.0;
+  if (!s.loops.empty() && !s.loops[0].empty()) {
+    double yLo = s.loops[0].front().y, yHi = yLo;
+    for (const auto &p : s.loops[0]) {
+      yLo = std::min(yLo, p.y);
+      yHi = std::max(yHi, p.y);
+    }
+    loopSpan = yHi - yLo;
+  }
+  const double missingPenalty =
+      (H > 1.0 && loopSpan < 0.85 * H) ? 50.0 * (0.85 - loopSpan / H) : 0.0;
 
   const double score = 5.0 * breakCount + 5.0 * crackCount +
                        2.0 * std::min(5.0, wallVar) +
                        0.3 * (s.solids.empty() ? 0.0 : 1.0) + diaDiff +
-                       0.05 * (1.0 - std::cos(a * DEG));
+                       missingPenalty + 0.05 * (1.0 - std::cos(a * DEG));
   return score;
 }
 
@@ -2064,6 +2708,112 @@ CutCheckStatus ArtifactDoc::checkCutStatus() const {
             .arg(st.rimDiff, 0, 'f', 1);
   }
   return st;
+}
+
+std::vector<AngleStripCell> ArtifactDoc::angleStripCells() const {
+  std::vector<AngleStripCell> cells;
+  if (!isLoaded())
+    return cells;
+  cells.reserve(12);
+  const auto &meshToSlice = lodBase_.vertices.empty()
+                                ? (base_.vertices.empty() ? mesh_ : base_)
+                                : lodBase_;
+  const auto recs = recommendAngles();
+
+  for (int i = 0; i < 12; ++i) {
+    const double deg = double(i * 30);
+    AngleStripCell c;
+    c.angleDeg = deg;
+    for (const auto &r : recs) {
+      if (std::fabs(std::remainder(deg - r.angleDeg, 360.0)) <= 15.0) {
+        c.isRecommended = true;
+        break;
+      }
+    }
+    const SectionLines s =
+        sliceSectionY0(meshToSlice, inferInnerWall_, estimatedWallMm_, deg);
+    const double H = dims_.vesselHeight > 0.0
+                         ? dims_.vesselHeight
+                         : (meshToSlice.bboxMax.z - meshToSlice.bboxMin.z);
+    if (!s.loops.empty()) {
+      c.outerPts = s.loops.front();
+      double yLo = c.outerPts.front().y, yHi = yLo;
+      for (const auto &p : c.outerPts) {
+        yLo = std::min(yLo, p.y);
+        yHi = std::max(yHi, p.y);
+      }
+      const bool partialWall = H > 1.0 && (yHi - yLo) < 0.65 * H;
+      if (!s.estInner.empty()) {
+        c.extPts = s.estInner.front();
+        c.hasWarn = true;
+        c.statusLabel = QStringLiteral("파선보정");
+      } else if (partialWall) {
+        c.hasWarn = true;
+        c.isRecommended = false;
+        c.statusLabel = QStringLiteral("결실구간");
+      } else {
+        c.statusLabel =
+            c.isRecommended ? QStringLiteral("★추천") : QStringLiteral("양호");
+      }
+    } else if (!s.solids.empty()) {
+      c.outerPts = s.solids.front();
+      if (!s.estInner.empty())
+        c.extPts = s.estInner.front();
+      c.hasWarn = true;
+      c.statusLabel = QStringLiteral("결실·보정");
+    } else {
+      c.hasError = true;
+      c.statusLabel = QStringLiteral("끊김");
+    }
+    cells.push_back(std::move(c));
+  }
+  return cells;
+}
+
+void ArtifactDoc::setSlotHorizontalZ(int slotIdx, double zMm) {
+  if (!isLoaded() || slotIdx < 0 || slotIdx >= int(slotList_.size()))
+    return;
+  auto &s = slotList_[size_t(slotIdx)];
+  if (s.kind != SlotKind::Horizontal)
+    return;
+  const double maxH =
+      d5_.height > 1.0 ? d5_.height : (base_.bboxMax.z - base_.bboxMin.z);
+  s.z = std::clamp(zMm, 0.5, std::max(1.0, maxH - 0.5));
+  s.note = QStringLiteral("Z 막 높이 H %1 mm").arg(s.z, 0, 'f', 1);
+}
+
+int ArtifactDoc::addVerticalSlotAt(double angleDeg) {
+  if (!isLoaded())
+    return -1;
+  const double normAng = std::remainder(angleDeg, 360.0);
+  int nv = 0;
+  for (const auto &s : slotList_)
+    if (s.kind == SlotKind::Vertical)
+      ++nv;
+  const QChar c = QChar('A' + std::min(24, int(slotList_.size())));
+  const QString memo =
+      QStringLiteral("막 %1°").arg(normAng >= 0 ? normAng : normAng + 360.0, 0,
+                                  'f', 0);
+  slotList_.push_back(
+      {QStringLiteral("%1–%1′ 종단면 (%2)").arg(c).arg(memo),
+       QStringLiteral("종단면"),
+       nv == 0 ? QStringLiteral("보고서 주 도판 (1:1)") : memo,
+       SlotKind::Vertical, normAng, 0.0});
+  return int(slotList_.size()) - 1;
+}
+
+int ArtifactDoc::addHorizontalSlotAt(double zMm) {
+  if (!isLoaded())
+    return -1;
+  const double maxH =
+      d5_.height > 1.0 ? d5_.height : (base_.bboxMax.z - base_.bboxMin.z);
+  const double z = std::clamp(zMm, 0.5, std::max(1.0, maxH - 0.5));
+  const QChar c = QChar('A' + std::min(24, int(slotList_.size())));
+  slotList_.push_back({QStringLiteral("%1–%1′ 횡단면").arg(c),
+                       QStringLiteral("수평절단"),
+                       QStringLiteral("높이 H %1 mm 절단").arg(z, 0, 'f', 1),
+                       SlotKind::Horizontal, 0.0, z});
+  return int(slotList_.size()) - 1;
 }
 
 } // namespace studio

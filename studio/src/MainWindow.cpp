@@ -160,6 +160,84 @@ MainWindow::MainWindow() {
     cut_.release(cutClock_.elapsed());
     onCutTimer();
   });
+  connect(view3d_, &View3DPane::actionRequested, this, &MainWindow::onAction);
+  connect(view3d_, &View3DPane::poseRotateRequested, this,
+          [this](PoseAxis ax, double deg) {
+            if (!doc_.isLoaded())
+              return;
+            doc_.rotatePose(ax, deg);
+            slot_ = 0;
+            refreshAll(true);
+          });
+  connect(view3d_->canvas(), &View3DCanvas::surfacePointPicked, this,
+          [this](KA::Point3 pt) {
+            if (!doc_.isLoaded() || doc_.poseConfirmed())
+              return;
+            if (view3d_->canvas()->posePickMode() ==
+                PosePickMode::Surface1Click) {
+              doc_.alignSurfacePointToFloor(pt);
+              view3d_->canvas()->setPosePickMode(PosePickMode::None);
+              slot_ = 0;
+              refreshAll(true);
+              setHint(QStringLiteral(
+                  "클릭한 면을 바닥판(Z=0)에 수평으로 맞춰 세웠습니다."));
+            } else if (view3d_->canvas()->posePickMode() ==
+                       PosePickMode::Floor3Point) {
+              const int n = doc_.addFloorPickPoint(pt);
+              slot_ = 0;
+              if (n >= 3) {
+                view3d_->canvas()->setPosePickMode(PosePickMode::None);
+                refreshAll(true);
+                setHint(QStringLiteral(
+                    "바닥 둘레 3점으로 수평 바닥면을 맞춰 세웠습니다."));
+              } else {
+                refreshAll(true);
+                setHint(QStringLiteral(
+                            "바닥 점 %1/3 찍음 — 다음 바닥 둘레 점을 클릭하세요.")
+                            .arg(n));
+              }
+            }
+          });
+  connect(view3d_, &View3DPane::angleSelected, this, [this](double absDeg) {
+    if (!doc_.isLoaded() || !doc_.poseConfirmed())
+      return;
+    flushCut();
+    pushUndo();
+    fixedAngle_.reset();
+    const auto &sl = doc_.slotList();
+    if (slot_ >= 0 && slot_ < int(sl.size()) &&
+        sl[size_t(slot_)].kind == SlotKind::Horizontal &&
+        firstVerticalSlot() >= 0) {
+      slot_ = firstVerticalSlot();
+    }
+    doc_.setFrontAngle(doc_.snapAngle(absDeg, 2.0));
+    refreshAll(true);
+  });
+  connect(view3d_, &View3DPane::horizontalHeightSelected, this,
+          [this](double zMm) {
+            if (!doc_.isLoaded() || !doc_.poseConfirmed())
+              return;
+            auto &sl = doc_.slotList();
+            if (slot_ < 0 || slot_ >= int(sl.size()) ||
+                sl[size_t(slot_)].kind != SlotKind::Horizontal) {
+              int hSlot = -1;
+              for (size_t i = 0; i < sl.size(); ++i) {
+                if (sl[i].kind == SlotKind::Horizontal) {
+                  hSlot = int(i);
+                  break;
+                }
+              }
+              if (hSlot < 0)
+                hSlot = doc_.addHorizontalSlotAt(zMm);
+              slot_ = hSlot;
+            }
+            doc_.setSlotHorizontalZ(slot_, zMm);
+            refreshSlots();
+            sheet_->refresh(doc_, slot_);
+            view3d_->refresh(doc_, slot_);
+            setHint(QStringLiteral("횡단면 절단 높이: H %1 mm")
+                        .arg(doc_.slotList()[size_t(slot_)].z, 0, 'f', 1));
+          });
   connect(
       sheet_->canvas(), &SheetCanvas::cursorMm, this,
       [this](double r, double h, double wall, bool inside) {
@@ -290,7 +368,8 @@ void MainWindow::buildRibbon() {
                {"poseReset", {QStringLiteral("처음 자세로"), ""}},
                {"poseDrop", {QStringLiteral("바닥에 내려놓기"), ""}}});
     g->column({{"poseModeTB", {QStringLiteral("T/B 토글"), ""}},
-               {"sherdModeToggle", {QStringLiteral("편 모드"), ""}}});
+               {"sherdModeToggle", {QStringLiteral("편 모드"), ""}},
+               {"poseCenter", {QStringLiteral("바닥 중앙 맞춤"), ""}}});
   }
   {
     auto *g = ribbon_->addGroup(pBase_, QStringLiteral("확정"));
@@ -1246,9 +1325,10 @@ void MainWindow::onAction(const QString &id) {
   // 확정 전에는 단면·치수·내보내기 동작을 하지 않는다 (표시 토글
   // shade·lines·grid·shadeMode 는 허용)
   static const QStringList needPose = {
-      "cut",      "outline",  "cutMinus", "cutPlus",  "axX", "axY",
-      "addSlot",  "refBase",  "refRim",   "export",   "svg", "dxf",
-      "combined", "fixAngle", "toEdit",   "backToCut"};
+      "cut",      "outline",         "cutMinus", "cutPlus",  "axX", "axY",
+      "axZ",      "addSlot",         "addVerticalSlot",      "refBase",
+      "refRim",   "export",          "svg",      "dxf",      "combined",
+      "fixAngle", "toEdit",          "backToCut"};
   if (needPose.contains(id) && !requirePose())
     return;
   if (id == "poseX" || id == "poseY" || id == "poseZ") {
@@ -1262,15 +1342,21 @@ void MainWindow::onAction(const QString &id) {
                     neg ? -90.0 : 90.0);
     slot_ = 0;
     refreshAll(true);
-  } else if (id == "poseFlip" || id == "poseReset" || id == "poseDrop") {
+  } else if (id == "poseFlip" || id == "poseReset" || id == "poseDrop" ||
+             id == "poseCenter") {
     if (id == "poseFlip")
       doc_.flipPose();
     else if (id == "poseReset")
       doc_.resetPose();
+    else if (id == "poseCenter")
+      doc_.centerOnFloor();
     else
       doc_.dropToFloor();
     slot_ = 0;
     refreshAll(true);
+  } else if (id == "pose3PtClear") {
+    doc_.clearFloorPickPoints();
+    view3d_->canvas()->update();
   } else if (id == "poseAuto") {
     QApplication::setOverrideCursor(Qt::WaitCursor);
     doc_.autoAlign(); // 자동 세우기 — 확정은 사람이 (Enter)
@@ -1427,19 +1513,30 @@ void MainWindow::onAction(const QString &id) {
                                  "— R 을 다시 누르면 되돌립니다"));
   } else if (id == "addSlot") {
     const double h = doc_.dims().height;
-    const double z = (lastHoverH_ > 0.5 && lastHoverH_ < h - 0.5)
-                         ? lastHoverH_
-                         : doc_.dims().bellyZ;
     auto &sl = doc_.slotList();
+    const double curHorizZ =
+        (slot_ >= 0 && slot_ < int(sl.size()) &&
+         sl[size_t(slot_)].kind == SlotKind::Horizontal)
+            ? sl[size_t(slot_)].z
+            : doc_.dims().bellyZ;
+    const double z = (lastHoverH_ > 0.5 && lastHoverH_ < h - 0.5) ? lastHoverH_
+                                                                  : curHorizZ;
     int nh = 0;
     for (const auto &s : sl)
       nh += s.kind == SlotKind::Horizontal;
     const QChar c = QChar('B' + std::min(24, nh));
     sl.push_back(
         {QStringLiteral("%1–%1′ 횡단면").arg(c), QStringLiteral("수평절단"),
-         QStringLiteral("커서 높이에서 추가"), SlotKind::Horizontal, 0.0, z});
+         QStringLiteral("높이 H %1 mm 절단").arg(z, 0, 'f', 1),
+         SlotKind::Horizontal, 0.0, z});
     slot_ = int(sl.size()) - 1;
     refreshAll(false);
+  } else if (id == "addVerticalSlot") {
+    pushUndo();
+    slot_ = doc_.addVerticalSlotAt(doc_.frontAngle());
+    refreshAll(false);
+    setHint(QStringLiteral("지금 자리(%1°)의 종단면을 도면 목록에 추가했습니다.")
+                .arg(doc_.frontAngle(), 0, 'f', 0));
   } else if (id == "shade" || id == "lines" || id == "grid") {
     ribbon_->setState(id, ribbon_->state(id) == ToolState::On ? ToolState::Idle
                                                               : ToolState::On);

@@ -119,9 +119,17 @@ int main(int argc, char **argv) {
         "Expected >1M faces for real high-res artifact, got %zu", numFaces);
 
   // -------------------------------------------------------------------------
-  // Benchmark c: confirmPose time <= 1500 ms (1.5s)
+  // Benchmark c: autoAlign + confirmPose time <= 1500 ms (1.5s) each
   // -------------------------------------------------------------------------
-  std::printf("\n--- [Benchmark c] confirmPose ---\n");
+  std::printf("\n--- [Benchmark c] autoAlign & confirmPose ---\n");
+  const auto tAlign0 = clk::now();
+  doc.autoAlign();
+  const double alignMs = msSince(tAlign0);
+  std::printf("[BENCH] autoAlign: %.1f ms, isLying=%d, isGrounded=%d\n",
+              alignMs, int(doc.isLying()), int(doc.isGrounded()));
+  CHECK(!doc.isLying(), "autoAlign on real artifact must stand it upright");
+  CHECK(doc.isGrounded(), "autoAlign on real artifact must ground it at Z=0");
+
   const auto tConfirm0 = clk::now();
   doc.confirmPose();
   const double confirmMs = msSince(tConfirm0);
@@ -197,11 +205,21 @@ int main(int argc, char **argv) {
   // Benchmark e: E2E 도면 생성 및 내보내기(SVG/DXF/PDF/PNG) 유효성
   // -------------------------------------------------------------------------
   std::printf("\n--- [Benchmark e] E2E Drawing & Export Validity ---\n");
+  const auto recs = doc.recommendAngles();
+  if (!recs.empty()) {
+    doc.setFrontAngle(recs.front().angleDeg);
+  }
   const auto section = doc.displaySection();
   CHECK(!section.empty(), "displaySection must not be empty");
   size_t totalSecPts = 0;
-  for (const auto &loop : section)
+  double secMinY = 1e18, secMaxY = -1e18;
+  for (const auto &loop : section) {
     totalSecPts += loop.size();
+    for (const auto &p : loop) {
+      secMinY = std::min(secMinY, p.y);
+      secMaxY = std::max(secMaxY, p.y);
+    }
+  }
   CHECK(totalSecPts > 0, "displaySection points count must be > 0 (got %zu)",
         totalSecPts);
 
@@ -211,6 +229,9 @@ int main(int argc, char **argv) {
   const Dims5 dims = doc.dims();
   CHECK(dims.ok, "dims.ok must be true");
   CHECK(dims.height > 0.0, "height must be positive: %g", dims.height);
+  CHECK((secMaxY - secMinY) >= 0.70 * dims.height,
+        "displaySection vertical span %.1f mm must cover >= 70%% of height %.1f mm",
+        secMaxY - secMinY, dims.height);
   CHECK(dims.rim > 0.0 || dims.belly > 0.0,
         "rim or belly must be positive (rim=%g, belly=%g)", dims.rim,
         dims.belly);

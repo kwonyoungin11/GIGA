@@ -49,4 +49,11 @@ target_link_libraries(test_challenger_m4_2 PRIVATE studio_core Qt6::Widgets)
 add_test(NAME studio_challenger_m4_2 COMMAND test_challenger_m4_2 ${CMAKE_CURRENT_BINARY_DIR})
 set_tests_properties(studio_challenger_m4_2 PROPERTIES RUN_SERIAL TRUE)
 
+add_executable(test_easy_workflow ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_easy_workflow.cpp ${STUDIO_GUI_SRC})
+set_target_properties(test_easy_workflow PROPERTIES AUTOMOC ON)
+target_link_libraries(test_easy_workflow PRIVATE studio_core Qt6::Widgets)
+add_test(NAME studio_easy_workflow COMMAND test_easy_workflow ${CMAKE_CURRENT_BINARY_DIR})
+set_tests_properties(studio_easy_workflow PROPERTIES RUN_SERIAL TRUE)
+
+
 
