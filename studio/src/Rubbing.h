@@ -22,9 +22,27 @@ struct RubbingRegion {
   bool operator==(const RubbingRegion &) const = default;
 };
 
+// [JOB-015] 재질·문양별 원클릭 D-Tak 탁본 프리셋
+enum class RubbingPreset {
+  Standard,  // 기본 토기 문양 (baseSigmaMm = 1.5)
+  FineStamp, // 인화문·집선문·세선문 (baseSigmaMm = 0.85, 미세 음각 강조)
+  RoofTile,  // 와전·수막새·명문 (baseSigmaMm = 2.8, 깊은 양각 강조)
+  Paddling,  // 타날문·물손질·제작흔 (baseSigmaMm = 2.2, 완만한 제작흔 강조)
+  Inverted   // 양각↔음각 반전 (Invert Effect)
+};
+
+// [JOB-015] 탁본 투영 방식: 원통 전개(토기 몸통) vs 평면 정사영(기와·수막새·거울·문양전)
+enum class RubbingProjMode {
+  Cylindrical, // 원통 전개 (호 길이 × 높이 1:1)
+  Planar       // 평면 정사영 (정면 평면 폭 × 높이 1:1)
+};
+
 struct RubbingParams {
   double pxPerMm = 6.0;
   double baseSigmaMm = 1.5; // 기준면(넓은 곡면) 평활 폭 — 이보다 좁은 요철(인화문·파상문·침선)이 문양으로 드러난다
+  RubbingPreset preset = RubbingPreset::Standard;
+  RubbingProjMode projMode = RubbingProjMode::Cylindrical;
+  bool invert = false;
   int maxSidePx = 16000;
   // 전체 화소 상한 — 중간 버퍼가 화소당 약 36 B 이므로 16 M 화소 ≈ 0.6 GB 가 최대.
   // 넘으면 배율을 낮추고(결과의 pxPerMm 에 실제 값), 1:1 크기는 dpi 메타데이터로 지킨다.

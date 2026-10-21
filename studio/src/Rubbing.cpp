@@ -101,19 +101,55 @@ UnrolledRubbing renderUnrolledRubbing(const KA::MeshData &mesh,
   const double spanDeg = std::clamp(region.azSpanDeg, 0.5, 360.0);
   const double halfSpan = 0.5 * deg2rad(spanDeg);
   const bool fullTurn = spanDeg >= 359.999;
+  const bool planar = (params.projMode == RubbingProjMode::Planar);
+  double sigmaMm = params.baseSigmaMm;
+  double contrastMul = 0.25;
+  bool inv = params.invert;
+  switch (params.preset) {
+  case RubbingPreset::FineStamp:
+    sigmaMm = 0.85;
+    contrastMul = 0.16;
+    break;
+  case RubbingPreset::RoofTile:
+    sigmaMm = 2.8;
+    contrastMul = 0.30;
+    break;
+  case RubbingPreset::Paddling:
+    sigmaMm = 2.2;
+    contrastMul = 0.22;
+    break;
+  case RubbingPreset::Inverted:
+    sigmaMm = 1.5;
+    contrastMul = 0.25;
+    inv = true;
+    break;
+  case RubbingPreset::Standard:
+  default:
+    break;
+  }
   if (mesh.vertices.empty() || mesh.faces.empty() || zHi - zLo < 0.5 ||
       params.pxPerMm <= 0.0)
     return out;
 
-  // 1) 정점마다 (중심 기준 방위각 a ∈ (−π, π], 반경 r, 높이 z)
+  // 1) 정점마다 (중심 기준 방위각 a ∈ (−π, π], 반경 r, 평면 가로 u_mm / 깊이 d_mm)
   const size_t nV = mesh.vertices.size();
   const double cA = deg2rad(region.azCenterDeg);
-  std::vector<float> va(nV), vr(nV);
+  const double cosA = std::cos(cA), sinA = std::sin(cA);
+  std::vector<float> va(nV), vr(nV), vu(planar ? nV : 0);
   parallelRange(nV, [&](size_t i0, size_t i1) {
     for (size_t i = i0; i < i1; ++i) {
       const auto &p = mesh.vertices[i];
-      vr[i] = float(std::hypot(p.x, p.y));
-      va[i] = float(std::remainder(std::atan2(p.y, p.x) - cA, 2.0 * kPi));
+      if (planar) {
+        // 방위각 cA 방향을 정면 법선으로 보는 1:1 평면 정사영 (기와·막새·거울·문양전)
+        const double depth = p.x * cosA + p.y * sinA;
+        const double tang = -p.x * sinA + p.y * cosA;
+        vr[i] = float(depth);
+        vu[i] = float(tang);
+        va[i] = float(std::remainder(std::atan2(p.y, p.x) - cA, 2.0 * kPi));
+      } else {
+        vr[i] = float(std::hypot(p.x, p.y));
+        va[i] = float(std::remainder(std::atan2(p.y, p.x) - cA, 2.0 * kPi));
+      }
     }
   });
 
@@ -125,7 +161,8 @@ UnrolledRubbing renderUnrolledRubbing(const KA::MeshData &mesh,
     if (z < zLo || z > zHi || std::fabs(va[i]) > halfSpan + 1e-9)
       continue;
     const int b = std::min(nb - 1, int((z - zLo)));
-    binMax[size_t(b)] = std::max(binMax[size_t(b)], vr[i]);
+    const float rad = float(std::hypot(mesh.vertices[i].x, mesh.vertices[i].y));
+    binMax[size_t(b)] = std::max(binMax[size_t(b)], rad);
   }
   std::vector<float> filled;
   for (float b : binMax)
@@ -139,9 +176,12 @@ UnrolledRubbing renderUnrolledRubbing(const KA::MeshData &mesh,
     Rref = filled[filled.size() / 2];
   }
 
-  // 3) 격자 크기 (가로 = 호 길이, 세로 = 높이) — 변 길이·전체 화소 상한
+  // 3) 격자 크기 (가로 = 호 길이 또는 평면 폭, 세로 = 높이) — 변 길이·전체 화소 상한
   double ppm = params.pxPerMm;
-  const double widthMm = 2.0 * halfSpan * Rref, heightMm = zHi - zLo;
+  const double widthMm =
+      planar ? std::max(4.0, 2.0 * Rref * std::sin(std::min(halfSpan, 0.5 * kPi)))
+             : 2.0 * halfSpan * Rref;
+  const double heightMm = zHi - zLo;
   ppm = std::min({ppm, params.maxSidePx / std::max(1.0, widthMm),
                   params.maxSidePx / std::max(1.0, heightMm),
                   std::sqrt(double(params.maxPixels) / std::max(1.0, widthMm * heightMm))});
@@ -205,6 +245,17 @@ UnrolledRubbing renderUnrolledRubbing(const KA::MeshData &mesh,
         continue;
       double a0 = va[size_t(f[0])], a1 = va[size_t(f[1])], a2 = va[size_t(f[2])];
       const double r0 = vr[size_t(f[0])], r1 = vr[size_t(f[1])], r2 = vr[size_t(f[2])];
+      const double v0 = (zHi - p0.z) * ppm, v1 = (zHi - p1.z) * ppm,
+                   v2 = (zHi - p2.z) * ppm;
+      if (planar) {
+        if (std::max({r0, r1, r2}) < 0.0)
+          continue; // 정면 반대쪽(뒷면) 제외
+        const double u0 = (double(vu[size_t(f[0])]) + 0.5 * widthMm) * ppm;
+        const double u1 = (double(vu[size_t(f[1])]) + 0.5 * widthMm) * ppm;
+        const double u2 = (double(vu[size_t(f[2])]) + 0.5 * widthMm) * ppm;
+        rasterTri(R, u0, v0, r0, u1, v1, r1, u2, v2, r2);
+        continue;
+      }
       if (std::min({r0, r1, r2}) < 1.0)
         continue; // 축 근처(바닥 가운데) — 전개 대상 아님
       bool seam = false;
@@ -219,8 +270,6 @@ UnrolledRubbing renderUnrolledRubbing(const KA::MeshData &mesh,
       }
       if (std::max({a0, a1, a2}) - std::min({a0, a1, a2}) > 0.25 * kPi)
         continue; // 한 면이 45° 넘게 걸치면 축 가까운 면 — 버림
-      const double v0 = (zHi - p0.z) * ppm, v1 = (zHi - p1.z) * ppm,
-                   v2 = (zHi - p2.z) * ppm;
       auto rasterShift = [&](double shift) {
         rasterTri(R, (a0 + shift + halfSpan) * uScale, v0, r0,
                   (a1 + shift + halfSpan) * uScale, v1, r1,
@@ -279,7 +328,7 @@ UnrolledRubbing renderUnrolledRubbing(const KA::MeshData &mesh,
   }
 
   // 6) 요철 = 외면 반경 − 넓게 평활한 기준면 (+ 스캔 잡음만 살짝 누름)
-  const std::vector<float> base = maskedSmooth(R, W, H, params.baseSigmaMm * ppm);
+  const std::vector<float> base = maskedSmooth(R, W, H, sigmaMm * ppm);
   std::vector<float> D(N, kNoData);
   size_t valid = 0;
   for (size_t k = 0; k < N; ++k)
@@ -313,7 +362,7 @@ UnrolledRubbing renderUnrolledRubbing(const KA::MeshData &mesh,
   //    스캔이 없는 곳은 한지와 헷갈리지 않게 푸른 회색 빗금.
   QImage img(W, H, QImage::Format_RGB32);
   const QRgb noData = qRgb(203, 209, 217), noDataHatch = qRgb(176, 184, 195);
-  const double paper = 0.965, ink = 0.10, w = 0.25 * s;
+  const double paper = 0.965, ink = 0.10, w = std::max(0.01, contrastMul * s);
   uchar *const bits = img.bits(); // 한 번만 detach — 스레드에서는 줄 주소만 계산
   const qsizetype bpl = img.bytesPerLine();
   parallelRange(size_t(H), [&](size_t y0, size_t y1) {
@@ -325,7 +374,8 @@ UnrolledRubbing renderUnrolledRubbing(const KA::MeshData &mesh,
           line[x] = ((x + int(y)) % 10 == 0) ? noDataHatch : noData;
           continue;
         }
-        const double k = 1.0 / (1.0 + std::exp(-(d + w) / w));
+        const double dSigned = inv ? -double(d) : double(d);
+        const double k = 1.0 / (1.0 + std::exp(-(dSigned + w) / w));
         const double g = paper - k * (paper - ink);
         line[x] = qRgb(int(std::lround(255.0 * g * 0.99)),
                        int(std::lround(255.0 * g * 0.98)),

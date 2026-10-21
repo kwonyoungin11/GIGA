@@ -13,6 +13,13 @@
 
 namespace studio {
 
+// [JOB-015] 유물 유형별 스마트 도판 템플릿
+enum class PlateTemplate {
+  VesselStandard, // 토기·자기 표준형 (평면도 + 좌단면·우외면 + 전개 탁본 + 보조 횡단면)
+  RoofTileCard,   // 와전·막새·거울형 (정면 문양도 + 정면 평면 탁본 + 단면도)
+  SixViewOrtho    // 소형 금속·석기 6면 정투영형 (정·배·좌·우·상·하 6면 + 단면)
+};
+
 struct PlateOptions {
   bool grid = true;    // 방안 눈금·치수·축척 막대
   bool shade = true;   // 유물 음영 / 디지털 탁본
@@ -26,6 +33,12 @@ struct PlateOptions {
   // 용지(paintSheet 가 넣음: 종이 1 mm 의 장치 px — 기준선 굵기·연장을 종이
   // 기준으로)
   double paperPxPerMm = 0.0;
+  // [JOB-014] 평면도·탁본 카드를 놓아도 되는 장치 좌표 영역 (비면 그리는 창 전체).
+  // 카드는 이 영역 안, 토기 도판 칸 바깥에만 놓는다.
+  QRectF cardAreaDev;
+  bool showRawPolyline = false; // [JOB-015] 원본 스캔 폴리라인(Polyline Origin) vs 보정 곡선 비교
+  bool showAuxSections = false; // [JOB-015] 다중 단면 슬롯(P0~P4: 수평 단면 a-a', b-b') 합성 표시
+  PlateTemplate plateTemplate = PlateTemplate::VesselStandard; // [JOB-015] 도판 템플릿
   bool spec14Layers = false;     // Feature 29: 14개 레이어 분리 SVG
   bool calibration100mm = false; // Feature 33: 100 mm 보정 사각형
 };

@@ -170,6 +170,15 @@ public:
   RubbingRegion rubbingRegion() const;
   void setRubbingRegion(const RubbingRegion &r);
   void setRubbingFullTurn(); // 같은 높이 범위를 한 바퀴(360°) 펼친 문양 전개도
+  // [JOB-015] 원클릭 D-Tak 프리셋 & 원통/평면 탁본 투영 모드
+  void setRubbingPreset(RubbingPreset p);
+  RubbingPreset rubbingPreset() const { return rubbingPreset_; }
+  void setRubbingProjMode(RubbingProjMode m);
+  RubbingProjMode rubbingProjMode() const { return rubbingProjMode_; }
+  // [JOB-015] 작업 이력(.darch JSON — Arch3D .ap2 상위호환) 저장·복원
+  QString defaultHistoryPath() const;
+  bool saveHistory(const QString &darchPath = QString()) const;
+  bool loadHistory(const QString &darchPath = QString());
   // 원통 전개 요철 탁본 (캐시 — 범위·배율·자세가 바뀔 때만 다시 계산)
   const UnrolledRubbing &unrolledRubbing(double pxPerMm) const;
 
@@ -423,12 +432,23 @@ private:
   double rubbingSpanW_ = 54.0;
   double rubbingSpanH_ = 46.0;
   double rubbingAzSpanDeg_ = -1.0; // > 0: 사용자가 끌어 정한 방위각 폭 (≤ 0: 폭 mm 로 환산)
+  RubbingPreset rubbingPreset_ = RubbingPreset::Standard;
+  RubbingProjMode rubbingProjMode_ = RubbingProjMode::Cylindrical;
+
+  // [JOB-015] 비파괴 미세 자세 조정용 작업 상태 보존 버퍼
+  bool hasSavedWork_ = false;
+  double savedFrontAngle_ = 0.0;
+  std::vector<SectionSlot> savedSlots_;
+  bool savedHasRubbingSpot_ = false;
+  RubbingRegion savedRubbingReg_{};
 
   // [JOB-014] 전개 탁본 캐시 — 범위·배율·확정 자세가 같으면 다시 계산하지 않는다
   struct RubbingCache {
     bool valid = false;
     RubbingRegion region;
     double pxPerMm = 0.0;
+    RubbingPreset preset = RubbingPreset::Standard;
+    RubbingProjMode projMode = RubbingProjMode::Cylindrical;
     size_t vertexCount = 0;
     KA::Point3 bboxMin{}, bboxMax{}, firstVertex{};
     UnrolledRubbing result;

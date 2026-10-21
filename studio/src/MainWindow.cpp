@@ -55,7 +55,8 @@ QFrame *vsep(QWidget *p) {
   return f;
 }
 const char *kShadeNames[] = {"음영: 실사", "음영: 깊이 음영",
-                             "음영: 디지털 탁본 (D-Tak)"};
+                             "음영: 디지털 탁본 (D-Tak)",
+                             "음영: X-Ray 투시 (투창·내부)"};
 // 리본 「단면 위치」 단추 글자 (D5 기본 / R 반전)
 QString sideText(SectionSide s) {
   return s == SectionSide::Right
@@ -843,6 +844,9 @@ bool MainWindow::openPath(const QString &path) {
     // 평면도·종단면도·외면 먹탁·문양 탁본이 완성된 화면을 첫 화면에 바로 보여준다.
     doc_.autoAlign();
     doc_.confirmPose();
+    // [JOB-015] 같은 폴더에 작업 이력(.darch)이 있으면 자동으로 복원
+    if (QFileInfo::exists(doc_.defaultHistoryPath()))
+      doc_.loadHistory();
   }
   QApplication::restoreOverrideCursor();
   if (!ok) {
@@ -1369,6 +1373,7 @@ void MainWindow::openExport(ExportFormat f) {
   ExportDialog dlg(doc_, slot_, opts_, f, this);
   if (dlg.exec() == QDialog::Accepted && !dlg.savedPath().isEmpty()) {
     dirtyExport_ = false;
+    doc_.saveHistory();
     refreshAll(false);
     setHint(QStringLiteral(
                 "저장했습니다: <span style='font-family:Consolas'>%1</span>")
@@ -1669,11 +1674,49 @@ void MainWindow::onAction(const QString &id) {
                                                               : ToolState::On);
     applyOptions();
   } else if (id == "shadeMode") {
-    opts_.shadeMode = ShadeMode((int(opts_.shadeMode) + 1) % 3);
+    opts_.shadeMode = ShadeMode((int(opts_.shadeMode) + 1) % 4);
     ribbon_->setText("shadeMode",
                      QString::fromUtf8(kShadeNames[int(opts_.shadeMode)]));
     ribbon_->setState("shade", ToolState::On);
     applyOptions();
+  } else if (id == "dtakPreset") {
+    const int next = (int(doc_.rubbingPreset()) + 1) % 5;
+    doc_.setRubbingPreset(RubbingPreset(next));
+    static const char *kPresetNames[] = {"기본 토기 문양", "인화문·집선문(세선)",
+                                         "와전·수막새·명문", "타날문·물손질(제작흔)",
+                                         "양각↔음각 반전"};
+    refreshAll(false);
+    setHint(QStringLiteral("◈ 디지털 탁본(D-Tak) 프리셋: %1")
+                .arg(QString::fromUtf8(kPresetNames[next])));
+  } else if (id == "dtakProjMode") {
+    const auto next = (doc_.rubbingProjMode() == RubbingProjMode::Cylindrical)
+                          ? RubbingProjMode::Planar
+                          : RubbingProjMode::Cylindrical;
+    doc_.setRubbingProjMode(next);
+    refreshAll(false);
+    setHint(next == RubbingProjMode::Planar
+                ? QStringLiteral("◈ 탁본 투영: 평면 정사영 1:1 (기와·막새·거울·문양전)")
+                : QStringLiteral("◈ 탁본 투영: 원통 전개 1:1 (토기·원통형 유물)"));
+  } else if (id == "rawPolyToggle") {
+    opts_.showRawPolyline = !opts_.showRawPolyline;
+    applyOptions();
+    setHint(opts_.showRawPolyline
+                ? QStringLiteral("원본 스캔 폴리라인(Polyline Origin)과 보정 곡선(Spline)을 겹쳐 비교합니다.")
+                : QStringLiteral("원본 스캔 폴리라인 겹쳐보기를 껐습니다."));
+  } else if (id == "auxSecToggle") {
+    opts_.showAuxSections = !opts_.showAuxSections;
+    applyOptions();
+    setHint(opts_.showAuxSections
+                ? QStringLiteral("다중 단면 슬롯(P0~P4: 수평 보조 단면 a–a′, b–b′)을 주 도판에 함께 표시합니다.")
+                : QStringLiteral("보조 단면 합성을 껐습니다."));
+  } else if (id == "plateTemplate") {
+    const int next = (int(opts_.plateTemplate) + 1) % 3;
+    opts_.plateTemplate = PlateTemplate(next);
+    applyOptions();
+    static const char *kTmplNames[] = {"토기·자기 표준형", "와전·막새·거울형",
+                                       "소형 유물 6면 정투영형"};
+    setHint(QStringLiteral("도판 배치 템플릿: %1")
+                .arg(QString::fromUtf8(kTmplNames[next])));
   } else if (id == "export") {
     openExport(ExportFormat::Pdf);
   } else if (id == "svg") {
@@ -1883,6 +1926,8 @@ void MainWindow::dropEvent(QDropEvent *e) {
 }
 
 void MainWindow::closeEvent(QCloseEvent *e) {
+  if (doc_.isLoaded() && !doc_.path().isEmpty())
+    doc_.saveHistory();
   QSettings().setValue("window/geometry", saveGeometry());
   e->accept();
 }

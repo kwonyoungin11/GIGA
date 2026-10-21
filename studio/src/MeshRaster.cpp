@@ -259,6 +259,8 @@ QImage renderMesh(const KA::MeshData &mesh, QSize size, const RasterView &v,
         n = {-n.x, -n.y, -n.z}; // 양면 조명
       const float shade =
           float(0.28 + 0.72 * std::max(0.0, n.x * L.x + n.y * L.y + n.z * L.z));
+      const float rimFactor = 1.0f - float(std::clamp(n.z, 0.0, 1.0));
+      const float xrayContrib = 0.08f + 0.62f * rimFactor * rimFactor;
 
       QRgb c0 = 0, c1 = 0, c2 = 0;
       if (useVCol) {
@@ -280,7 +282,11 @@ QImage renderMesh(const KA::MeshData &mesh, QSize size, const RasterView &v,
             continue;
           const float z = float((w0 * a.z + w1 * b.z + w2 * c.z) * invS);
           const size_t k = size_t(y) * W + x;
-          if (z > zb[k]) {
+          if (mode == ShadeMode::XRay) {
+            if (z > zb[k])
+              zb[k] = z;
+            lum[k] += xrayContrib;
+          } else if (z > zb[k]) {
             zb[k] = z;
             lum[k] = shade;
             if (useVCol) {
@@ -338,16 +344,21 @@ QImage renderMesh(const KA::MeshData &mesh, QSize size, const RasterView &v,
       for (size_t k = k0; k < k1; ++k) {
         float bestZ = -std::numeric_limits<float>::infinity();
         int bestT = -1;
+        float sumLum = 0.f;
         for (unsigned int t = 0; t < nThreads; ++t) {
           const float z = allThreadData[t].zb[k];
           if (z > bestZ) {
             bestZ = z;
             bestT = int(t);
           }
+          if (mode == ShadeMode::XRay)
+            sumLum += allThreadData[t].lum[k];
         }
         if (bestT >= 0) {
           finalZb[k] = bestZ;
-          finalLum[k] = allThreadData[size_t(bestT)].lum[k];
+          finalLum[k] = (mode == ShadeMode::XRay)
+                            ? sumLum
+                            : allThreadData[size_t(bestT)].lum[k];
           if (useVCol)
             finalCbBuf[k] = allThreadData[size_t(bestT)].cbBuf[k];
         } else {
@@ -498,6 +509,12 @@ QImage renderMesh(const KA::MeshData &mesh, QSize size, const RasterView &v,
           const float t = (z - zmin) / zr;
           const float g = 0.55f + 0.40f * t * (0.6f + 0.4f * finalLum[k]);
           c = QColor::fromRgbF(g * 0.98f, g * 0.97f, g * 0.93f);
+        } else if (mode == ShadeMode::XRay) {
+          // X-Ray 내부·투창 투시: 시선 기울기(Edge falloff)와 투과 면 수에 따라
+          // 기벽 윤곽·투창·속빈 내부 구조가 청회색 먹선 농담으로 투시됨
+          const float density = 1.0f - std::exp(-finalLum[k] * 0.95f);
+          const float g = std::clamp(0.96f - 0.80f * density, 0.08f, 0.96f);
+          c = QColor::fromRgbF(g * 0.93f, g * 0.96f, g);
         } else {
           // 고고학 정통 먹탁(디지털 탁본): 오목한 음각(인화문·침선, rel < 0)은 한지 백색(t -> 1),
           // 평면·볼록한 양각(돌대·기면, rel >= 0)은 짙은 먹색(t -> 0)으로 대비 표현

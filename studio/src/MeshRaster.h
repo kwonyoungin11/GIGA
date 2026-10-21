@@ -8,7 +8,7 @@
 
 namespace studio {
 
-enum class ShadeMode { Real, Depth, DTak };  // 실사(Artec 컬러/점토) / 깊이 음영 / 디지털 탁본
+enum class ShadeMode { Real, Depth, DTak, XRay };  // 실사(Artec 컬러/점토) / 깊이 음영 / 디지털 탁본 / X-Ray 내부·투창 투시
 
 struct RasterView {
     double yawDeg = 0.0;    // Z축 회전

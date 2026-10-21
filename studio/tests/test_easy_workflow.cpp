@@ -240,6 +240,7 @@ int main(int argc, char **argv) {
     CHECK(!plateImg.isNull() && plateImg.width() == 840 && plateImg.height() == 1188,
           "paintSheet with rubbing callout succeeded (%dx%d)",
           plateImg.width(), plateImg.height());
+    plateImg.save(outDir + QStringLiteral("/sheet_a4_rubbing.png"));
 
     // 4) [JOB-013] 위에서 본 유물 평면도(Plate::renderPlanView) 및 PlanViewWidget 검증
     const QImage planImg = Plate::renderPlanView(doc, 1.5);
@@ -297,6 +298,157 @@ int main(int argc, char **argv) {
             "drag box produced rubbing region hint: %s",
             hint ? qPrintable(hint->text()) : "<null>");
     }
+  }
+
+  // -------------------------------------------------------------------------
+  // [JOB-015] Arch3D Liner 초격차 6대 혁신 기능 검증 (AC-1 ~ AC-6)
+  // -------------------------------------------------------------------------
+  std::printf("\n--- [JOB-015] 6 Innovations Beyond Arch3D Liner (AC-1..AC-6) ---\n");
+  {
+    // [AC-1] 비파괴 실시간 미세 정렬(0.1°/1°/5°) & .darch 작업 이력 저장·복원
+    ArtifactDoc doc;
+    doc.loadSample(true);
+    doc.setFrontAngle(60.0);
+    doc.addHorizontalSlotAt(70.0);
+    doc.addHorizontalSlotAt(130.0);
+    const size_t slotsBefore = doc.slotList().size();
+    const RubbingRegion customReg{90.0, 80.0, 80.0, 140.0};
+    doc.setRubbingRegion(customReg);
+    doc.setRubbingPreset(RubbingPreset::FineStamp);
+
+    // 확정 상태에서 미세 각도(0.2°) 회전 후 재확정해도 기존 작업(각도·슬롯·탁본 범위·프리셋)이 날아가지 않아야 함
+    doc.rotatePose(PoseAxis::X, 0.2);
+    doc.confirmPose();
+    CHECK(std::fabs(doc.frontAngle() - 60.0) < 1e-6,
+          "AC1: non-destructive pose micro-rotation preserved frontAngle=%.1f",
+          doc.frontAngle());
+    CHECK(doc.slotList().size() == slotsBefore,
+          "AC1: non-destructive pose micro-rotation preserved %zu slots (got %zu)",
+          slotsBefore, doc.slotList().size());
+    CHECK(doc.hasRubbingSpot() &&
+              std::fabs(doc.rubbingRegion().azSpanDeg - 80.0) < 1e-6,
+          "AC1: non-destructive pose micro-rotation preserved rubbingRegion");
+    CHECK(doc.rubbingPreset() == RubbingPreset::FineStamp,
+          "AC1: non-destructive pose micro-rotation preserved rubbingPreset");
+
+    const QString darchPath = outDir + QStringLiteral("/test_job015.darch");
+    QFile::remove(darchPath);
+    CHECK(doc.saveHistory(darchPath) && QFileInfo::exists(darchPath),
+          "AC1: saveHistory(.darch) wrote sidecar file");
+
+    ArtifactDoc docRestored;
+    docRestored.loadSample(true);
+    CHECK(docRestored.loadHistory(darchPath),
+          "AC1: loadHistory(.darch) succeeded");
+    CHECK(std::fabs(docRestored.frontAngle() - 60.0) < 1e-6 &&
+              docRestored.slotList().size() == slotsBefore &&
+              docRestored.rubbingPreset() == RubbingPreset::FineStamp &&
+              std::fabs(docRestored.rubbingRegion().azCenterDeg - 90.0) < 1e-6,
+          "AC1: restored state matches saved frontAngle/slots/rubbingPreset/region");
+
+    // [AC-2] 다중 단면 슬롯(P0~P4) & 수평 보조 단면(a-a', b-b') 도판 합성
+    ExportRequest reqAux;
+    reqAux.title = QStringLiteral("AC2 다중 단면 P0~P4 합성 검증");
+    reqAux.paper = Paper::A4Portrait;
+    reqAux.scale = 1.0;
+    reqAux.opts.showAuxSections = true;
+    QImage auxImg(840, 1188, QImage::Format_ARGB32_Premultiplied);
+    auxImg.fill(Qt::white);
+    {
+      QPainter p(&auxImg);
+      paintSheet(p, doc, reqAux, 4.0);
+    }
+    CHECK(!auxImg.isNull(), "AC2: multi-section P0..P4 auxiliary sections painted");
+
+    // [AC-3] D-Tak 5종 프리셋 + 평면(Planar)/원통(Cylindrical) 탁본 전환 + X-Ray 투시 가시화
+    doc.setRubbingPreset(RubbingPreset::FineStamp);
+    const QImage imgFine = doc.unrolledRubbing(4.0).image.copy();
+    doc.setRubbingPreset(RubbingPreset::Inverted);
+    const QImage imgInv = doc.unrolledRubbing(4.0).image.copy();
+    CHECK(!imgFine.isNull() && !imgInv.isNull(),
+          "AC3: FineStamp and Inverted D-Tak presets rendered");
+    long long diffSum = 0;
+    const int wCmp = std::min(imgFine.width(), imgInv.width());
+    const int hCmp = std::min(imgFine.height(), imgInv.height());
+    for (int y = 0; y < hCmp; ++y) {
+      for (int x = 0; x < wCmp; ++x) {
+        diffSum += std::abs(qRed(imgFine.pixel(x, y)) - qRed(imgInv.pixel(x, y)));
+      }
+    }
+    CHECK(diffSum > 10000,
+          "AC3: Inverted preset produces distinct pixel contrast vs FineStamp (diffSum=%lld)",
+          diffSum);
+
+    doc.setRubbingPreset(RubbingPreset::RoofTile);
+    doc.setRubbingProjMode(RubbingProjMode::Planar);
+    const UnrolledRubbing planarRub = doc.unrolledRubbing(4.0);
+    CHECK(planarRub.ok() && planarRub.widthMm > 5.0 && planarRub.heightMm > 5.0,
+          "AC3: Planar 1:1 orthographic rubbing succeeded (%.1fx%.1f mm)",
+          planarRub.widthMm, planarRub.heightMm);
+    doc.setRubbingProjMode(RubbingProjMode::Cylindrical);
+    doc.setRubbingPreset(RubbingPreset::Standard);
+
+    const ShadeImage xrayShade = Plate::renderShade(doc, ShadeMode::XRay, 2.0);
+    CHECK(!xrayShade.isNull() && xrayShade.image.width() > 32,
+          "AC3: ShadeMode::XRay internal structure visualization succeeded (%dx%d)",
+          xrayShade.image.width(), xrayShade.image.height());
+
+    // [AC-4] Polyline Origin(원본 스캔 단면선) vs Spline Curve(보정 곡선) 겹쳐보기
+    doc.setSmooth(true);
+    doc.setSimplifyTol(1.0);
+    ExportRequest reqPoly;
+    reqPoly.title = QStringLiteral("AC4 원본 폴리라인 vs 보정 곡선 비교");
+    reqPoly.opts.showRawPolyline = true;
+    QImage polyImg(840, 1188, QImage::Format_ARGB32_Premultiplied);
+    polyImg.fill(Qt::white);
+    {
+      QPainter p(&polyImg);
+      paintSheet(p, doc, reqPoly, 4.0);
+    }
+    CHECK(!polyImg.isNull() && doc.maxDeviationMm() >= 0.0,
+          "AC4: Polyline Origin vs Spline Curve overlay rendered (maxDev=%.3f mm)",
+          doc.maxDeviationMm());
+
+    // [AC-5] 유물 유형별 스마트 도판 템플릿 3종 (토기·자기 표준형 / 와전·막새형 / 6면 정투영형)
+    for (PlateTemplate tmpl :
+         {PlateTemplate::VesselStandard, PlateTemplate::RoofTileCard,
+          PlateTemplate::SixViewOrtho}) {
+      ExportRequest reqTmpl;
+      reqTmpl.title = QStringLiteral("AC5 스마트 템플릿 검증");
+      reqTmpl.opts.plateTemplate = tmpl;
+      QImage tmplImg(840, 1188, QImage::Format_ARGB32_Premultiplied);
+      tmplImg.fill(Qt::white);
+      {
+        QPainter p(&tmplImg);
+        paintSheet(p, doc, reqTmpl, 4.0);
+      }
+      CHECK(!tmplImg.isNull() && tmplImg.width() == 840,
+            "AC5: PlateTemplate %d rendered cleanly", int(tmpl));
+    }
+
+    // [AC-6] Illustrator 무가공 호환 1:1 레이어 분리 SVG (bbox_1to1_mm + 독립 레이어 그룹)
+    const QString svgPath = outDir + QStringLiteral("/test_job015_layered.svg");
+    QFile::remove(svgPath);
+    ExportRequest reqSvg;
+    reqSvg.path = svgPath;
+    reqSvg.title = QStringLiteral("AC6 레이어 분리 SVG");
+    reqSvg.opts.shade = true;
+    reqSvg.opts.showRawPolyline = true;
+    QString svgErr;
+    CHECK(exportSvgLayered(doc, reqSvg, &svgErr),
+          "AC6: exportSvgLayered succeeded (%s)", qPrintable(svgErr));
+    QFile svgFile(svgPath);
+    QString svgText;
+    if (svgFile.open(QIODevice::ReadOnly))
+      svgText = QString::fromUtf8(svgFile.readAll());
+    CHECK(svgText.contains(QStringLiteral("id=\"bbox_1to1_mm\"")) &&
+              svgText.contains(QStringLiteral("id=\"layer_outline\"")) &&
+              svgText.contains(QStringLiteral("id=\"layer_section\"")) &&
+              svgText.contains(QStringLiteral("id=\"layer_shade\"")) &&
+              svgText.contains(QStringLiteral("id=\"layer_plan\"")) &&
+              svgText.contains(QStringLiteral("id=\"layer_rubbing\"")) &&
+              svgText.contains(QStringLiteral("id=\"layer_grid_scale\"")),
+          "AC6: SVG contains 1:1 bounding box and all separated Illustrator layers");
   }
 
   // -------------------------------------------------------------------------

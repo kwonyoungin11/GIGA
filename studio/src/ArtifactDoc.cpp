@@ -8,7 +8,12 @@
 #include "SyntheticMeshGen.h"
 #include "TaubinFit.h"
 
+#include <QDir>
+#include <QFile>
 #include <QFileInfo>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -941,6 +946,12 @@ void ArtifactDoc::loadMesh(KA::MeshData m, std::vector<QRgb> colors,
   pendingAligned_ = false;
   pendingNote_.clear();
   pendingRmse_ = 0.0;
+  hasSavedWork_ = false;
+  savedSlots_.clear();
+  savedHasRubbingSpot_ = false;
+  rubbingPreset_ = RubbingPreset::Standard;
+  rubbingProjMode_ = RubbingProjMode::Cylindrical;
+  poseConfirmed_ = false;
   unconfirm();
   centered_ = false;
   computeRimCircleFit();
@@ -1140,6 +1151,10 @@ void ArtifactDoc::resetPose() {
   lodBase_ = rawLod_;
   lodColors_ = rawLodColors_;
   floorPickPts_.clear();
+  hasSavedWork_ = false;
+  savedSlots_.clear();
+  savedHasRubbingSpot_ = false;
+  poseConfirmed_ = false;
   unconfirm();
   centered_ = false;
 }
@@ -1289,6 +1304,14 @@ QString ArtifactDoc::groundNote() const {
 }
 
 void ArtifactDoc::unconfirm() {
+  if (poseConfirmed_) {
+    hasSavedWork_ = true;
+    savedFrontAngle_ = frontAngle_;
+    savedSlots_ = slotList_;
+    savedHasRubbingSpot_ = hasRubbingSpot_;
+    if (hasRubbingSpot_)
+      savedRubbingReg_ = rubbingRegion();
+  }
   poseConfirmed_ = false;
   bvhMaster_.clear();
   slotList_.clear();
@@ -1345,7 +1368,7 @@ void ArtifactDoc::confirmPose() {
   }
   if (base_.bboxMin.z != 0.0)
     shiftBoth(0, 0, -base_.bboxMin.z); // 접지
-  frontAngle_ = 0.0;
+  frontAngle_ = hasSavedWork_ ? savedFrontAngle_ : 0.0;
   poseConfirmed_ = true;
   // Feature 2 & 5: Build compact linear BVH on immutable base_ (MeshMaster)
   bvhMaster_.build(base_);
@@ -1354,9 +1377,22 @@ void ArtifactDoc::confirmPose() {
   if (lodBase_.faces.empty()) {
     buildLodMesh(base_, baseColors_, lodBase_, lodColors_, 35000);
   }
-  resetSlots();
+  if (hasSavedWork_ && !savedSlots_.empty()) {
+    slotList_ = savedSlots_;
+    const double hMax = std::max(1.0, base_.bboxMax.z - base_.bboxMin.z);
+    for (auto &s : slotList_) {
+      if (s.kind == SlotKind::Horizontal)
+        s.z = std::clamp(s.z, 0.0, hMax);
+    }
+  } else {
+    resetSlots();
+  }
   recompute();
-  autoInitRubbingSpot();
+  if (hasSavedWork_ && savedHasRubbingSpot_) {
+    setRubbingRegion(savedRubbingReg_);
+  } else {
+    autoInitRubbingSpot();
+  }
 }
 
 void ArtifactDoc::autoAlign() {
@@ -3183,6 +3219,147 @@ void ArtifactDoc::setRubbingFullTurn() {
   setRubbingRegion(r);
 }
 
+void ArtifactDoc::setRubbingPreset(RubbingPreset p) {
+  if (rubbingPreset_ == p)
+    return;
+  rubbingPreset_ = p;
+  rubbingCache_.valid = false;
+}
+
+void ArtifactDoc::setRubbingProjMode(RubbingProjMode m) {
+  if (rubbingProjMode_ == m)
+    return;
+  rubbingProjMode_ = m;
+  rubbingCache_.valid = false;
+}
+
+QString ArtifactDoc::defaultHistoryPath() const {
+  if (path_.isEmpty())
+    return {};
+  const QFileInfo fi(path_);
+  return fi.dir().filePath(fi.completeBaseName() + QStringLiteral(".darch"));
+}
+
+bool ArtifactDoc::saveHistory(const QString &darchPath) const {
+  if (!isLoaded())
+    return false;
+  const QString outPath = darchPath.isEmpty() ? defaultHistoryPath() : darchPath;
+  if (outPath.isEmpty())
+    return false;
+  QJsonObject root;
+  root[QStringLiteral("format")] = QStringLiteral("DongArch3D.History.v1");
+  root[QStringLiteral("artifactName")] = name_;
+  root[QStringLiteral("frontAngle")] = frontAngle_;
+  root[QStringLiteral("sectionSide")] =
+      (side_ == SectionSide::Left) ? QStringLiteral("Left") : QStringLiteral("Right");
+  root[QStringLiteral("heightRef")] =
+      (heightRef_ == HeightRef::Rim) ? QStringLiteral("Rim") : QStringLiteral("Base");
+  root[QStringLiteral("simplifyTol")] = simplifyTol_;
+  root[QStringLiteral("smooth")] = smooth_;
+  root[QStringLiteral("inferInnerWall")] = inferInnerWall_;
+  root[QStringLiteral("estimatedWallMm")] = estimatedWallMm_;
+  root[QStringLiteral("rubbingPreset")] = int(rubbingPreset_);
+  root[QStringLiteral("rubbingProjMode")] = int(rubbingProjMode_);
+  root[QStringLiteral("hasRubbingSpot")] = hasRubbingSpot_;
+  if (hasRubbingSpot_) {
+    const RubbingRegion reg = rubbingRegion();
+    QJsonObject rObj;
+    rObj[QStringLiteral("azCenterDeg")] = reg.azCenterDeg;
+    rObj[QStringLiteral("azSpanDeg")] = reg.azSpanDeg;
+    rObj[QStringLiteral("zLo")] = reg.zLo;
+    rObj[QStringLiteral("zHi")] = reg.zHi;
+    root[QStringLiteral("rubbingRegion")] = rObj;
+  }
+  QJsonArray slotsArr;
+  for (const auto &s : slotList_) {
+    QJsonObject sObj;
+    sObj[QStringLiteral("name")] = s.name;
+    sObj[QStringLiteral("meta")] = s.meta;
+    sObj[QStringLiteral("note")] = s.note;
+    sObj[QStringLiteral("kind")] = int(s.kind);
+    sObj[QStringLiteral("angleDeg")] = s.angleDeg;
+    sObj[QStringLiteral("z")] = s.z;
+    slotsArr.append(sObj);
+  }
+  root[QStringLiteral("slots")] = slotsArr;
+
+  QFile f(outPath);
+  if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate))
+    return false;
+  f.write(QJsonDocument(root).toJson(QJsonDocument::Indented));
+  return true;
+}
+
+bool ArtifactDoc::loadHistory(const QString &darchPath) {
+  if (!isLoaded())
+    return false;
+  const QString inPath = darchPath.isEmpty() ? defaultHistoryPath() : darchPath;
+  if (inPath.isEmpty() || !QFileInfo::exists(inPath))
+    return false;
+  QFile f(inPath);
+  if (!f.open(QIODevice::ReadOnly))
+    return false;
+  const QJsonDocument doc = QJsonDocument::fromJson(f.readAll());
+  if (!doc.isObject())
+    return false;
+  const QJsonObject root = doc.object();
+  if (root[QStringLiteral("format")].toString() !=
+      QStringLiteral("DongArch3D.History.v1"))
+    return false;
+  if (!poseConfirmed_) {
+    autoAlign();
+    confirmPose();
+  }
+  side_ = (root[QStringLiteral("sectionSide")].toString() == QStringLiteral("Left"))
+              ? SectionSide::Left
+              : SectionSide::Right;
+  heightRef_ = (root[QStringLiteral("heightRef")].toString() == QStringLiteral("Rim"))
+                   ? HeightRef::Rim
+                   : HeightRef::Base;
+  simplifyTol_ = root[QStringLiteral("simplifyTol")].toDouble(simplifyTol_);
+  smooth_ = root[QStringLiteral("smooth")].toBool(smooth_);
+  inferInnerWall_ = root[QStringLiteral("inferInnerWall")].toBool(inferInnerWall_);
+  estimatedWallMm_ = root[QStringLiteral("estimatedWallMm")].toDouble(estimatedWallMm_);
+  rubbingPreset_ = RubbingPreset(
+      std::clamp(root[QStringLiteral("rubbingPreset")].toInt(0), 0, 4));
+  rubbingProjMode_ = RubbingProjMode(
+      std::clamp(root[QStringLiteral("rubbingProjMode")].toInt(0), 0, 1));
+
+  if (root.contains(QStringLiteral("slots")) &&
+      root[QStringLiteral("slots")].isArray()) {
+    const QJsonArray arr = root[QStringLiteral("slots")].toArray();
+    if (!arr.isEmpty()) {
+      slotList_.clear();
+      for (const auto &v : arr) {
+        if (!v.isObject())
+          continue;
+        const QJsonObject sObj = v.toObject();
+        SectionSlot s;
+        s.name = sObj[QStringLiteral("name")].toString();
+        s.meta = sObj[QStringLiteral("meta")].toString();
+        s.note = sObj[QStringLiteral("note")].toString();
+        s.kind = SlotKind(std::clamp(sObj[QStringLiteral("kind")].toInt(0), 0, 1));
+        s.angleDeg = sObj[QStringLiteral("angleDeg")].toDouble(0.0);
+        s.z = sObj[QStringLiteral("z")].toDouble(0.0);
+        slotList_.push_back(std::move(s));
+      }
+    }
+  }
+  setFrontAngle(root[QStringLiteral("frontAngle")].toDouble(0.0));
+  if (root[QStringLiteral("hasRubbingSpot")].toBool(false) &&
+      root[QStringLiteral("rubbingRegion")].isObject()) {
+    const QJsonObject rObj = root[QStringLiteral("rubbingRegion")].toObject();
+    RubbingRegion reg;
+    reg.azCenterDeg = rObj[QStringLiteral("azCenterDeg")].toDouble(0.0);
+    reg.azSpanDeg = rObj[QStringLiteral("azSpanDeg")].toDouble(40.0);
+    reg.zLo = rObj[QStringLiteral("zLo")].toDouble(0.0);
+    reg.zHi = rObj[QStringLiteral("zHi")].toDouble(40.0);
+    setRubbingRegion(reg);
+  }
+  rubbingCache_.valid = false;
+  return true;
+}
+
 const UnrolledRubbing &ArtifactDoc::unrolledRubbing(double pxPerMm) const {
   static const UnrolledRubbing kEmpty;
   if (!isLoaded() || !poseConfirmed_ || !hasRubbingSpot_)
@@ -3194,11 +3371,14 @@ const UnrolledRubbing &ArtifactDoc::unrolledRubbing(double pxPerMm) const {
   };
   const KA::Point3 v0 = base_.vertices.empty() ? KA::Point3{} : base_.vertices.front();
   if (c.valid && c.region == reg && c.pxPerMm == pxPerMm &&
+      c.preset == rubbingPreset_ && c.projMode == rubbingProjMode_ &&
       c.vertexCount == base_.vertices.size() && same(c.bboxMin, base_.bboxMin) &&
       same(c.bboxMax, base_.bboxMax) && same(c.firstVertex, v0))
     return c.result;
   RubbingParams p;
   p.pxPerMm = pxPerMm;
+  p.preset = rubbingPreset_;
+  p.projMode = rubbingProjMode_;
   p.maxSidePx = 6000; // 화면용 (저장은 saveRubbingPng 가 실제 dpi 로 다시 계산)
   const double rr = outerRadiusAt(0.5 * (reg.zLo + reg.zHi));
   p.fallbackRadiusMm = rr > 5.0 ? rr : 0.5 * d5_.belly;
@@ -3209,6 +3389,8 @@ const UnrolledRubbing &ArtifactDoc::unrolledRubbing(double pxPerMm) const {
   }
   c.region = reg;
   c.pxPerMm = pxPerMm;
+  c.preset = rubbingPreset_;
+  c.projMode = rubbingProjMode_;
   c.vertexCount = base_.vertices.size();
   c.bboxMin = base_.bboxMin;
   c.bboxMax = base_.bboxMax;

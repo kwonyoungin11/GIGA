@@ -1260,10 +1260,12 @@ View3DPane::View3DPane(QWidget *parent) : QWidget(parent) {
         poseRow1);
     lbl->setStyleSheet(QStringLiteral("font-size:10px;"));
     pr1->addWidget(lbl);
-    for (double deg : {-15.0, -5.0, -1.0, 1.0, 5.0, 15.0}) {
+    for (double deg : {-5.0, -1.0, -0.1, 0.1, 1.0, 5.0}) {
       const QString s =
-          deg > 0 ? QStringLiteral("+%1").arg(int(deg))
-                  : QStringLiteral("%1").arg(int(deg));
+          std::fabs(deg) < 0.5
+              ? (deg > 0 ? QStringLiteral("+0.1") : QStringLiteral("-0.1"))
+              : (deg > 0 ? QStringLiteral("+%1").arg(int(deg))
+                         : QStringLiteral("%1").arg(int(deg)));
       auto *b = makeMiniBtn(
           s, QStringLiteral("%1축 %2° 미세 회전").arg(axName, s), poseRow1);
       connect(b, &QPushButton::clicked, this,
@@ -1459,12 +1461,28 @@ View3DPane::View3DPane(QWidget *parent) : QWidget(parent) {
       QStringLiteral("지금 탁본을 실제 크기(600 dpi) PNG 로 저장합니다 — 인쇄하면 실물 크기"),
       pkRow2);
   btnRubSave->setObjectName("rubSave");
+  auto *btnPreset = makeMiniBtn(
+      QStringLiteral("🎨 문양 프리셋"),
+      QStringLiteral("인화문·집선문 / 와전·명문 / 타날문·제작흔 / 양·음각 반전 1클릭 전환"),
+      pkRow2);
+  btnPreset->setObjectName("dtakPreset");
+  auto *btnProj = makeMiniBtn(
+      QStringLiteral("📐 원통/평면"),
+      QStringLiteral("원통 전개(토기) ↔ 평면 정사영(기와·수막새·거울) 전환"),
+      pkRow2);
+  btnProj->setObjectName("dtakProjMode");
   connect(btnRubFull, &QPushButton::clicked, this,
           [this] { emit actionRequested(QStringLiteral("rubFullTurn")); });
   connect(btnRubSave, &QPushButton::clicked, this,
           [this] { emit actionRequested(QStringLiteral("rubSave")); });
+  connect(btnPreset, &QPushButton::clicked, this,
+          [this] { emit actionRequested(QStringLiteral("dtakPreset")); });
+  connect(btnProj, &QPushButton::clicked, this,
+          [this] { emit actionRequested(QStringLiteral("dtakProjMode")); });
   pk2->addWidget(btnRubFull);
   pk2->addWidget(btnRubSave);
+  pk2->addWidget(btnPreset);
+  pk2->addWidget(btnProj);
   pk2->addStretch();
   pkv->addWidget(pkRow2);
   pickBar_->hide();

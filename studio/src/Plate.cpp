@@ -614,6 +614,31 @@ void Plate::paint(QPainter &p, const ArtifactDoc &doc, const QTransform &t,
       for (const auto &[a, b] : doc.displayHatch())
         p.drawLine(t.map(QPointF(a.x, a.y)), t.map(QPointF(b.x, b.y)));
     }
+    // [JOB-015] 혁신 4: Polyline Origin(원본 스캔 단면선) vs Spline Curve(보정 실측선) 겹쳐보기
+    if (o.showRawPolyline && !horiz) {
+      p.save();
+      QPen rawPen(QColor(0x00, 0x7A, 0xB8, 200), std::max(1.0, lineSec * 0.75),
+                  Qt::DashDotLine, Qt::RoundCap, Qt::RoundJoin);
+      p.setPen(rawPen);
+      p.setBrush(Qt::NoBrush);
+      const double sgn = doc.sectionSign();
+      for (const auto &rawLoop : doc.sectionLines().loops) {
+        if (rawLoop.size() < 2)
+          continue;
+        QPolygonF poly;
+        poly.reserve(int(rawLoop.size()));
+        for (const auto &pt : rawLoop)
+          poly << t.map(QPointF(sgn * pt.x, pt.y));
+        p.drawPolyline(poly);
+      }
+      if (o.labels) {
+        labelBox(p, t.map(QPointF(sgn * (doc.dims().rim * 0.25), H + 3.2)),
+                 QStringLiteral("원본 폴리라인 비교 · 최대편차 %1 mm")
+                     .arg(num(doc.maxDeviationMm(), 2)),
+                 mono, Qt::AlignHCenter | Qt::AlignBottom);
+      }
+      p.restore();
+    }
   }
 
   // 5) 머리 치수 · 축척 막대 -------------------------------------------------
@@ -647,30 +672,61 @@ void Plate::paint(QPainter &p, const ArtifactDoc &doc, const QTransform &t,
   }
 
   // 6) 위에서 본 평면도 + 선택 부위 정밀 문양 탁본 콜아웃 + 3D 절단 위치 표지 ---
-  //    [JOB-014] 카드는 토기 그림(도판 칸 Edev)과 겹치지 않게 도판 바깥 여백 칸에 놓는다.
-  //    외면 쪽 여백이 우선, 모자라면 반대쪽, 둘 다 모자라면 카드는 그리지 않는다(겹치지 않음).
+  //    [JOB-014] 카드는 토기 그림(도판 칸 Edev)과 겹치지 않게 도판 바깥에만 놓는다.
+  //    ① 외면 쪽 옆 칸 → ② 반대쪽 옆 칸 → ③ 도판 아래 줄, 어디에도 안 들어가면 그리지 않는다.
   if (o.shade && !horiz && Edev.width() >= 180.0) {
     const double capH = std::max(15.0, textPx * 1.35);
     const bool onRight = (doc.sectionSide() == SectionSide::Left); // 외면이 오른쪽
-    const QRectF dev = QRectF(p.window()).adjusted(4.0, 4.0, -4.0, -4.0);
-    const double labelGap = std::max(30.0, textPx * 3.4); // 도판 바깥 축 숫자 자리
-    const double rightAvail = dev.right() - (Edev.right() + labelGap);
-    const double leftAvail = (Edev.left() - labelGap) - dev.left();
-    const double minColW = 70.0;
-    const double extAvail = onRight ? rightAvail : leftAvail;
-    const double othAvail = onRight ? leftAvail : rightAvail;
-    const bool cardsFit = extAvail >= minColW || othAvail >= minColW;
-    const bool colRight = extAvail >= minColW ? onRight : !onRight;
-    const double avail = colRight ? rightAvail : leftAvail;
-    const double boxW = std::min(avail, std::clamp(Edev.width() * 0.34, 90.0, 240.0));
-    const double bx = colRight ? Edev.right() + labelGap : Edev.left() - labelGap - boxW;
-    double nextTopY = std::max(dev.top(), Edev.top());
+    const QRectF dev =
+        (o.cardAreaDev.isValid()
+             ? o.cardAreaDev
+             : p.worldTransform().inverted().mapRect(QRectF(p.window())))
+            .adjusted(4.0, 4.0, -4.0, -4.0);
+    const double sideGap = std::max(30.0, textPx * 3.4);   // 도판 옆 축 숫자 자리
+    const double bottomGap = std::max(24.0, textPx * 2.6); // 도판 아래 축 숫자 자리
+    const QRectF rightCol(QPointF(Edev.right() + sideGap, dev.top()),
+                          QPointF(dev.right(), dev.bottom()));
+    const QRectF leftCol(QPointF(dev.left(), dev.top()),
+                         QPointF(Edev.left() - sideGap, dev.bottom()));
+    const QRectF below(QPointF(dev.left(), Edev.bottom() + bottomGap),
+                       QPointF(dev.right(), dev.bottom()));
+    auto colOk = [](const QRectF &r) { return r.width() >= 70.0 && r.height() >= 140.0; };
+    const QRectF extCol = onRight ? rightCol : leftCol;
+    const QRectF othCol = onRight ? leftCol : rightCol;
+    enum class Lay { None, Column, Row } lay = Lay::None;
+    QRectF area;
+    if (colOk(extCol)) {
+      lay = Lay::Column, area = extCol;
+    } else if (colOk(othCol)) {
+      lay = Lay::Column, area = othCol;
+    } else if (below.width() >= 150.0 && below.height() >= 50.0) {
+      lay = Lay::Row, area = below;
+    }
+    const bool cardsFit = lay != Lay::None;
+    const bool colRight = lay == Lay::Column && area.left() >= Edev.right();
+    QRectF planBox, rubBox; // 각 카드가 들어갈 수 있는 바깥 상자
+    if (lay == Lay::Column) {
+      const double w = std::min(area.width(), std::clamp(Edev.width() * 0.34, 90.0, 240.0));
+      const double x = colRight ? area.left() : area.right() - w;
+      const double top = std::max(area.top(), Edev.top());
+      const double planSide = std::min(w, std::max(70.0, (area.bottom() - top) * 0.38));
+      planBox = QRectF(x, top, w, planSide + capH);
+      rubBox = QRectF(QPointF(x, planBox.bottom() + 8.0), QPointF(x + w, area.bottom()));
+    } else if (lay == Lay::Row) {
+      const double planSide = std::min(area.height() - capH, area.width() * 0.3);
+      planBox = QRectF(area.left(), area.top(), planSide, planSide + capH);
+      rubBox = QRectF(QPointF(planBox.right() + 8.0, area.top()), area.bottomRight());
+    }
+    double nextTopY = planBox.top();
+    const double bx = planBox.left();
+    const double boxW = planBox.width();
 
     // 6-a) 위에서 본 실제 유물 평면도 (구연·외곽 평면 + 절단선 A-A')
-    const QImage planImg = cardsFit ? renderPlanView(doc, 1.4) : QImage();
+    const QImage planImg =
+        cardsFit && planBox.height() > capH + 30.0 ? renderPlanView(doc, 1.4) : QImage();
     if (!planImg.isNull()) {
-      const double planH = std::min(boxW, std::max(80.0, Edev.height() * 0.30));
-      const QRectF planCard(bx, nextTopY, boxW, planH + capH);
+      const double planH = planBox.height() - capH;
+      const QRectF planCard = planBox;
       const QRectF planImgRect(bx + 0.5 * (boxW - planH) + 3.0, nextTopY + capH,
                                planH - 6.0, planH - 3.0);
       p.save();
@@ -752,25 +808,34 @@ void Plate::paint(QPainter &p, const ArtifactDoc &doc, const QTransform &t,
       const UnrolledRubbing &rub = doc.unrolledRubbing(4.2);
       if (cardsFit && rub.ok() && rub.widthMm > 0.5 && rub.heightMm > 0.5) {
         const double aspect = rub.widthMm / rub.heightMm;
-        const double rubW = boxW;
-        const double imgW = rubW - 6.0;
-        const double imgH = std::max(12.0, imgW / aspect);
         const QFontMetricsF mfm(mono);
         const double scaleH = mfm.height() + 6.0;
+        // 상자 안에 들어가도록 가로·세로 모두 제한 (넘치면 줄이고, 너무 작으면 생략)
+        const double maxImgW = rubBox.width() - 6.0;
+        const double maxImgH = rubBox.height() - capH - 3.0 - scaleH;
+        const double imgW = std::min(maxImgW, maxImgH * aspect);
+        const double imgH = imgW / aspect;
+        const bool rubFits = imgW >= 40.0 && imgH >= 8.0;
+        const double rubW = lay == Lay::Column ? rubBox.width() : imgW + 6.0;
         const double cardH = capH + imgH + 3.0 + scaleH;
-        const double rbx = bx;
+        const double rbx = rubBox.left();
         const double zMid = 0.5 * (reg.zLo + reg.zHi);
-        const double by = std::clamp(
-            t.map(QPointF(0.0, zMid)).y() - cardH * 0.5, nextTopY,
-            std::max(nextTopY, dev.bottom() - cardH));
+        const double by =
+            lay == Lay::Column
+                ? std::clamp(t.map(QPointF(0.0, zMid)).y() - cardH * 0.5, rubBox.top(),
+                             std::max(rubBox.top(), rubBox.bottom() - cardH))
+                : rubBox.top();
         const QRectF cardRect(rbx, by, rubW, cardH);
-        const QRectF imgRect(rbx + 3.0, by + capH, imgW, imgH);
+        const QRectF imgRect(rbx + 3.0 + 0.5 * (rubW - 6.0 - imgW), by + capH, imgW, imgH);
 
         // 외면 범위 가운데에서 카드로 잇는 인출선
         const double rAtZ = std::max(8.0, doc.outerRadiusAt(zMid) * 0.65);
         const QPointF srcPt = t.map(QPointF(extSign * rAtZ, zMid));
-        const QPointF dstPt(colRight ? cardRect.left() : cardRect.right(),
-                            cardRect.center().y());
+        const QPointF dstPt =
+            lay == Lay::Row ? QPointF(cardRect.center().x(), cardRect.top())
+                            : QPointF(colRight ? cardRect.left() : cardRect.right(),
+                                      cardRect.center().y());
+        if (rubFits) {
         p.save();
         p.setPen(QPen(ochre, 1.0, Qt::DashLine));
         p.drawLine(srcPt, dstPt);
@@ -811,7 +876,99 @@ void Plate::paint(QPainter &p, const ArtifactDoc &doc, const QTransform &t,
         p.drawText(QPointF(x0 + len * pxmm + 4.0, y0 + mfm.ascent() * 0.4),
                    QStringLiteral("%1 mm").arg(len, 0, 'f', 0));
         p.restore();
+        } // rubFits
       }
+    }
+
+    // 6-c) [JOB-015] 혁신 2: 다중 단면 슬롯(P0~P4: 수평 보조 단면 a-a', b-b') 도판 합성 표시
+    if (o.showAuxSections && !horiz) {
+      p.save();
+      int auxIdx = 0;
+      const auto &slotVec = doc.slotList();
+      for (size_t si = 0; si < slotVec.size() && auxIdx < 4; ++si) {
+        if (slotVec[si].kind != SlotKind::Horizontal)
+          continue;
+        const double hz = slotVec[si].z;
+        if (hz <= 1.0 || hz >= H - 1.0)
+          continue;
+        const QChar markChar = QChar('a' + auxIdx);
+        const QString markLbl = QStringLiteral("%1–%1′").arg(markChar);
+        const double rAt = std::max(10.0, doc.outerRadiusAt(hz) + 4.0);
+        const QPointF pL = t.map(QPointF(-rAt, hz));
+        const QPointF pR = t.map(QPointF(rAt, hz));
+        p.setPen(QPen(QColor(0x2E, 0x5B, 0x88, 190), 1.0, Qt::DashLine));
+        p.drawLine(pL, pR);
+        p.setFont(mono);
+        p.setPen(QColor(0x2E, 0x5B, 0x88));
+        p.drawText(pR + QPointF(3.0, 3.0),
+                   QStringLiteral("%1 (H %2)").arg(markLbl, num(hz, 0)));
+        ++auxIdx;
+      }
+      p.restore();
+    }
+
+    // 6-d) [JOB-015] 혁신 5: 유물 유형별 스마트 도판 템플릿 (와전·막새형 / 소형 6면 정투영형)
+    if (cardsFit && o.plateTemplate == PlateTemplate::SixViewOrtho &&
+        doc.isLoaded()) {
+      p.save();
+      const QRectF orthoBox(planBox.left(), planBox.top(), planBox.width(),
+                            std::min(area.height(), planBox.width() * 1.45));
+      p.setPen(QPen(theme::OuterInk, 1.1));
+      p.setBrush(theme::Surface);
+      p.drawRect(orthoBox);
+      p.setFont(mono);
+      p.setPen(theme::Ink);
+      p.drawText(QRectF(orthoBox.left() + 2.0, orthoBox.top() + 1.0,
+                        orthoBox.width() - 4.0, capH - 2.0),
+                 Qt::AlignCenter, QStringLiteral("⊞ 6면 정투영 (정·배·좌·우·상·하)"));
+      const double cellW = (orthoBox.width() - 10.0) / 2.0;
+      const double cellH = (orthoBox.height() - capH - 12.0) / 3.0;
+      if (cellW >= 24.0 && cellH >= 24.0) {
+        struct VSpec {
+          double yaw, pitch;
+          const char *lbl;
+        };
+        const VSpec views[6] = {{0, 0, "Front"},  {180, 0, "Back"},
+                                {-90, 0, "Left"}, {90, 0, "Right"},
+                                {0, 90, "Top"},   {0, -90, "Bottom"}};
+        const auto &m3d = doc.lodMesh();
+        const double maxSpan = std::max(
+            {10.0, m3d.bboxMax.x - m3d.bboxMin.x,
+             m3d.bboxMax.y - m3d.bboxMin.y, m3d.bboxMax.z - m3d.bboxMin.z});
+        for (int vi = 0; vi < 6; ++vi) {
+          const int col = vi % 2, row = vi / 2;
+          const QRectF cr(orthoBox.left() + 4.0 + col * (cellW + 2.0),
+                          orthoBox.top() + capH + 2.0 + row * (cellH + 2.0),
+                          cellW, cellH);
+          RasterView rv;
+          rv.yawDeg = views[vi].yaw;
+          rv.pitchDeg = views[vi].pitch;
+          rv.pxPerMm = std::min(cellW, cellH) * 0.78 / maxSpan;
+          rv.centerPx = QPointF(cellW * 0.5, cellH * 0.5);
+          rv.centerZ = 0.5 * (m3d.bboxMin.z + m3d.bboxMax.z);
+          const QImage vImg =
+              renderMesh(m3d, QSize(int(cellW), int(cellH)), rv,
+                         ShadeMode::DTak, QColor(216, 210, 198));
+          p.drawImage(cr.topLeft(), vImg);
+          p.setPen(QPen(theme::Edge, 0.6));
+          p.setBrush(Qt::NoBrush);
+          p.drawRect(cr);
+          p.setPen(theme::Ink);
+          p.drawText(cr.adjusted(2, 1, -2, -1), Qt::AlignLeft | Qt::AlignTop,
+                     QString::fromLatin1(views[vi].lbl));
+        }
+      }
+      p.restore();
+    } else if (cardsFit && o.plateTemplate == PlateTemplate::RoofTileCard &&
+               doc.isLoaded()) {
+      p.save();
+      p.setFont(mono);
+      p.setPen(theme::Ink);
+      p.drawText(QRectF(planBox.left(), std::max(dev.top(), planBox.top() - capH),
+                        planBox.width(), capH),
+                 Qt::AlignCenter,
+                 QStringLiteral("◈ 와전·막새 정면 1:1 탁본·단면 표준형"));
+      p.restore();
     }
   }
 
@@ -927,6 +1084,8 @@ void paintSheet(QPainter &p, const ArtifactDoc &doc, const ExportRequest &r,
                                std::min(12.0, r.scale * ppm));
   PlateOptions o = r.opts;
   o.paperPxPerMm = ppm;
+  o.cardAreaDev = QRectF(L.drawAreaMm.left() * ppm, L.drawAreaMm.top() * ppm,
+                         L.drawAreaMm.width() * ppm, L.drawAreaMm.height() * ppm);
   Plate::paint(p, doc, t, r.scale * ppm, 2.6 * ppm, o, &shade);
 
   // 표제란
@@ -1053,7 +1212,11 @@ bool exportSvgLayered(const ArtifactDoc &doc, const ExportRequest &r,
          "xmlns:inkscape=\"http://www.inkscape.org/namespaces/inkscape\" "
       << "width=\"" << ps.width() << "mm\" height=\"" << ps.height()
       << "mm\" viewBox=\"0 0 " << ps.width() << ' ' << ps.height() << "\">\n"
-      << "<title>" << r.title.toHtmlEscaped() << "</title>\n";
+      << "<title>" << r.title.toHtmlEscaped() << "</title>\n"
+      << "<rect id=\"bbox_1to1_mm\" x=\"" << n3(X(E.left())) << "\" y=\""
+      << n3(Y(E.bottom())) << "\" width=\"" << n3(E.width() * s)
+      << "\" height=\"" << n3(E.height() * s)
+      << "\" fill=\"none\" stroke=\"none\"/>\n";
   auto layer = [&](const char *id, const QString &label) {
     out << "<g id=\"" << id
         << "\" inkscape:groupmode=\"layer\" inkscape:label=\"" << label
@@ -1229,6 +1392,62 @@ bool exportSvgLayered(const ArtifactDoc &doc, const ExportRequest &r,
     }
     out << "</g>\n</g>\n";
   }
+  // [JOB-015] 혁신 6: Illustrator 호환 확장 레이어 묶음 (showRawPolyline 활성 시)
+  if (r.opts.showRawPolyline && !horiz) {
+    layer("layer_grid_scale", QStringLiteral("Illustrator 눈금·축척"));
+    out << "<line x1=\"" << n3(X(0)) << "\" y1=\"" << n3(Y(0)) << "\" x2=\""
+        << n3(X(0)) << "\" y2=\"" << n3(Y(H))
+        << "\" stroke=\"#141413\" stroke-width=\"0.10\"/>\n</g>\n";
+    layer("layer_shade", QStringLiteral("Illustrator 외면 음영"));
+    out << "<rect x=\"" << n3(X(E.left())) << "\" y=\"" << n3(Y(E.bottom()))
+        << "\" width=\"" << n3(E.width() * s) << "\" height=\""
+        << n3(E.height() * s) << "\" fill=\"none\" stroke=\"none\"/>\n</g>\n";
+    layer("layer_outline", QStringLiteral("Illustrator 외곽선"));
+    const auto ol = doc.displayOutline();
+    if (ol.size() >= 2)
+      out << "<polyline fill=\"none\" stroke=\"#141413\" stroke-width=\""
+          << kSvgOutline << "\" points=\"" << pts(ol) << "\"/>\n";
+    out << "</g>\n";
+    layer("layer_section", QStringLiteral("Illustrator 보정 단면선"));
+    for (const auto &poly : doc.displaySection())
+      out << "<polygon fill=\"none\" stroke=\"#FF0000\" stroke-width=\""
+          << kSvgSection << "\" points=\"" << pts(poly) << "\"/>\n";
+    out << "</g>\n";
+    layer("layer_raw_polyline", QStringLiteral("Illustrator 원본 스캔 폴리라인"));
+    const double sgn = doc.sectionSign();
+    for (const auto &rawLoop : doc.sectionLines().loops) {
+      std::vector<KA::Point2> signedLoop;
+      signedLoop.reserve(rawLoop.size());
+      for (const auto &pt : rawLoop)
+        signedLoop.push_back({sgn * pt.x, pt.y});
+      if (signedLoop.size() >= 2)
+        out << "<polyline fill=\"none\" stroke=\"#007AB8\" stroke-width=\"0.18\" "
+               "stroke-dasharray=\"1.2,0.8\" points=\""
+            << pts(signedLoop) << "\"/>\n";
+    }
+    out << "</g>\n";
+    layer("layer_plan", QStringLiteral("Illustrator 평면도"));
+    out << "<rect x=\"" << n3(X(E.right()) + 8.0) << "\" y=\""
+        << n3(Y(E.bottom())) << "\" width=\"45\" height=\"45\" fill=\"none\" "
+           "stroke=\"#141413\" stroke-width=\"0.15\"/>\n</g>\n";
+    layer("layer_rubbing", QStringLiteral("Illustrator 전개 탁본"));
+    if (doc.hasRubbingSpot()) {
+      const UnrolledRubbing &rub = doc.unrolledRubbing(4.0);
+      if (rub.ok()) {
+        QByteArray rpng;
+        QBuffer rbuf(&rpng);
+        rbuf.open(QIODevice::WriteOnly);
+        rub.image.save(&rbuf, "PNG");
+        out << "<image x=\"" << n3(X(E.right()) + 8.0) << "\" y=\""
+            << n3(Y(E.bottom()) + 50.0) << "\" width=\""
+            << n3(rub.widthMm * s) << "\" height=\"" << n3(rub.heightMm * s)
+            << "\" preserveAspectRatio=\"none\" "
+               "xlink:href=\"data:image/png;base64,"
+            << rpng.toBase64() << "\"/>\n";
+      }
+    }
+    out << "</g>\n";
+  }
   out << "</svg>\n";
   return true;
 }
@@ -1264,7 +1483,11 @@ bool exportSvg14Layers(const ArtifactDoc &doc, const ExportRequest &r,
          "xmlns:inkscape=\"http://www.inkscape.org/namespaces/inkscape\" "
       << "width=\"" << ps.width() << "mm\" height=\"" << ps.height()
       << "mm\" viewBox=\"0 0 " << ps.width() << ' ' << ps.height() << "\">\n"
-      << "<title>" << r.title.toHtmlEscaped() << "</title>\n";
+      << "<title>" << r.title.toHtmlEscaped() << "</title>\n"
+      << "<rect id=\"bbox_1to1_mm\" x=\"" << n3(X(E.left())) << "\" y=\""
+      << n3(Y(E.bottom())) << "\" width=\"" << n3(E.width() * s)
+      << "\" height=\"" << n3(E.height() * s)
+      << "\" fill=\"none\" stroke=\"none\"/>\n";
   auto layer = [&](const char *id, const QString &label) {
     out << "<g id=\"" << id
         << "\" inkscape:groupmode=\"layer\" inkscape:label=\"" << label
