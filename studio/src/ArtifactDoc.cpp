@@ -3316,10 +3316,13 @@ bool ArtifactDoc::loadHistory(const QString &darchPath) {
   heightRef_ = (root[QStringLiteral("heightRef")].toString() == QStringLiteral("Rim"))
                    ? HeightRef::Rim
                    : HeightRef::Base;
-  simplifyTol_ = root[QStringLiteral("simplifyTol")].toDouble(simplifyTol_);
+  simplifyTol_ = std::clamp(
+      root[QStringLiteral("simplifyTol")].toDouble(simplifyTol_), 0.01, 20.0);
   smooth_ = root[QStringLiteral("smooth")].toBool(smooth_);
   inferInnerWall_ = root[QStringLiteral("inferInnerWall")].toBool(inferInnerWall_);
-  estimatedWallMm_ = root[QStringLiteral("estimatedWallMm")].toDouble(estimatedWallMm_);
+  estimatedWallMm_ = std::clamp(
+      root[QStringLiteral("estimatedWallMm")].toDouble(estimatedWallMm_), 0.5,
+      100.0);
   rubbingPreset_ = RubbingPreset(
       std::clamp(root[QStringLiteral("rubbingPreset")].toInt(0), 0, 4));
   rubbingProjMode_ = RubbingProjMode(
@@ -3330,6 +3333,7 @@ bool ArtifactDoc::loadHistory(const QString &darchPath) {
     const QJsonArray arr = root[QStringLiteral("slots")].toArray();
     if (!arr.isEmpty()) {
       slotList_.clear();
+      const double hMax = std::max(1.0, base_.bboxMax.z - base_.bboxMin.z);
       for (const auto &v : arr) {
         if (!v.isObject())
           continue;
@@ -3340,7 +3344,9 @@ bool ArtifactDoc::loadHistory(const QString &darchPath) {
         s.note = sObj[QStringLiteral("note")].toString();
         s.kind = SlotKind(std::clamp(sObj[QStringLiteral("kind")].toInt(0), 0, 1));
         s.angleDeg = sObj[QStringLiteral("angleDeg")].toDouble(0.0);
-        s.z = sObj[QStringLiteral("z")].toDouble(0.0);
+        s.z = (s.kind == SlotKind::Horizontal)
+                  ? std::clamp(sObj[QStringLiteral("z")].toDouble(0.0), 0.0, hMax)
+                  : sObj[QStringLiteral("z")].toDouble(0.0);
         slotList_.push_back(std::move(s));
       }
     }
@@ -3355,6 +3361,8 @@ bool ArtifactDoc::loadHistory(const QString &darchPath) {
     reg.zLo = rObj[QStringLiteral("zLo")].toDouble(0.0);
     reg.zHi = rObj[QStringLiteral("zHi")].toDouble(40.0);
     setRubbingRegion(reg);
+  } else {
+    hasRubbingSpot_ = false;
   }
   rubbingCache_.valid = false;
   return true;
