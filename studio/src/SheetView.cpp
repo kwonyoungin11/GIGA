@@ -50,10 +50,22 @@ void SheetCanvas::fitView() {
   if (!doc_ || !doc_->isLoaded() || !doc_->poseConfirmed() || width() < 50)
     return; // 확정 전에는 도판이 없다
   const QRectF E = Plate::extentMm(*doc_, opts_.slot);
+  QRectF F = E; // 화면 맞춤 영역
+  const auto &sl = doc_->slotList();
+  const bool vertical = opts_.slot < 0 || opts_.slot >= int(sl.size()) ||
+                        sl[size_t(opts_.slot)].kind == SlotKind::Vertical;
+  if (opts_.shade && vertical) {
+    // [JOB-014] 평면도·탁본 카드가 토기와 겹치지 않도록 외면 쪽 바깥에 여백 칸을 둔다
+    const double annexMm = 0.42 * E.width();
+    if (doc_->sectionSide() == SectionSide::Right)
+      F.setLeft(E.left() - annexMm);
+    else
+      F.setRight(E.right() + annexMm);
+  }
   const double mx = 64, my = 40;
-  ppm_ = std::max(0.2, std::min((width() - 2 * mx) / E.width(),
-                                (height() - 2 * my) / E.height()));
-  centerMm_ = E.center();
+  ppm_ = std::max(0.2, std::min((width() - 2 * mx) / F.width(),
+                                (height() - 2 * my) / F.height()));
+  centerMm_ = F.center();
   fitted_ = true;
   update();
 }

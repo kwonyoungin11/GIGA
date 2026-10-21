@@ -647,20 +647,32 @@ void Plate::paint(QPainter &p, const ArtifactDoc &doc, const QTransform &t,
   }
 
   // 6) 위에서 본 평면도 + 선택 부위 정밀 문양 탁본 콜아웃 + 3D 절단 위치 표지 ---
+  //    [JOB-014] 카드는 토기 그림(도판 칸 Edev)과 겹치지 않게 도판 바깥 여백 칸에 놓는다.
+  //    외면 쪽 여백이 우선, 모자라면 반대쪽, 둘 다 모자라면 카드는 그리지 않는다(겹치지 않음).
   if (o.shade && !horiz && Edev.width() >= 180.0) {
-    const double boxW = std::clamp(Edev.width() * 0.22, 74.0, 136.0);
     const double capH = std::max(15.0, textPx * 1.35);
-    const bool onRight = (doc.sectionSide() == SectionSide::Left);
-    const double bx =
-        onRight ? (Edev.right() - boxW - 8.0) : (Edev.left() + 8.0);
-    double nextTopY = Edev.top() + 26.0;
+    const bool onRight = (doc.sectionSide() == SectionSide::Left); // 외면이 오른쪽
+    const QRectF dev = QRectF(p.window()).adjusted(4.0, 4.0, -4.0, -4.0);
+    const double labelGap = std::max(30.0, textPx * 3.4); // 도판 바깥 축 숫자 자리
+    const double rightAvail = dev.right() - (Edev.right() + labelGap);
+    const double leftAvail = (Edev.left() - labelGap) - dev.left();
+    const double minColW = 70.0;
+    const double extAvail = onRight ? rightAvail : leftAvail;
+    const double othAvail = onRight ? leftAvail : rightAvail;
+    const bool cardsFit = extAvail >= minColW || othAvail >= minColW;
+    const bool colRight = extAvail >= minColW ? onRight : !onRight;
+    const double avail = colRight ? rightAvail : leftAvail;
+    const double boxW = std::min(avail, std::clamp(Edev.width() * 0.34, 90.0, 240.0));
+    const double bx = colRight ? Edev.right() + labelGap : Edev.left() - labelGap - boxW;
+    double nextTopY = std::max(dev.top(), Edev.top());
 
     // 6-a) 위에서 본 실제 유물 평면도 (구연·외곽 평면 + 절단선 A-A')
-    const QImage planImg = renderPlanView(doc, 1.4);
+    const QImage planImg = cardsFit ? renderPlanView(doc, 1.4) : QImage();
     if (!planImg.isNull()) {
-      const double planH = boxW;
+      const double planH = std::min(boxW, std::max(80.0, Edev.height() * 0.30));
       const QRectF planCard(bx, nextTopY, boxW, planH + capH);
-      const QRectF planImgRect(bx + 3.0, nextTopY + capH, boxW - 6.0, planH - 3.0);
+      const QRectF planImgRect(bx + 0.5 * (boxW - planH) + 3.0, nextTopY + capH,
+                               planH - 6.0, planH - 3.0);
       p.save();
       p.setPen(QPen(theme::OuterInk, 1.1));
       p.setBrush(theme::Surface);
@@ -738,27 +750,26 @@ void Plate::paint(QPainter &p, const ArtifactDoc &doc, const QTransform &t,
 
       // (b) 전개 탁본 카드 (가로 = 실제 호 길이, 세로 = 높이, mm 눈금)
       const UnrolledRubbing &rub = doc.unrolledRubbing(4.2);
-      if (rub.ok() && rub.widthMm > 0.5 && rub.heightMm > 0.5) {
+      if (cardsFit && rub.ok() && rub.widthMm > 0.5 && rub.heightMm > 0.5) {
         const double aspect = rub.widthMm / rub.heightMm;
-        const double maxW = std::max(boxW, Edev.width() * 0.62);
-        const double rubW = std::clamp(boxW * std::max(1.0, aspect / 1.3), boxW, maxW);
+        const double rubW = boxW;
         const double imgW = rubW - 6.0;
         const double imgH = std::max(12.0, imgW / aspect);
         const QFontMetricsF mfm(mono);
         const double scaleH = mfm.height() + 6.0;
         const double cardH = capH + imgH + 3.0 + scaleH;
-        const double rbx = onRight ? (Edev.right() - rubW - 8.0) : (Edev.left() + 8.0);
+        const double rbx = bx;
         const double zMid = 0.5 * (reg.zLo + reg.zHi);
         const double by = std::clamp(
             t.map(QPointF(0.0, zMid)).y() - cardH * 0.5, nextTopY,
-            std::max(nextTopY, Edev.bottom() - cardH - 24.0));
+            std::max(nextTopY, dev.bottom() - cardH));
         const QRectF cardRect(rbx, by, rubW, cardH);
         const QRectF imgRect(rbx + 3.0, by + capH, imgW, imgH);
 
         // 외면 범위 가운데에서 카드로 잇는 인출선
         const double rAtZ = std::max(8.0, doc.outerRadiusAt(zMid) * 0.65);
         const QPointF srcPt = t.map(QPointF(extSign * rAtZ, zMid));
-        const QPointF dstPt(onRight ? cardRect.left() : cardRect.right(),
+        const QPointF dstPt(colRight ? cardRect.left() : cardRect.right(),
                             cardRect.center().y());
         p.save();
         p.setPen(QPen(ochre, 1.0, Qt::DashLine));
