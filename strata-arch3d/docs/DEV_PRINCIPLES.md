@@ -1,7 +1,14 @@
 # STRATA · 동국유물실측 (DongArch3D) 시니어 엔지니어링 팀 개발 원칙 및 하네스 규약
 
 > **적용 범위**: `strata-arch3d` Rust 워크스페이스 전 크레이트 (`arch3d-core`, `arch3d-io`, `arch3d-orient`, `arch3d-measure`, `arch3d-section`, `arch3d-shade`, `arch3d-export`, `arch3d-studio`)
-> **기준 설계도**: `strata_dongarch3d_rust_master_design_spec.md` 및 `docs/ui/UI_RULES.md`, `STRATA · 디자인 기준 (6p PDF)`
+> **기준 설계도**: `strata_dongarch3d_rust_master_design_spec.md` (`DESIGN_SPEC.md`) 및 `docs/ui/UI_RULES.md`, `STRATA · 디자인 기준 (6p PDF)`
+> **필수 스킬 체계 (Superpowers Skills 상시 가동)**:
+> - `superpowers:using-superpowers` (`C:\Users\kyi25\.gemini\config\plugins\superpowers\skills\using-superpowers\SKILL.md`)
+> - `superpowers:using-git-worktrees` (격리된 워크트리 `D:\_dongarch_build\wt\.worktrees\STRATA-RUST` 및 브랜치 `feat/strata-arch3d-rust`)
+> - `superpowers:writing-plans` & `superpowers:executing-plans` & `superpowers:subagent-driven-development` (`.superpowers/sdd/strata-arch3d/progress.md` 원장 + `task.md` 체크리스트 실시간 기록)
+> - `superpowers:test-driven-development` (**Iron Law**: 실패하는 테스트(`RED`) 먼저 확인 후 최소 구현(`GREEN`) 및 `clippy -D warnings` 정돈(`REFACTOR`))
+> - `superpowers:requesting-code-review` & `superpowers:receiving-code-review` (독립 `research` 서브에이전트 `git diff` 감사 `X1~X4`)
+> - `superpowers:verification-before-completion` (**Iron Law**: 방금 실행한 검증 명령의 `exit 0` 증거 없이는 완료 주장 절대 금지)
 
 ---
 

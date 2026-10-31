@@ -85,3 +85,7 @@ factory/jobs/*/artifacts/
 # GigaMesh core 테스트용 소형 데이터는 예외로 추적 (GigaMesh/.gitignore 에도 예외 있음)
 !GigaMesh/testdata/*.obj
 !GigaMesh/testdata/*.ply
+
+strata-arch3d/target/
+.superpowers/
+
