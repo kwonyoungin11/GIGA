@@ -10,7 +10,9 @@ use arch3d_core::strata_tokens::{
         CTX_BAR_HEIGHT, RIBBON_HEIGHT, RIBBON_TILE_SIZE, SLOT_LIST_WIDTH, STATUS_BAR_HEIGHT,
         TAB_BAR_HEIGHT,
     },
-    tokens::{ACTION, EDGE, GROUND, INK, MUTED, WASH},
+    tokens::{
+        ACTION, CLAY_INK, CLAY_WASH, DESK, EDGE, GROUND, INK, LINE, MUTED, SURFACE, WASH,
+    },
 };
 use arch3d_core::{
     ArtifactCategory, BeadDrillType, BeadSubtype, HandleAttachmentKind, ScalePreset, SherdSubtype,
@@ -37,8 +39,9 @@ use eframe::egui;
 use harness_runner::{
     generate_screenshot_tour_and_golden_outputs, run_v1_to_v8_verification_harness,
 };
-use layout_r1::{R1FiveTierGeometry, WorkflowTab};
-use sheet_pane::render_sheet_pane_egui;
+use image::{Rgba, RgbaImage};
+use layout_r1::{draw_ribbon_tile_vector_icon, R1FiveTierGeometry, WorkflowTab};
+use sheet_pane::{render_sheet_pane_egui, SheetPaneState};
 use splash::SplashState;
 use std::path::{Path, PathBuf};
 use view3d_pane::{render_view3d_pane_egui, View3DPaneState};
@@ -59,6 +62,7 @@ struct ArtifactSlotEntry {
     recommended_best_angle_deg: f64,
     measurements: ArtifactMeasurementReport,
     vertical_section: PlaneSliceResult,
+    horizontal_section: PlaneSliceResult,
     occluded_spans: Vec<OccludedDashedSpan>,
     composed_plate: ComposedPlate2D,
 }
@@ -88,6 +92,17 @@ impl ArtifactSlotEntry {
             0.0,
             0.25,
         );
+        let default_top_z = mesh
+            .ap2_cut_offset_mm
+            .unwrap_or_else(|| (mesh.bbox.extents()[2] * 0.50).max(2.0));
+        let horizontal_section = slice_mesh_with_fixed_plane(
+            &mesh,
+            Some(&bvh),
+            CutPlaneOrientation::HorizontalTransverse,
+            recommended_best_angle_deg,
+            mesh.bbox.min[2] + default_top_z,
+            0.25,
+        );
         let occluded_spans = infer_occluded_dashed_spans(&vertical_section.polylines_2d, 1.5, 24.0);
         let sherd_strategy = measurements
             .sherd_circle_fit
@@ -97,7 +112,7 @@ impl ArtifactSlotEntry {
             title: &title_str,
             measurements: &measurements,
             vertical_section: &vertical_section,
-            horizontal_sections: &[],
+            horizontal_sections: std::slice::from_ref(&horizontal_section),
             occluded_spans: &occluded_spans,
             sherd_subtype,
             sherd_strategy,
@@ -123,18 +138,33 @@ impl ArtifactSlotEntry {
             recommended_best_angle_deg,
             measurements,
             vertical_section,
+            horizontal_section,
             occluded_spans,
             composed_plate,
         }
     }
 
-    fn rebuild_plate(&mut self, flip_exterior_right: bool, section_angle_deg: f64) {
+    fn rebuild_plate(
+        &mut self,
+        flip_exterior_right: bool,
+        section_angle_deg: f64,
+        cut_y_mm: f64,
+        top_cut_z_mm: f64,
+    ) {
         self.vertical_section = slice_mesh_with_fixed_plane(
             &self.mesh,
             Some(&self.bvh),
             CutPlaneOrientation::VerticalLongitudinal,
             section_angle_deg,
-            0.0,
+            cut_y_mm,
+            0.25,
+        );
+        self.horizontal_section = slice_mesh_with_fixed_plane(
+            &self.mesh,
+            Some(&self.bvh),
+            CutPlaneOrientation::HorizontalTransverse,
+            section_angle_deg,
+            self.mesh.bbox.min[2] + top_cut_z_mm,
             0.25,
         );
         self.occluded_spans =
@@ -149,7 +179,7 @@ impl ArtifactSlotEntry {
             title: &self.title,
             measurements: &self.measurements,
             vertical_section: &self.vertical_section,
-            horizontal_sections: &[],
+            horizontal_sections: std::slice::from_ref(&self.horizontal_section),
             occluded_spans: &self.occluded_spans,
             sherd_subtype: self.sherd_subtype,
             sherd_strategy,
@@ -171,6 +201,7 @@ pub struct StrataStudioApp {
     slots: Vec<ArtifactSlotEntry>,
     selected_slot_idx: usize,
     view3d_state: View3DPaneState,
+    sheet_state: SheetPaneState,
     rubbing_params: RubbingRenderParams,
     flip_exterior_right: bool,
     sheet_full_tab_mode: bool,
@@ -178,27 +209,47 @@ pub struct StrataStudioApp {
     pose_locked: bool,
     active_dialog: Option<ActiveStrataDialog>,
     status_message: String,
+    capture_window_path: Option<PathBuf>,
+    capture_frames_rendered: u32,
+    screenshot_requested: bool,
 }
 
 impl StrataStudioApp {
-    pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+    pub fn new(
+        cc: &eframe::CreationContext<'_>,
+        capture_window_path: Option<PathBuf>,
+        initial_tab: Option<WorkflowTab>,
+        initial_slot: Option<usize>,
+    ) -> Self {
         configure_korean_fonts_and_strata_theme(&cc.egui_ctx);
 
         let mut slots = Vec::new();
         let p_7obj = Path::new(r"E:\034(7-실4-4)\7지구 9호-7.obj");
-        let p_7ap2 = Path::new(r"E:\034(7-실4-4)\7지구 9호-7.ap2");
-        if p_7obj.exists() && p_7ap2.exists() {
-            if let (Ok(m), Ok(ap2)) = (load_any_mesh(p_7obj), Ap2Project::load_from_file(p_7ap2))
-            {
-                let aligned = m.transformed(&ap2.transform_matrix);
+        if p_7obj.exists() {
+            if let Ok(aligned) = load_any_mesh(p_7obj) {
                 slots.push(ArtifactSlotEntry::from_mesh(
-                    "7지구 9호-7 (완형 대접)",
+                    "7지구 9호-7 (완형 세트)",
                     Some(p_7obj.to_path_buf()),
                     ArtifactCategory::CompleteVessel,
                     None,
                     None,
                     None,
                     aligned,
+                ));
+            }
+        }
+
+        let p_1obj = Path::new(r"E:\1\1.obj");
+        if p_1obj.exists() {
+            if let Ok(m1) = load_any_mesh(p_1obj) {
+                slots.push(ArtifactSlotEntry::from_mesh(
+                    "1.obj (편조각·용기 세트)",
+                    Some(p_1obj.to_path_buf()),
+                    ArtifactCategory::Potsherd,
+                    Some(SherdSubtype::RimSherd),
+                    None,
+                    None,
+                    m1,
                 ));
             }
         }
@@ -249,13 +300,23 @@ impl StrataStudioApp {
             96.0,
         ));
 
+        let mut splash = SplashState::default();
+        if capture_window_path.is_some() {
+            splash.elapsed_sec = splash.duration_sec;
+        }
+
+        let selected_slot_idx = initial_slot
+            .unwrap_or(0)
+            .min(slots.len().saturating_sub(1));
+
         Self {
-            splash: SplashState::default(),
-            active_tab: WorkflowTab::Step1LoadAndClassify,
+            splash,
+            active_tab: initial_tab.unwrap_or(WorkflowTab::Step1LoadAndClassify),
             active_tile_code: "OPEN",
             slots,
-            selected_slot_idx: 0,
+            selected_slot_idx,
             view3d_state: View3DPaneState::default(),
+            sheet_state: SheetPaneState::default(),
             rubbing_params: RubbingRenderParams::default(),
             flip_exterior_right: false,
             sheet_full_tab_mode: false,
@@ -265,6 +326,9 @@ impl StrataStudioApp {
             status_message: String::from(
                 "준비 완료 · 1mm = 5.0px 정밀 스케일 잠금 · R(좌우반전) / Tab(100% 도판 확대)",
             ),
+            capture_window_path,
+            capture_frames_rendered: 0,
+            screenshot_requested: false,
         }
     }
 
@@ -350,6 +414,37 @@ impl StrataStudioApp {
                     }
                 }
             }
+            "AP2" | "AP2_SYNC" => {
+                if let Some(ap2_path) = rfd::FileDialog::new()
+                    .add_filter("Arch3D Liner 프로젝트 (.ap2)", &["ap2"])
+                    .pick_file()
+                {
+                    match Ap2Project::load_from_file(&ap2_path) {
+                        Ok(ap2) => {
+                            if let Some(slot) = self.slots.get_mut(self.selected_slot_idx) {
+                                slot.mesh = slot.mesh.transformed(&ap2.transform_matrix);
+                                slot.mesh.ap2_cut_offset_mm = Some(ap2.rc.plane_positions[0]);
+                                self.view3d_state.top_cut_z_mm = ap2.rc.plane_positions[0];
+                                slot.rebuild_plate(
+                                    self.flip_exterior_right,
+                                    self.view3d_state.active_section_angle_deg,
+                                    self.view3d_state.cut_y_mm,
+                                    self.view3d_state.top_cut_z_mm,
+                                );
+                                self.status_message = format!(
+                                    ".ap2 정위치 행렬 및 절단면({:.1}mm) 연동 완료: {}",
+                                    ap2.rc.plane_positions[0],
+                                    ap2_path.display()
+                                );
+                            }
+                        }
+                        Err(err) => {
+                            self.active_dialog =
+                                Some(ActiveStrataDialog::Error3Part(err.to_three_part()));
+                        }
+                    }
+                }
+            }
             "CAT_VESSEL" => self.set_current_category(ArtifactCategory::CompleteVessel),
             "CAT_SHERD" => self.set_current_category(ArtifactCategory::Potsherd),
             "CAT_BEAD" => self.set_current_category(ArtifactCategory::BeadJade),
@@ -362,7 +457,12 @@ impl StrataStudioApp {
                 if let Some(slot) = self.slots.get_mut(self.selected_slot_idx) {
                     let best = slot.recommended_best_angle_deg;
                     self.view3d_state.active_section_angle_deg = best;
-                    slot.rebuild_plate(self.flip_exterior_right, best);
+                    slot.rebuild_plate(
+                        self.flip_exterior_right,
+                        best,
+                        self.view3d_state.cut_y_mm,
+                        self.view3d_state.top_cut_z_mm,
+                    );
                 }
             }
             "BEAD_BORE" => {
@@ -370,7 +470,44 @@ impl StrataStudioApp {
             }
             "LOCK_POSE" => {
                 self.pose_locked = true;
-                self.status_message = String::from("정위 및 수직 단면각 확정 완료 [단면확정 ✓]");
+                self.status_message = String::from("정위 및 수직 단면각 확정 완료 [단면확정 ●]");
+            }
+            "FIT_AXIS" => {
+                self.view3d_state.tilt_deg = 0.0;
+                self.status_message = String::from("3D 수직 회전축 자동 정합 완료 (기울기 0.0°)");
+            }
+            "SLICE_V" => {
+                self.view3d_state.cutaway_open = !self.view3d_state.cutaway_open;
+                self.status_message = format!(
+                    "전방 좌측 1/4 절개 단면: {}",
+                    if self.view3d_state.cutaway_open { "ON" } else { "OFF" }
+                );
+            }
+            "SLICE_H" => {
+                if let Some(slot) = self.slots.get_mut(self.selected_slot_idx) {
+                    let z = slot
+                        .mesh
+                        .ap2_cut_offset_mm
+                        .unwrap_or(self.view3d_state.top_cut_z_mm);
+                    self.view3d_state.top_cut_z_mm = z;
+                    slot.rebuild_plate(
+                        self.flip_exterior_right,
+                        self.view3d_state.active_section_angle_deg,
+                        self.view3d_state.cut_y_mm,
+                        z,
+                    );
+                    self.status_message = format!("수평 횡단면(Top Cut Z = {z:.1}mm) 갱신 완료");
+                }
+            }
+            "RUB_HAND" => {
+                self.view3d_state.shader_mode = view3d_pane::View3DShaderMode::RealTimeRubbing;
+                self.rubbing_params.algorithm = arch3d_shade::RubbingAlgorithm::NormalGradientHandprint;
+                self.status_message = String::from("한지 먹물 정밀 탁본 모드 활성화");
+            }
+            "RUB_MSII" => {
+                self.view3d_state.shader_mode = view3d_pane::View3DShaderMode::RealTimeRubbing;
+                self.rubbing_params.algorithm = arch3d_shade::RubbingAlgorithm::Msii16Scale;
+                self.status_message = String::from("16-스케일 다중곡률 정밀 탁본 모드 활성화");
             }
             "FLIP_R" => {
                 self.flip_exterior_right = !self.flip_exterior_right;
@@ -378,6 +515,8 @@ impl StrataStudioApp {
                     slot.rebuild_plate(
                         self.flip_exterior_right,
                         self.view3d_state.active_section_angle_deg,
+                        self.view3d_state.cut_y_mm,
+                        self.view3d_state.top_cut_z_mm,
                     );
                 }
             }
@@ -449,6 +588,8 @@ impl StrataStudioApp {
             slot.rebuild_plate(
                 self.flip_exterior_right,
                 self.view3d_state.active_section_angle_deg,
+                self.view3d_state.cut_y_mm,
+                self.view3d_state.top_cut_z_mm,
             );
         }
     }
@@ -465,6 +606,35 @@ const ALL_CATEGORIES: [ArtifactCategory; 6] = [
 
 impl eframe::App for StrataStudioApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // 실제 실행 창 스왑체인 스크린샷 캡처 이벤트 처리 (`--capture-window`)
+        if let Some(ref out_path) = self.capture_window_path.clone() {
+            let mut captured_image = None;
+            ctx.input(|i| {
+                for ev in &i.events {
+                    if let egui::Event::Screenshot { image, .. } = ev {
+                        captured_image = Some(image.clone());
+                    }
+                }
+            });
+            if let Some(color_img) = captured_image {
+                let w = color_img.width() as u32;
+                let h = color_img.height() as u32;
+                let mut rgba = RgbaImage::new(w, h);
+                for y in 0..h {
+                    for x in 0..w {
+                        let px = color_img[(x as usize, y as usize)];
+                        rgba.put_pixel(x, y, Rgba([px.r(), px.g(), px.b(), px.a()]));
+                    }
+                }
+                if let Some(parent) = out_path.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                let _ = rgba.save(out_path);
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                return;
+            }
+        }
+
         if !self.splash.is_finished() {
             let dt = ctx.input(|i| i.stable_dt).clamp(0.005, 0.1);
             self.splash.show_egui(ctx, dt);
@@ -480,6 +650,8 @@ impl eframe::App for StrataStudioApp {
                 slot.rebuild_plate(
                     self.flip_exterior_right,
                     self.view3d_state.active_section_angle_deg,
+                    self.view3d_state.cut_y_mm,
+                    self.view3d_state.top_cut_z_mm,
                 );
             }
         }
@@ -488,106 +660,186 @@ impl eframe::App for StrataStudioApp {
 
         let wash = egui::Color32::from_rgb(WASH.rgb[0], WASH.rgb[1], WASH.rgb[2]);
         let hanji = egui::Color32::from_rgb(GROUND.rgb[0], GROUND.rgb[1], GROUND.rgb[2]);
+        let surface = egui::Color32::from_rgb(SURFACE.rgb[0], SURFACE.rgb[1], SURFACE.rgb[2]);
+        let desk = egui::Color32::from_rgb(DESK.rgb[0], DESK.rgb[1], DESK.rgb[2]);
+        let clay_wash = egui::Color32::from_rgb(CLAY_WASH.rgb[0], CLAY_WASH.rgb[1], CLAY_WASH.rgb[2]);
+        let clay_ink = egui::Color32::from_rgb(CLAY_INK.rgb[0], CLAY_INK.rgb[1], CLAY_INK.rgb[2]);
+        let line_col = egui::Color32::from_rgb(LINE.rgb[0], LINE.rgb[1], LINE.rgb[2]);
+        let edge_col = egui::Color32::from_rgb(EDGE.rgb[0], EDGE.rgb[1], EDGE.rgb[2]);
         let ink = egui::Color32::from_rgb(INK.rgb[0], INK.rgb[1], INK.rgb[2]);
         let muted = egui::Color32::from_rgb(MUTED.rgb[0], MUTED.rgb[1], MUTED.rgb[2]);
         let terra = egui::Color32::from_rgb(ACTION.rgb[0], ACTION.rgb[1], ACTION.rgb[2]);
 
         let tile_sz = RIBBON_TILE_SIZE as f32;
 
-        // Tier 1: TabBar (34px 고정)
+        // Tier 1: TabBar (34px 고정, #FFFFFF Surface)
         egui::TopBottomPanel::top("tier1_tab_bar")
             .exact_height(TAB_BAR_HEIGHT as f32)
             .frame(
                 egui::Frame::NONE
-                    .fill(wash)
+                    .fill(surface)
                     .inner_margin(egui::Margin::symmetric(12, 4)),
             )
             .show(ctx, |ui| {
                 ui.horizontal_centered(|ui| {
-                    ui.colored_label(ink, "STRATA · 동국유물실측");
+                    ui.colored_label(ink, "◆ 동국유물실측 · STRATA");
                     ui.separator();
                     for tab in WorkflowTab::ALL {
                         let is_active = self.active_tab == tab;
                         let btn = egui::Button::new(
                             egui::RichText::new(tab.label_kr())
+                                .size(13.0)
                                 .color(if is_active { hanji } else { ink }),
                         )
-                        .fill(if is_active { ink } else { wash });
+                        .fill(if is_active { ink } else { wash })
+                        .corner_radius(5.0);
                         if ui.add(btn).clicked() {
                             self.active_tab = tab;
                         }
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         let badge = if self.pose_locked {
-                            "[단면확정 ✓]"
+                            "● 정위치 · 절단틀 확정됨"
                         } else {
-                            "[정위조정 중]"
+                            "▲ 자세 미세조정 중"
                         };
                         ui.colored_label(terra, badge);
                     });
                 });
             });
 
-        // Tier 2: TileRibbon (98px 고정, 50×50 타일)
+        // Tier 2: TileRibbon (98px 고정, 50×50 벡터 아이콘 타일 + 그룹 구분선 + 하단 묶음 이름)
         egui::TopBottomPanel::top("tier2_tile_ribbon")
             .exact_height(RIBBON_HEIGHT as f32)
             .frame(
                 egui::Frame::NONE
-                    .fill(hanji)
-                    .inner_margin(egui::Margin::symmetric(12, 8)),
+                    .fill(surface)
+                    .stroke(egui::Stroke::new(1.0_f32, line_col))
+                    .inner_margin(egui::Margin::symmetric(14, 6)),
             )
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
+                    let tiles = self.active_tab.ribbon_tiles();
                     let mut clicked_code = None;
-                    for tile in self.active_tab.ribbon_tiles() {
-                        let is_active = self.active_tile_code == tile.code;
-                        let (rect, resp) = ui.allocate_exact_size(
-                            egui::vec2(tile_sz + 18.0, tile_sz + 24.0),
-                            egui::Sense::click(),
-                        );
-                        if resp.clicked() {
-                            clicked_code = Some(tile.code);
+                    let mut idx = 0usize;
+
+                    while idx < tiles.len() {
+                        let grp_name = tiles[idx].group_title;
+                        let start_idx = idx;
+                        while idx < tiles.len() && tiles[idx].group_title == grp_name {
+                            idx += 1;
                         }
-                        let p = ui.painter_at(rect);
-                        let tile_box = egui::Rect::from_min_size(
-                            egui::pos2(rect.center().x - tile_sz * 0.5, rect.top()),
-                            egui::vec2(tile_sz, tile_sz),
+                        let grp_slice = &tiles[start_idx..idx];
+                        let cell_w = tile_sz + 18.0;
+                        let grp_w = (grp_slice.len() as f32) * cell_w;
+
+                        let (grp_rect, _) = ui.allocate_exact_size(
+                            egui::vec2(grp_w, 84.0),
+                            egui::Sense::hover(),
                         );
-                        p.rect_filled(tile_box, 4.0, if is_active { ink } else { wash });
-                        if is_active {
-                            let bottom_bar = egui::Rect::from_min_size(
-                                egui::pos2(tile_box.left(), tile_box.bottom() - 2.0),
-                                egui::vec2(tile_sz, 2.0),
+
+                        for (local_i, tile) in grp_slice.iter().enumerate() {
+                            let cell_left = grp_rect.left() + (local_i as f32) * cell_w;
+                            let cell_rect = egui::Rect::from_min_size(
+                                egui::pos2(cell_left, grp_rect.top()),
+                                egui::vec2(cell_w, 68.0),
                             );
-                            p.rect_filled(bottom_bar, 0.0, terra);
+                            let resp = ui.interact(
+                                cell_rect,
+                                egui::Id::new(("ribbon_tile", tile.code)),
+                                egui::Sense::click(),
+                            );
+                            if resp.clicked() {
+                                clicked_code = Some(tile.code);
+                            }
+
+                            let is_active = self.active_tile_code == tile.code;
+                            let is_hovered = resp.hovered();
+                            let p = ui.painter_at(grp_rect);
+
+                            let tile_box = egui::Rect::from_min_size(
+                                egui::pos2(cell_rect.center().x - tile_sz * 0.5, grp_rect.top()),
+                                egui::vec2(tile_sz, tile_sz),
+                            );
+
+                            let (bg_col, border_col, icon_primary, icon_accent) =
+                                if tile.is_primary_action {
+                                    (terra, terra, hanji, hanji)
+                                } else if is_active {
+                                    (clay_wash, terra, clay_ink, terra)
+                                } else if is_hovered {
+                                    (wash, edge_col, ink, terra)
+                                } else {
+                                    (desk, line_col, ink, terra)
+                                };
+
+                            p.rect_filled(tile_box, 10.0, bg_col);
+                            p.rect_stroke(
+                                tile_box,
+                                10.0,
+                                egui::Stroke::new(1.0_f32, border_col),
+                                egui::StrokeKind::Inside,
+                            );
+
+                            // 50×50 타일 내부 1.75px 전용 벡터 아이콘 렌더링
+                            draw_ribbon_tile_vector_icon(
+                                &p,
+                                tile_box,
+                                tile.icon_kind,
+                                icon_primary,
+                                icon_accent,
+                            );
+
+                            // 타일 이름 (13px / 12px 고딕)
+                            p.text(
+                                egui::pos2(cell_rect.center().x, tile_box.bottom() + 2.5),
+                                egui::Align2::CENTER_TOP,
+                                tile.label_kr,
+                                egui::FontId::proportional(11.5),
+                                if is_active { clay_ink } else { ink },
+                            );
                         }
-                        p.text(
-                            tile_box.center(),
-                            egui::Align2::CENTER_CENTER,
-                            tile.shortcut,
-                            egui::FontId::monospace(11.0),
-                            if is_active { hanji } else { ink },
-                        );
-                        p.text(
-                            egui::pos2(rect.center().x, tile_box.bottom() + 4.0),
+
+                        // 그룹 하단 묶음 이름 (11px Muted #5E5D59)
+                        let grp_painter = ui.painter_at(grp_rect);
+                        grp_painter.text(
+                            egui::pos2(grp_rect.center().x, grp_rect.bottom() - 12.0),
                             egui::Align2::CENTER_TOP,
-                            tile.label_kr,
-                            egui::FontId::proportional(11.0),
-                            ink,
+                            grp_name,
+                            egui::FontId::proportional(10.5),
+                            muted,
                         );
+
+                        // 그룹 사이 1px #DEDCD1 세로 구분선
+                        if idx < tiles.len() {
+                            let (sep_rect, _) = ui.allocate_exact_size(
+                                egui::vec2(12.0, 82.0),
+                                egui::Sense::hover(),
+                            );
+                            let sp = ui.painter_at(sep_rect);
+                            sp.line_segment(
+                                [
+                                    egui::pos2(sep_rect.center().x, sep_rect.top() + 4.0),
+                                    egui::pos2(sep_rect.center().x, sep_rect.bottom() - 4.0),
+                                ],
+                                egui::Stroke::new(1.0_f32, line_col),
+                            );
+                        }
                     }
+
                     if let Some(code) = clicked_code {
                         self.handle_tile_click(code);
                     }
                 });
             });
 
-        // Tier 3: ctxBar (36px 고정)
+        // Tier 3: ctxBar (36px 고정, #F5F4ED Wash)
         egui::TopBottomPanel::top("tier3_ctx_bar")
             .exact_height(CTX_BAR_HEIGHT as f32)
             .frame(
                 egui::Frame::NONE
                     .fill(wash)
+                    .stroke(egui::Stroke::new(1.0_f32, line_col))
                     .inner_margin(egui::Margin::symmetric(12, 4)),
             )
             .show(ctx, |ui| {
@@ -622,19 +874,23 @@ impl eframe::App for StrataStudioApp {
                             slot.rebuild_plate(
                                 self.flip_exterior_right,
                                 self.view3d_state.active_section_angle_deg,
+                                self.view3d_state.cut_y_mm,
+                                self.view3d_state.top_cut_z_mm,
                             );
                         }
                     }
                     ui.checkbox(&mut self.sheet_full_tab_mode, "Tab 100% 도판 확대");
+                    ui.checkbox(&mut self.show_mm_grid, "방안 눈금");
                 });
             });
 
-        // Tier 5: StatusBar (30px 고정)
+        // Tier 5: StatusBar (30px 고정, #FAF9F5 Ground)
         egui::TopBottomPanel::bottom("tier5_status_bar")
             .exact_height(STATUS_BAR_HEIGHT as f32)
             .frame(
                 egui::Frame::NONE
-                    .fill(wash)
+                    .fill(hanji)
+                    .stroke(egui::Stroke::new(1.0_f32, line_col))
                     .inner_margin(egui::Margin::symmetric(12, 4)),
             )
             .show(ctx, |ui| {
@@ -656,13 +912,18 @@ impl eframe::App for StrataStudioApp {
                 });
             });
 
-        // Tier 4-A: Left SlotList (176px 고정)
+        // Tier 4-A: Left SlotList (176px 고정, #F5F4ED Wash)
         egui::SidePanel::left("tier4_slot_list")
             .exact_width(SLOT_LIST_WIDTH as f32)
             .resizable(false)
-            .frame(egui::Frame::NONE.fill(wash).inner_margin(8.0))
+            .frame(
+                egui::Frame::NONE
+                    .fill(wash)
+                    .stroke(egui::Stroke::new(1.0_f32, line_col))
+                    .inner_margin(8.0),
+            )
             .show(ctx, |ui| {
-                ui.colored_label(ink, "발굴 유물 슬롯 목록");
+                ui.colored_label(ink, "발굴 유물 · 단면 슬롯");
                 ui.separator();
                 for (idx, slot) in self.slots.iter().enumerate() {
                     let is_sel = idx == self.selected_slot_idx;
@@ -681,6 +942,7 @@ impl eframe::App for StrataStudioApp {
             });
 
         // Tier 4-B & 4-C: Center View3D (27% or hidden on Tab) + Right SheetPane (73% or 100%)
+        // 반드시 Layout::top_down 수직 레이아웃으로 각각 격리하여 우측 73% 백지 버그를 원천 차단!
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE.fill(hanji).inner_margin(6.0))
             .show(ctx, |ui| {
@@ -694,40 +956,68 @@ impl eframe::App for StrataStudioApp {
 
                 if let Some(slot) = self.slots.get_mut(self.selected_slot_idx) {
                     let prev_angle = self.view3d_state.active_section_angle_deg;
+                    let prev_cut_y = self.view3d_state.cut_y_mm;
+                    let prev_top_z = self.view3d_state.top_cut_z_mm;
+                    let avail_h = ui.available_height().max(200.0);
                     ui.horizontal_top(|ui| {
                         if !self.sheet_full_tab_mode {
-                            ui.allocate_ui(egui::vec2(geom.view3d_w, geom.work_area_h), |ui| {
-                                render_view3d_pane_egui(
-                                    ui,
-                                    &slot.mesh,
-                                    Some(&slot.segmentation.vertex_regions),
-                                    Some(&slot.rim_gap_chart),
-                                    slot.recommended_best_angle_deg,
-                                    &mut self.view3d_state,
-                                );
-                            });
-                            ui.add_space(4.0);
+                            ui.allocate_ui_with_layout(
+                                egui::vec2(geom.view3d_w, avail_h),
+                                egui::Layout::top_down(egui::Align::Min),
+                                |ui| {
+                                    render_view3d_pane_egui(
+                                        ui,
+                                        &slot.mesh,
+                                        Some(&slot.segmentation.vertex_regions),
+                                        Some(&slot.rim_gap_chart),
+                                        slot.recommended_best_angle_deg,
+                                        &mut self.view3d_state,
+                                    );
+                                },
+                            );
+                            ui.add_space(6.0);
                         }
-                        ui.allocate_ui(
-                            egui::vec2(ui.available_width().max(240.0), geom.work_area_h),
+                        let sheet_w = ui.available_width().max(240.0);
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(sheet_w, avail_h),
+                            egui::Layout::top_down(egui::Align::Min),
                             |ui| {
-                                render_sheet_pane_egui(
+                                let _ = render_sheet_pane_egui(
                                     ui,
                                     &slot.composed_plate,
                                     &slot.measurements,
+                                    &slot.mesh,
+                                    self.view3d_state.active_section_angle_deg,
+                                    self.rubbing_params.ink_density_pct,
                                     self.show_mm_grid,
+                                    &mut self.sheet_state,
                                 );
                             },
                         );
                     });
-                    if (self.view3d_state.active_section_angle_deg - prev_angle).abs() > 0.1 {
+                    if (self.view3d_state.active_section_angle_deg - prev_angle).abs() > 0.1
+                        || (self.view3d_state.cut_y_mm - prev_cut_y).abs() > 0.1
+                        || (self.view3d_state.top_cut_z_mm - prev_top_z).abs() > 0.1
+                    {
                         slot.rebuild_plate(
                             self.flip_exterior_right,
                             self.view3d_state.active_section_angle_deg,
+                            self.view3d_state.cut_y_mm,
+                            self.view3d_state.top_cut_z_mm,
                         );
                     }
                 }
             });
+
+        // 실제 실행 창 프레임버퍼 캡처 요청 (`--capture-window`)
+        if self.capture_window_path.is_some() {
+            self.capture_frames_rendered += 1;
+            if self.capture_frames_rendered >= 6 && !self.screenshot_requested {
+                self.screenshot_requested = true;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
+            }
+            ctx.request_repaint();
+        }
     }
 }
 
@@ -754,16 +1044,23 @@ fn configure_korean_fonts_and_strata_theme(ctx: &egui::Context) {
     }
     ctx.set_fonts(fonts);
 
-    let mut style = (*ctx.style()).clone();
-    style.visuals = egui::Visuals::light();
-    style.visuals.panel_fill = egui::Color32::from_rgb(GROUND.rgb[0], GROUND.rgb[1], GROUND.rgb[2]);
-    style.visuals.window_fill =
-        egui::Color32::from_rgb(GROUND.rgb[0], GROUND.rgb[1], GROUND.rgb[2]);
-    style.visuals.widgets.noninteractive.bg_stroke = egui::Stroke::new(
-        1.0_f32,
-        egui::Color32::from_rgb(EDGE.rgb[0], EDGE.rgb[1], EDGE.rgb[2]),
-    );
-    ctx.set_style(style);
+    ctx.all_styles_mut(|style| {
+        style.visuals = egui::Visuals::light();
+        style.visuals.panel_fill =
+            egui::Color32::from_rgb(GROUND.rgb[0], GROUND.rgb[1], GROUND.rgb[2]);
+        style.visuals.window_fill =
+            egui::Color32::from_rgb(GROUND.rgb[0], GROUND.rgb[1], GROUND.rgb[2]);
+        style.visuals.selection.bg_fill =
+            egui::Color32::from_rgb(CLAY_WASH.rgb[0], CLAY_WASH.rgb[1], CLAY_WASH.rgb[2]);
+        style.visuals.selection.stroke = egui::Stroke::new(
+            1.0_f32,
+            egui::Color32::from_rgb(CLAY_INK.rgb[0], CLAY_INK.rgb[1], CLAY_INK.rgb[2]),
+        );
+        style.visuals.widgets.noninteractive.bg_stroke = egui::Stroke::new(
+            1.0_f32,
+            egui::Color32::from_rgb(EDGE.rgb[0], EDGE.rgb[1], EDGE.rgb[2]),
+        );
+    });
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -771,6 +1068,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut verify_all = false;
     let mut screenshot_dir: Option<PathBuf> = None;
+    let mut capture_window_path: Option<PathBuf> = None;
+    let mut initial_tab: Option<WorkflowTab> = None;
+    let mut initial_slot: Option<usize> = None;
 
     let mut i = 1;
     while i < args.len() {
@@ -780,6 +1080,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             "--screenshot-tour" if i + 1 < args.len() => {
                 screenshot_dir = Some(PathBuf::from(&args[i + 1]));
+                i += 1;
+            }
+            "--capture-window" if i + 1 < args.len() => {
+                capture_window_path = Some(PathBuf::from(&args[i + 1]));
+                i += 1;
+            }
+            "--tab" if i + 1 < args.len() => {
+                initial_tab = match args[i + 1].as_str() {
+                    "1" => Some(WorkflowTab::Step1LoadAndClassify),
+                    "2" => Some(WorkflowTab::Step2OrientAndRefit),
+                    "3" => Some(WorkflowTab::Step3SectionAndRubbing),
+                    "4" => Some(WorkflowTab::Step4PlateAndExport),
+                    _ => None,
+                };
+                i += 1;
+            }
+            "--slot" if i + 1 < args.len() => {
+                initial_slot = args[i + 1].parse::<usize>().ok();
                 i += 1;
             }
             _ => {}
@@ -828,7 +1146,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     eframe::run_native(
         "STRATA · 동국유물실측",
         native_options,
-        Box::new(|cc| Ok(Box::new(StrataStudioApp::new(cc)))),
+        Box::new(move |cc| {
+            Ok(Box::new(StrataStudioApp::new(
+                cc,
+                capture_window_path,
+                initial_tab,
+                initial_slot,
+            )))
+        }),
     )
     .map_err(|e| format!("GUI 실행 오류: {e}").into())
 }
@@ -844,5 +1169,95 @@ mod tests {
         for c in &checks {
             assert!(c.passed, "Gate {} failed: {}", c.gate_id, c.detail);
         }
+    }
+
+    #[test]
+    fn test_sheet_pane_and_view3d_vertical_stack_stays_inside_window() {
+        let slot = StrataStudioApp::make_preset_slot(
+            "레이아웃 검증용 완형 토기",
+            ArtifactCategory::CompleteVessel,
+            None,
+            None,
+            None,
+            60.0,
+            70.0,
+        );
+        let mut view3d_state = View3DPaneState::default();
+        let mut sheet_state = SheetPaneState::default();
+        let ctx = egui::Context::default();
+        let mut raw_input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1440.0, 900.0),
+            )),
+            ..Default::default()
+        };
+
+        let mut captured_rects = None;
+        let _ = ctx.run(raw_input.take(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let geom = R1FiveTierGeometry::compute(1440.0, 900.0, false);
+                ui.horizontal_top(|ui| {
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(geom.view3d_w, geom.work_area_h),
+                        egui::Layout::top_down(egui::Align::Min),
+                        |ui| {
+                            render_view3d_pane_egui(
+                                ui,
+                                &slot.mesh,
+                                Some(&slot.segmentation.vertex_regions),
+                                Some(&slot.rim_gap_chart),
+                                slot.recommended_best_angle_deg,
+                                &mut view3d_state,
+                            );
+                        },
+                    );
+                    ui.add_space(6.0);
+                    let sheet_w = ui.available_width().max(240.0);
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(sheet_w, geom.work_area_h),
+                        egui::Layout::top_down(egui::Align::Min),
+                        |ui| {
+                            captured_rects = Some(render_sheet_pane_egui(
+                                ui,
+                                &slot.composed_plate,
+                                &slot.measurements,
+                                &slot.mesh,
+                                view3d_state.active_section_angle_deg,
+                                80.0,
+                                true,
+                                &mut sheet_state,
+                            ));
+                        },
+                    );
+                });
+            });
+        });
+
+        let (header_rect, strip_rect, sheet_rect) =
+            captured_rects.expect("SheetPane rects must be rendered");
+        // 도판 머리줄, 치수 대장 띠, 도판 캔버스가 모두 화면 가로 폭(1440px) 내부에 있고 수직으로 쌓여야 한다!
+        assert!(
+            sheet_rect.right() <= 1440.0,
+            "sheet_rect pushed offscreen to the right: {:?}",
+            sheet_rect
+        );
+        assert!(
+            (header_rect.left() - sheet_rect.left()).abs() < 2.0,
+            "header_rect and sheet_rect must share the same left X coordinate"
+        );
+        assert!(
+            strip_rect.top() >= header_rect.bottom() - 1.0,
+            "strip_rect must be below header_rect"
+        );
+        assert!(
+            sheet_rect.top() >= strip_rect.bottom() - 1.0,
+            "sheet_rect must be below strip_rect"
+        );
+        assert!(
+            sheet_rect.width() > 600.0 && sheet_rect.height() > 400.0,
+            "sheet_rect must occupy the 73% right workspace: {:?}",
+            sheet_rect
+        );
     }
 }

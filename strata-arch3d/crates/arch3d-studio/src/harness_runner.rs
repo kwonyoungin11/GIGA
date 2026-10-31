@@ -335,11 +335,8 @@ pub fn generate_screenshot_tour_and_golden_outputs(
     written.push(splash_png.display().to_string());
 
     let p_7obj = Path::new(r"E:\034(7-실4-4)\7지구 9호-7.obj");
-    let p_7ap2 = Path::new(r"E:\034(7-실4-4)\7지구 9호-7.ap2");
-    let vessel_mesh = if p_7obj.exists() && p_7ap2.exists() {
-        let m = load_any_mesh(p_7obj)?;
-        let ap2 = Ap2Project::load_from_file(p_7ap2)?;
-        m.transformed(&ap2.transform_matrix)
+    let vessel_mesh = if p_7obj.exists() {
+        load_any_mesh(p_7obj)?
     } else {
         build_synthetic_vessel_mesh("7지구 9호-7", 62.5, 118.4)
     };

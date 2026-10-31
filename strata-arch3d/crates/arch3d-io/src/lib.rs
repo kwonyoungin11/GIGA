@@ -12,6 +12,8 @@ use arch3d_core::{Arch3dError, TriMesh};
 use std::path::Path;
 
 /// 확장자(`.obj`, `.ply`, `.stl`)를 자동 감지하여 3D 유물 메쉬를 로드한다.
+/// - `.obj` 로드 시 동일 폴더에 같은 이름의 `.ap2` 프로젝트 파일이 존재하면,
+///   `TransfomMatrix` 정위치 변환과 절단면 오프셋(`rc.PlanePosition0` 등)을 자동으로 적용한다.
 pub fn load_any_mesh(path: impl AsRef<Path>) -> Result<TriMesh, Arch3dError> {
     let path_ref = path.as_ref();
     let ext = path_ref
@@ -20,7 +22,24 @@ pub fn load_any_mesh(path: impl AsRef<Path>) -> Result<TriMesh, Arch3dError> {
         .unwrap_or("")
         .to_ascii_lowercase();
     match ext.as_str() {
-        "obj" => Ok(load_obj_file(path_ref)?.mesh),
+        "obj" => {
+            let mut mesh = load_obj_file(path_ref)?.mesh;
+            let ap2_path = path_ref.with_extension("ap2");
+            if ap2_path.exists() {
+                if let Ok(ap2) = Ap2Project::load_from_file(&ap2_path) {
+                    mesh = mesh.transformed(&ap2.transform_matrix);
+                    let cut_pos = if ap2.rc.plane_positions[0].abs() > 1e-6 {
+                        ap2.rc.plane_positions[0]
+                    } else if ap2.rc.plane_position.abs() > 1e-6 {
+                        ap2.rc.plane_position
+                    } else {
+                        0.0
+                    };
+                    mesh.ap2_cut_offset_mm = Some(cut_pos);
+                }
+            }
+            Ok(mesh)
+        }
         "ply" | "stl" => load_ply_or_stl_file(path_ref),
         other => Err(Arch3dError::MeshParse {
             path: path_ref.display().to_string(),
@@ -118,5 +137,53 @@ mod tests {
         assert!((clean.primary_section_angle_deg - 315.0).abs() < 1e-9);
         assert!((clean.rubbing_ink_density_pct - 100.0).abs() < 1e-9);
         assert!((clean.rubbing_radius_mm - 0.1).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_obj_loader_parses_vt_uvs_and_mtl_jpg_texture() {
+        let obj7_path = PathBuf::from(r"E:\034(7-실4-4)\7지구 9호-7.obj");
+        if obj7_path.exists() {
+            let bundle = load_obj_file(&obj7_path).expect("load 7지구 9호-7.obj with UV/JPG");
+            assert!(
+                bundle.mesh.texcoords.len() > 100_000,
+                "texcoords len={}",
+                bundle.mesh.texcoords.len()
+            );
+            assert_eq!(
+                bundle.mesh.triangle_uvs.len(),
+                bundle.mesh.triangles.len(),
+                "triangle_uvs must match triangles count"
+            );
+            let tex = bundle
+                .mesh
+                .texture_image
+                .as_ref()
+                .expect("texture_image must be loaded from 7지구 9호-7_1.jpg");
+            assert!(tex.width >= 256 && tex.height >= 256);
+            // Verify vertex colors were sampled from the real texture image (not all default [182, 176, 164])
+            let non_default_count = bundle
+                .mesh
+                .colors_rgb
+                .iter()
+                .filter(|&&c| c != [182, 176, 164])
+                .count();
+            assert!(
+                non_default_count > 10_000,
+                "expected >10000 textured vertex colors, got {non_default_count}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_obj_loader_auto_applies_companion_ap2_transform_and_cut_plane_18mm() {
+        let obj7_path = PathBuf::from(r"E:\034(7-실4-4)\7지구 9호-7.obj");
+        if obj7_path.exists() {
+            let mesh = load_any_mesh(&obj7_path).expect("load_any_mesh auto-links .ap2");
+            let ext = mesh.bbox.extents();
+            assert!((ext[0] - 125.174).abs() < 0.1, "auto-aligned X={}", ext[0]);
+            assert!((ext[1] - 123.935).abs() < 0.1, "auto-aligned Y={}", ext[1]);
+            assert!((ext[2] - 63.133).abs() < 0.1, "auto-aligned Z={}", ext[2]);
+            assert_eq!(mesh.ap2_cut_offset_mm, Some(18.0));
+        }
     }
 }

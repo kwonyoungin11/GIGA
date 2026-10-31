@@ -11,8 +11,9 @@ pub use pdf_tiled_print::{
     compute_tiled_print_plan, render_plate_to_pdf_bytes, PaperSheetSize, TiledPrintPlan,
 };
 pub use plate_composer::{
-    compose_archaeological_plate, ComposedPlate2D, PlateComposeInput, PlateLayoutMode,
-    PlatePathElement, PlateTextCallout,
+    compose_archaeological_plate, triangulate_polygon_ear_clipping, ComposedPlate2D,
+    PlateComposeInput, PlateLayoutMode, PlatePathElement, PlateRasterKind, PlateRasterRegion,
+    PlateTextCallout,
 };
 pub use ret_exporter::{export_ret_folder_package, RetPackageManifest};
 pub use svg_illustrator::render_plate_to_illustrator_svg;
@@ -280,5 +281,116 @@ mod tests {
         assert!(manifest.rubbing_ext_png.exists());
         assert!(manifest.rubbing_meta_txt.exists());
         let _ = std::fs::remove_dir_all(&tmp_dir);
+    }
+
+    #[test]
+    fn test_ear_clipping_concave_section_polygon_triangulation() {
+        // L자형 비볼록(Concave) 토기 구연·기벽 단면 다각형 (6개 정점 -> 4개 삼각형)
+        let concave_poly = [
+            [0.0, 0.0],
+            [20.0, 0.0],
+            [20.0, 8.0],
+            [7.0, 8.0],
+            [7.0, 45.0],
+            [0.0, 45.0],
+        ];
+        let tris = triangulate_polygon_ear_clipping(&concave_poly);
+        assert_eq!(tris.len(), concave_poly.len() - 2);
+        // 삼각형 넓이 총합이 원래 L자 다각형 넓이(20*8 + 7*37 = 160 + 259 = 419)와 일치하는지 검증
+        let mut area_sum = 0.0f64;
+        for tri in &tris {
+            let a = concave_poly[tri[0]];
+            let b = concave_poly[tri[1]];
+            let c = concave_poly[tri[2]];
+            let cross = ((b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])).abs();
+            area_sum += 0.5 * cross;
+        }
+        assert!((area_sum - 419.0).abs() < 1e-4, "area_sum={area_sum}");
+    }
+
+    #[test]
+    fn test_plate_composer_generates_multiview_rubbing_rasters_and_solid_ink_sections() {
+        let mesh = sample_vessel_mesh();
+        let m_vessel = compute_artifact_measurements(&mesh, ArtifactCategory::CompleteVessel);
+        let vsec = slice_mesh_with_fixed_plane(
+            &mesh,
+            None,
+            CutPlaneOrientation::VerticalLongitudinal,
+            0.0,
+            0.0,
+            0.25,
+        );
+        let hsec = slice_mesh_with_fixed_plane(
+            &mesh,
+            None,
+            CutPlaneOrientation::HorizontalTransverse,
+            0.0,
+            18.0,
+            0.25,
+        );
+        let plate_vessel = compose_archaeological_plate(&PlateComposeInput {
+            title: "7지구 9호-7 완형 토기",
+            measurements: &m_vessel,
+            vertical_section: &vsec,
+            horizontal_sections: &[hsec],
+            occluded_spans: &[],
+            sherd_subtype: None,
+            sherd_strategy: None,
+            handle_attachment: None,
+            bead_subtype: None,
+            bead_drill_type: None,
+            wado_cut_ratio: None,
+            hemp_density_label: None,
+            flip_exterior_right: false,
+        });
+        assert!(
+            plate_vessel
+                .raster_regions
+                .iter()
+                .any(|r| r.kind == PlateRasterKind::FrontExteriorRubbing),
+            "Complete vessel plate must include FrontExteriorRubbing raster region"
+        );
+        assert!(
+            plate_vessel
+                .raster_regions
+                .iter()
+                .any(|r| r.kind == PlateRasterKind::BottomPlanRubbing),
+            "Complete vessel plate must include BottomPlanRubbing raster region"
+        );
+        assert!(
+            plate_vessel
+                .paths
+                .iter()
+                .any(|p| p.fill_hex.as_deref() == Some("#141413")),
+            "Complete vessel plate must include #141413 solid-filled section paths"
+        );
+
+        let m_sherd = compute_artifact_measurements(&mesh, ArtifactCategory::Potsherd);
+        let plate_3col = compose_archaeological_plate(&PlateComposeInput {
+            title: "1.obj 편조각 3단 병렬",
+            measurements: &m_sherd,
+            vertical_section: &vsec,
+            horizontal_sections: &[],
+            occluded_spans: &[],
+            sherd_subtype: Some(SherdSubtype::BodySherd),
+            sherd_strategy: Some(SherdPlateStrategy::ThreeColumnParallel),
+            handle_attachment: None,
+            bead_subtype: None,
+            bead_drill_type: None,
+            wado_cut_ratio: None,
+            hemp_density_label: None,
+            flip_exterior_right: false,
+        });
+        assert!(
+            plate_3col
+                .raster_regions
+                .iter()
+                .any(|r| r.kind == PlateRasterKind::FrontExteriorRubbing)
+                && plate_3col
+                    .raster_regions
+                    .iter()
+                    .any(|r| r.kind == PlateRasterKind::BackInteriorRubbing),
+            "3-column sherd plate must include both exterior and interior rubbing raster regions"
+        );
     }
 }

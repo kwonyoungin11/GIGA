@@ -6,7 +6,7 @@ pub mod types;
 
 pub use bvh::{LbvhNode, StacklessLbvh};
 pub use error::{Arch3dError, ThreePartErrorInfo};
-pub use mesh::{CompressedCornerTable, GpuVertex16, OctahedralNormal16, TriMesh};
+pub use mesh::{CompressedCornerTable, GpuVertex16, MeshTextureRgba, OctahedralNormal16, TriMesh};
 pub use strata_tokens::{metrics, tokens, ColorToken};
 pub use types::{
     Aabb3, ArtifactCategory, BeadDrillType, BeadFabricationKind, BeadSubtype,

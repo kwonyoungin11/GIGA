@@ -118,7 +118,7 @@ fn chain_segments_into_polylines(
 ) -> Vec<Vec<[f64; 2]>> {
     let mut used = vec![false; segments.len()];
     let tol2 = tol_mm * tol_mm;
-    let mut polylines = Vec::new();
+    let mut polylines: Vec<Vec<[f64; 2]>> = Vec::new();
 
     for i in 0..segments.len() {
         if used[i] {
@@ -127,32 +127,102 @@ fn chain_segments_into_polylines(
         used[i] = true;
         let mut chain = vec![segments[i][0], segments[i][1]];
 
+        // 양방향(tail 및 head) 체이닝으로 끊김 없는 폐합 루프 복원
         loop {
             let mut extended = false;
             let tail = *chain.last().unwrap_or(&[0.0, 0.0]);
+            let head = chain[0];
+
+            let mut best_j = None;
+            let mut best_d2 = tol2;
+            let mut attach_to_tail = true;
+            let mut take_seg1 = true;
+
             for (j, seg) in segments.iter().enumerate() {
                 if used[j] {
                     continue;
                 }
-                let d0 = (seg[0][0] - tail[0]).powi(2) + (seg[0][1] - tail[1]).powi(2);
-                let d1 = (seg[1][0] - tail[0]).powi(2) + (seg[1][1] - tail[1]).powi(2);
-                if d0 <= tol2 {
-                    used[j] = true;
-                    chain.push(seg[1]);
-                    extended = true;
-                    break;
-                } else if d1 <= tol2 {
-                    used[j] = true;
-                    chain.push(seg[0]);
-                    extended = true;
-                    break;
+                let dt0 = (seg[0][0] - tail[0]).powi(2) + (seg[0][1] - tail[1]).powi(2);
+                if dt0 <= best_d2 {
+                    best_d2 = dt0;
+                    best_j = Some(j);
+                    attach_to_tail = true;
+                    take_seg1 = true;
+                }
+                let dt1 = (seg[1][0] - tail[0]).powi(2) + (seg[1][1] - tail[1]).powi(2);
+                if dt1 <= best_d2 {
+                    best_d2 = dt1;
+                    best_j = Some(j);
+                    attach_to_tail = true;
+                    take_seg1 = false;
+                }
+                let dh0 = (seg[0][0] - head[0]).powi(2) + (seg[0][1] - head[1]).powi(2);
+                if dh0 <= best_d2 {
+                    best_d2 = dh0;
+                    best_j = Some(j);
+                    attach_to_tail = false;
+                    take_seg1 = true;
+                }
+                let dh1 = (seg[1][0] - head[0]).powi(2) + (seg[1][1] - head[1]).powi(2);
+                if dh1 <= best_d2 {
+                    best_d2 = dh1;
+                    best_j = Some(j);
+                    attach_to_tail = false;
+                    take_seg1 = false;
                 }
             }
+
+            if let Some(j) = best_j {
+                used[j] = true;
+                let pt = if take_seg1 {
+                    segments[j][1]
+                } else {
+                    segments[j][0]
+                };
+                if attach_to_tail {
+                    chain.push(pt);
+                } else {
+                    chain.insert(0, pt);
+                }
+                extended = true;
+            }
+
             if !extended {
                 break;
             }
         }
         polylines.push(chain);
+    }
+
+    // 인접한 열린 체인들(미세 틈 <= 2.5mm)을 2차 병합
+    let bridge_tol2 = (tol_mm * 8.0).max(2.5).powi(2);
+    let mut merged = true;
+    while merged && polylines.len() > 1 {
+        merged = false;
+        'outer: for a in 0..polylines.len() {
+            for b in (a + 1)..polylines.len() {
+                let (Some(&a_tail), Some(&b_tail)) =
+                    (polylines[a].last(), polylines[b].last())
+                else {
+                    continue;
+                };
+                let b_head = polylines[b][0];
+                let d_hb = (a_tail[0] - b_head[0]).powi(2) + (a_tail[1] - b_head[1]).powi(2);
+                let d_tb = (a_tail[0] - b_tail[0]).powi(2) + (a_tail[1] - b_tail[1]).powi(2);
+                if d_hb <= bridge_tol2 {
+                    let mut rhs = polylines.remove(b);
+                    polylines[a].append(&mut rhs);
+                    merged = true;
+                    break 'outer;
+                } else if d_tb <= bridge_tol2 {
+                    let mut rhs = polylines.remove(b);
+                    rhs.reverse();
+                    polylines[a].append(&mut rhs);
+                    merged = true;
+                    break 'outer;
+                }
+            }
+        }
     }
 
     polylines.sort_by_key(|b| std::cmp::Reverse(b.len()));

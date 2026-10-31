@@ -124,6 +124,32 @@ impl CompressedCornerTable {
     }
 }
 
+/// UV 텍스처 아틀라스 (`RGBA8` 픽셀 버퍼, `.mtl` `map_Kd` `.jpg`/`.png` 디코딩 결과).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MeshTextureRgba {
+    pub width: u32,
+    pub height: u32,
+    pub rgba: Vec<u8>,
+}
+
+impl MeshTextureRgba {
+    /// OBJ UV 좌표 `(u, v)` (`v=0`이 하단, `v=1`이 상단)에서 RGB 색상을 샘플링한다.
+    #[inline]
+    pub fn sample_uv_rgb(&self, u: f32, v: f32) -> [u8; 3] {
+        if self.width == 0 || self.height == 0 || self.rgba.len() < (self.width * self.height * 4) as usize {
+            return [182, 176, 164];
+        }
+        let u_wrap = u.rem_euclid(1.0);
+        let v_wrap = (1.0 - v).rem_euclid(1.0);
+        let x = ((u_wrap * (self.width.saturating_sub(1) as f32)).round() as u32)
+            .min(self.width.saturating_sub(1));
+        let y = ((v_wrap * (self.height.saturating_sub(1) as f32)).round() as u32)
+            .min(self.height.saturating_sub(1));
+        let idx = ((y * self.width + x) * 4) as usize;
+        [self.rgba[idx], self.rgba[idx + 1], self.rgba[idx + 2]]
+    }
+}
+
 /// 3차원 삼각형 메쉬 (`TriMesh`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TriMesh {
@@ -132,6 +158,18 @@ pub struct TriMesh {
     pub normals: Vec<[f64; 3]>,
     pub colors_rgb: Vec<[u8; 3]>,
     pub texcoords: Vec<[f32; 2]>,
+    /// 삼각면 각 코너별 UV 좌표 (`triangles.len()`과 동일 길이 또는 빈 벡터)
+    #[serde(default)]
+    pub triangle_uvs: Vec<[[f32; 2]; 3]>,
+    /// `.mtl` `map_Kd`로부터 로드된 실사 UV 텍스처 이미지
+    #[serde(skip)]
+    pub texture_image: Option<std::sync::Arc<MeshTextureRgba>>,
+    /// 동반 `.ap2` 파일에서 읽어온 절단면 높이/오프셋 (`rc.PlanePosition0` 등, 단위: `mm`)
+    #[serde(default)]
+    pub ap2_cut_offset_mm: Option<f64>,
+    /// 원본 스캔 파일이 위치한 폴더 경로 (`ret/` 폴더 탐색 등에 활용)
+    #[serde(default)]
+    pub source_dir: Option<std::path::PathBuf>,
     pub triangles: Vec<[u32; 3]>,
     pub face_normals: Vec<[f64; 3]>,
     pub face_areas: Vec<f64>,
@@ -252,6 +290,10 @@ impl TriMesh {
             normals,
             colors_rgb,
             texcoords,
+            triangle_uvs: Vec::new(),
+            texture_image: None,
+            ap2_cut_offset_mm: None,
+            source_dir: None,
             triangles,
             face_normals,
             face_areas,
@@ -346,6 +388,10 @@ impl TriMesh {
             normals: new_normals,
             colors_rgb: self.colors_rgb.clone(),
             texcoords: self.texcoords.clone(),
+            triangle_uvs: self.triangle_uvs.clone(),
+            texture_image: self.texture_image.clone(),
+            ap2_cut_offset_mm: self.ap2_cut_offset_mm,
+            source_dir: self.source_dir.clone(),
             triangles: self.triangles.clone(),
             face_normals: new_face_normals,
             face_areas: self.face_areas.clone(),

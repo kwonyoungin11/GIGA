@@ -85,16 +85,35 @@ pub fn compute_artifact_measurements(
         }
     };
 
-    // 2. 유물군별 세부 계측
+    // 2. 유물군별 세부 계측 (메쉬 실측 정점 분포에서 동적 산출)
     let mut bead_perforation = None;
     let mut sherd_circle_fit = None;
     let mut diameter_std_err_mm = None;
     let mut remaining_arc_pct = None;
     let mut rim_or_outer_diameter_mm = round_01(max_xy);
-    let base_diameter_or_width_mm = round_01(min_xy * 0.45);
+
+    // 하단 8% 높이 구간 정점들의 최대 반경으로부터 저경(굽외경) 동적 계측
+    let z_base_band = mesh.bbox.min[2] + height_z * 0.08;
+    let cx_mid = 0.5 * (mesh.bbox.min[0] + mesh.bbox.max[0]);
+    let cy_mid = 0.5 * (mesh.bbox.min[1] + mesh.bbox.max[1]);
+    let mut max_base_r = 0.0f64;
+    for p in &mesh.positions {
+        if p[2] <= z_base_band {
+            let r = (p[0] - cx_mid).hypot(p[1] - cy_mid);
+            if r > max_base_r {
+                max_base_r = r;
+            }
+        }
+    }
+    let base_diameter_or_width_mm = if max_base_r > 1.0 {
+        round_01((max_base_r * 2.0).min(max_xy))
+    } else {
+        round_01(min_xy * 0.45)
+    };
     let max_belly_diameter_mm = round_01(max_xy);
     let mean_wall_thickness_mm = round_01((max_xy * 0.042).clamp(2.5, 18.0));
-    let wall_stance_angle_deg = 78.5;
+    let slope_rad = height_z.atan2(((max_xy - base_diameter_or_width_mm) * 0.5).abs().max(1.0));
+    let wall_stance_angle_deg = round_01(slope_rad.to_degrees().clamp(35.0, 89.5));
 
     match category {
         ArtifactCategory::BeadJade => {
@@ -143,7 +162,7 @@ pub fn compute_artifact_measurements(
     // 4. 치수 대장 띠(`28px`) 한 줄 요약 생성
     let metric_strip_summary = match category {
         ArtifactCategory::CompleteVessel => format!(
-            "기고 {:.1} mm · 구경 ⌀{:.1} mm · 저경 ⌀{:.1} mm · 최대동경 ⌀{:.1} mm · 평균두께 {:.1} mm",
+            "기고 {:.1} mm · 구경 Φ{:.1} mm · 저경 Φ{:.1} mm · 최대동경 Φ{:.1} mm · 평균두께 {:.1} mm",
             height_or_length_mm,
             rim_or_outer_diameter_mm,
             base_diameter_or_width_mm,
@@ -154,7 +173,7 @@ pub fn compute_artifact_measurements(
             if let Some(ref fit) = sherd_circle_fit {
                 match fit.plate_strategy {
                     SherdPlateStrategy::FullReconstruction => format!(
-                        "복원구경 ⌀{:.1}±{:.1} mm (잔존 {:.1}%) · 잔존고 {:.1} mm · 평균두께 {:.1} mm · 구연각 {:.1}°",
+                        "복원구경 Φ{:.1}±{:.1} mm (잔존 {:.1}%) · 잔존고 {:.1} mm · 평균두께 {:.1} mm · 구연각 {:.1}°",
                         fit.diameter_mm,
                         fit.diameter_std_err_mm,
                         fit.remaining_arc_pct,
@@ -190,7 +209,7 @@ pub fn compute_artifact_measurements(
         ArtifactCategory::BeadJade => {
             if let Some(ref perf) = bead_perforation {
                 format!(
-                    "[{}] 길이 {:.2} mm · 외경 ⌀{:.2} mm (L/D {:.2}) · 상공경 ⌀{:.2} / 하공경 ⌀{:.2} (최소내경 ⌀{:.2} mm) · 천공 {} (단차 Δe {:.2} mm)",
+                    "[{}] 길이 {:.2} mm · 외경 Φ{:.2} mm (L/D {:.2}) · 상공경 Φ{:.2} / 하공경 Φ{:.2} (최소내경 Φ{:.2} mm) · 천공 {} (단차 Δe {:.2} mm)",
                     perf.subtype.label_kr(),
                     perf.length_mm,
                     perf.outer_diameter_mm,
@@ -203,7 +222,7 @@ pub fn compute_artifact_measurements(
                 )
             } else {
                 format!(
-                    "길이 {:.2} mm · 외경 ⌀{:.2} mm",
+                    "길이 {:.2} mm · 외경 Φ{:.2} mm",
                     height_or_length_mm, rim_or_outer_diameter_mm
                 )
             }
