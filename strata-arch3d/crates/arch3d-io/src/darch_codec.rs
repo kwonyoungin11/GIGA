@@ -24,9 +24,9 @@ pub struct DarchProject {
     pub horizontal_cut_heights_mm: Vec<f64>,
     pub flip_exterior_right: bool,
     pub scale_preset: ScalePreset,
-    pub dtak_ink_density_pct: f64,
-    pub dtak_radius_mm: f64,
-    pub dtak_handprint_texture: bool,
+    pub rubbing_ink_density_pct: f64,
+    pub rubbing_radius_mm: f64,
+    pub rubbing_handprint_texture: bool,
 }
 
 impl Default for DarchProject {
@@ -47,9 +47,9 @@ impl Default for DarchProject {
             horizontal_cut_heights_mm: Vec::new(),
             flip_exterior_right: false,
             scale_preset: ScalePreset::Half1To2,
-            dtak_ink_density_pct: 72.0,
-            dtak_radius_mm: 1.4,
-            dtak_handprint_texture: true,
+            rubbing_ink_density_pct: 72.0,
+            rubbing_radius_mm: 1.4,
+            rubbing_handprint_texture: true,
         }
     }
 }
@@ -62,15 +62,15 @@ impl DarchProject {
         } else {
             self.primary_section_angle_deg = self.primary_section_angle_deg.rem_euclid(360.0);
         }
-        if !self.dtak_ink_density_pct.is_finite() {
-            self.dtak_ink_density_pct = 72.0;
+        if !self.rubbing_ink_density_pct.is_finite() {
+            self.rubbing_ink_density_pct = 72.0;
         } else {
-            self.dtak_ink_density_pct = self.dtak_ink_density_pct.clamp(5.0, 100.0);
+            self.rubbing_ink_density_pct = self.rubbing_ink_density_pct.clamp(5.0, 100.0);
         }
-        if !self.dtak_radius_mm.is_finite() {
-            self.dtak_radius_mm = 1.4;
+        if !self.rubbing_radius_mm.is_finite() {
+            self.rubbing_radius_mm = 1.4;
         } else {
-            self.dtak_radius_mm = self.dtak_radius_mm.clamp(0.1, 15.0);
+            self.rubbing_radius_mm = self.rubbing_radius_mm.clamp(0.1, 15.0);
         }
         self.extra_section_angles_deg
             .retain(|a| a.is_finite());

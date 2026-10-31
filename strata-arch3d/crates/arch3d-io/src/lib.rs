@@ -110,13 +110,13 @@ mod tests {
     fn test_darch_sanitize_clamped() {
         let p = DarchProject {
             primary_section_angle_deg: -45.0,
-            dtak_ink_density_pct: 999.0,
-            dtak_radius_mm: -5.0,
+            rubbing_ink_density_pct: 999.0,
+            rubbing_radius_mm: -5.0,
             ..Default::default()
         };
         let clean = p.sanitize_clamped();
         assert!((clean.primary_section_angle_deg - 315.0).abs() < 1e-9);
-        assert!((clean.dtak_ink_density_pct - 100.0).abs() < 1e-9);
-        assert!((clean.dtak_radius_mm - 0.1).abs() < 1e-9);
+        assert!((clean.rubbing_ink_density_pct - 100.0).abs() < 1e-9);
+        assert!((clean.rubbing_radius_mm - 0.1).abs() < 1e-9);
     }
 }

@@ -54,7 +54,7 @@ pub enum SherdPlateStrategy {
     FullReconstruction,
     /// 잔존 호 $20^\circ \le \Delta\theta < 45^\circ$: 추정 복원 도판 (추정 파선 `dash` 구경선 + `(복원구경)` 괄호 표기)
     EstimatedDashedReconstruction,
-    /// 잔존 호 $\Delta\theta < 20^\circ$ 또는 동체부편: 억지 지름 복원 없이 `[① 외면+DTak ── ② 수직 회전단면 ── ③ 내면+DTak]` 3단 병렬 도판
+    /// 잔존 호 $\Delta\theta < 20^\circ$ 또는 동체부편: 억지 지름 복원 없이 `[① 외면+탁본 ── ② 수직 회전단면 ── ③ 내면+탁본]` 3단 병렬 도판
     ThreeColumnParallel,
 }
 
