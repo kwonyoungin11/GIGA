@@ -45,8 +45,26 @@ pub enum DragMode3D {
     AxisTilt,
 }
 
+/// 3D Z-버퍼 프레임 더티 캐시 키 (동일 파라미터에서 재렌더링 및 GPU 텍스처 재할당을 0회로 차단).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct View3DRenderCacheKey {
+    pub mesh_name: String,
+    pub width: u32,
+    pub height: u32,
+    pub active_mode: View3DShaderMode,
+    pub cutaway_open: bool,
+    pub yaw_q: i32,
+    pub pitch_q: i32,
+    pub zoom_q: i32,
+    pub psi_q: i32,
+    pub tilt_q: i32,
+    pub roll_q: i32,
+    pub cut_y_q: i32,
+    pub top_z_q: i32,
+}
+
 /// 3D 뷰포트 상태 (`DESIGN_SPEC.md` §4.2).
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct View3DPaneState {
     /// 카메라 궤도 각도 (`cam_yaw_deg`, `cam_pitch_deg`)
     pub yaw_deg: f32,
@@ -66,12 +84,38 @@ pub struct View3DPaneState {
     pub top_cut_initialized_for_mesh: String,
     /// 회전축 미세 기울기 (`-25.0° .. +25.0°`, `0.1°` 단위)
     pub tilt_deg: f64,
+    /// 유물 좌우 롤 기울기 (`-25.0° .. +25.0°`, 상하좌우 핸드 다이얼용)
+    pub roll_deg: f64,
     /// 전면 좌측 1/4 절개(`Cutaway`) 활성화 여부 (`c_wy > cut_y_mm && c_wx < -1.5`)
     pub cutaway_open: bool,
     /// 현재 활성 3D 셰이더 모드
     pub shader_mode: View3DShaderMode,
     /// 현재 활성 마우스 드래그 모드
     pub drag_mode: DragMode3D,
+    /// 더티 캐시된 Z-버퍼 이미지 및 GPU 텍스처 핸들
+    pub cached_zbuffer_key: Option<View3DRenderCacheKey>,
+    pub cached_zbuffer_rgba: Option<RgbaImage>,
+    pub cached_zbuffer_tex: Option<egui::TextureHandle>,
+    /// 더티 캐시된 3D 평면 교차 단면 곡선 (매 프레임 60만 삼각형 재검사 방지)
+    pub cached_curves_key: Option<(String, i32, i32, i32, i32, i32)>,
+    pub cached_v_segs: Vec<[[f64; 3]; 2]>,
+    pub cached_h_segs: Vec<[[f64; 3]; 2]>,
+}
+
+impl std::fmt::Debug for View3DPaneState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("View3DPaneState")
+            .field("yaw_deg", &self.yaw_deg)
+            .field("pitch_deg", &self.pitch_deg)
+            .field("zoom", &self.zoom)
+            .field("active_section_angle_deg", &self.active_section_angle_deg)
+            .field("tilt_deg", &self.tilt_deg)
+            .field("roll_deg", &self.roll_deg)
+            .field("cut_y_mm", &self.cut_y_mm)
+            .field("top_cut_z_mm", &self.top_cut_z_mm)
+            .field("shader_mode", &self.shader_mode)
+            .finish()
+    }
 }
 
 impl Default for View3DPaneState {
@@ -89,10 +133,130 @@ impl Default for View3DPaneState {
             top_cut_z_mm: 18.0,
             top_cut_initialized_for_mesh: String::new(),
             tilt_deg: 0.0,
+            roll_deg: 0.0,
             cutaway_open: true,
             shader_mode: View3DShaderMode::PhotoTexture,
             drag_mode: DragMode3D::TurntableArtifact,
+            cached_zbuffer_key: None,
+            cached_zbuffer_rgba: None,
+            cached_zbuffer_tex: None,
+            cached_curves_key: None,
+            cached_v_segs: Vec::new(),
+            cached_h_segs: Vec::new(),
         }
+    }
+}
+
+impl View3DPaneState {
+    pub fn effective_shader_mode(&self) -> View3DShaderMode {
+        if self.show_3way_segmentation {
+            View3DShaderMode::Segmentation3Way
+        } else if self.xray_inner_mode {
+            View3DShaderMode::XRayInner
+        } else {
+            self.shader_mode
+        }
+    }
+
+    pub fn build_cache_key(&self, mesh_name: &str, width: u32, height: u32) -> View3DRenderCacheKey {
+        View3DRenderCacheKey {
+            mesh_name: mesh_name.to_string(),
+            width,
+            height,
+            active_mode: self.effective_shader_mode(),
+            cutaway_open: self.cutaway_open,
+            yaw_q: (self.yaw_deg * 5.0).round() as i32,
+            pitch_q: (self.pitch_deg * 5.0).round() as i32,
+            zoom_q: (self.zoom * 100.0).round() as i32,
+            psi_q: (self.active_section_angle_deg * 5.0).round() as i32,
+            tilt_q: (self.tilt_deg * 10.0).round() as i32,
+            roll_q: (self.roll_deg * 10.0).round() as i32,
+            cut_y_q: (self.cut_y_mm * 10.0).round() as i32,
+            top_z_q: (self.top_cut_z_mm * 10.0).round() as i32,
+        }
+    }
+
+    /// 파라미터가 바뀌었을 때만 Z-버퍼를 재렌더링하고, 변경이 없으면 캐시된 버퍼를 즉시 반환한다 (`0ms`).
+    /// 반환값: `(width, height, recomputed)`
+    pub fn ensure_zbuffer_cached(
+        &mut self,
+        mesh: &TriMesh,
+        region_labels: Option<&[SurfaceRegion]>,
+        width: u32,
+        height: u32,
+    ) -> (u32, u32, bool) {
+        let w = width.clamp(160, 720);
+        let h = height.clamp(160, 720);
+        let key = self.build_cache_key(&mesh.name, w, h);
+        if self.cached_zbuffer_key.as_ref() == Some(&key) {
+            if let Some(ref img) = self.cached_zbuffer_rgba {
+                return (img.width(), img.height(), false);
+            }
+        }
+        let img = render_mesh_zbuffer_rgba(mesh, region_labels, self, w, h);
+        let out_w = img.width();
+        let out_h = img.height();
+        self.cached_zbuffer_rgba = Some(img);
+        self.cached_zbuffer_tex = None;
+        self.cached_zbuffer_key = Some(key);
+        (out_w, out_h, true)
+    }
+
+    /// 3D 종단면·횡단면 교차 선분을 더티 캐시하여 파라미터 변경 시에만 계산한다.
+    pub fn ensure_3d_curves_cached(&mut self, mesh: &TriMesh) {
+        let ckey = (
+            mesh.name.clone(),
+            (self.active_section_angle_deg * 5.0).round() as i32,
+            (self.tilt_deg * 10.0).round() as i32,
+            (self.roll_deg * 10.0).round() as i32,
+            (self.cut_y_mm * 10.0).round() as i32,
+            (self.top_cut_z_mm * 10.0).round() as i32,
+        );
+        if self.cached_curves_key.as_ref() == Some(&ckey) {
+            return;
+        }
+        self.cached_v_segs = extract_3d_plane_intersection_segments(
+            mesh,
+            self.active_section_angle_deg,
+            self.tilt_deg,
+            self.cut_y_mm,
+            true,
+        );
+        self.cached_h_segs = extract_3d_plane_intersection_segments(
+            mesh,
+            self.active_section_angle_deg,
+            self.tilt_deg,
+            self.top_cut_z_mm,
+            false,
+        );
+        self.cached_curves_key = Some(ckey);
+    }
+
+    /// 유물 상하좌우 핸드 다이얼(구면 트랙볼) 드래그 입력을 적용한다.
+    /// - `fine_axis_tilt_mode == false`: 손으로 유물을 잡고 좌우(`ψ` 0~360°)·상하(`pitch_deg`)로 자연스럽게 돌려봄
+    /// - `fine_axis_tilt_mode == true`: 중심축의 전후(`tilt_deg`)·좌우(`roll_deg`) 기울기를 0.1° 단위로 정밀 보정함
+    pub fn apply_hand_dial_drag(&mut self, dx_px: f32, dy_px: f32, fine_axis_tilt_mode: bool) {
+        if fine_axis_tilt_mode {
+            self.roll_deg =
+                ((self.roll_deg + f64::from(dx_px) * 0.15).clamp(-25.0, 25.0) * 10.0).round()
+                    / 10.0;
+            self.tilt_deg =
+                ((self.tilt_deg + f64::from(dy_px) * 0.15).clamp(-25.0, 25.0) * 10.0).round()
+                    / 10.0;
+        } else {
+            self.active_section_angle_deg =
+                (self.active_section_angle_deg + f64::from(dx_px) * 0.85).rem_euclid(360.0);
+            self.pitch_deg = (self.pitch_deg + dy_px * 0.45).clamp(-75.0, 80.0);
+        }
+    }
+
+    /// 핸드 다이얼 방향을 표준 정위치(`ψ=0°`, `tilt=0°`, `roll=0°`)로 즉시 초기화한다.
+    pub fn reset_hand_orientation(&mut self) {
+        self.active_section_angle_deg = 0.0;
+        self.tilt_deg = 0.0;
+        self.roll_deg = 0.0;
+        self.yaw_deg = -28.0;
+        self.pitch_deg = 22.0;
     }
 }
 
@@ -213,6 +377,7 @@ pub fn render_mesh_zbuffer_rgba(
 
     let (sin_p, cos_p) = state.active_section_angle_deg.to_radians().sin_cos();
     let (sin_t, cos_t) = state.tilt_deg.to_radians().sin_cos();
+    let (sin_r, cos_r) = state.roll_deg.to_radians().sin_cos();
     let (sin_cy, cos_cy) = f64::from(state.yaw_deg).to_radians().sin_cos();
     let (sin_cp, cos_cp) = f64::from(state.pitch_deg).to_radians().sin_cos();
 
@@ -228,45 +393,37 @@ pub fn render_mesh_zbuffer_rgba(
     let tex_opt = mesh.texture_image.as_deref();
     let light_dir = [-0.38f64, -0.74, 0.55];
 
-    // 모든 삼각면을 Z-버퍼로 정밀 래스터화하여 빈틈(핀홀) 없는 완전한 솔리드 표면을 생성한다.
-    let stride = 1usize;
-    let pad_px = 0.0f64;
+    // 정점 단위 1회 선변환(Pre-pass): 삼각형마다 중복 변환하던 병목(3F ≈ 6V)을 1/6로 단축
+    let n_verts = mesh.positions.len();
+    let mut world_verts = Vec::with_capacity(n_verts);
+    let mut scr_verts = Vec::with_capacity(n_verts);
+    let z_mid = 0.5 * height_mm;
+    for &pos in &mesh.positions {
+        let mut w = local_to_world_turntable(
+            pos, center_xy, z_min, height_mm, cos_p, sin_p, cos_t, sin_t,
+        );
+        if state.roll_deg.abs() > 1e-4 {
+            let rz = w[2] - z_mid;
+            let wy_new = w[1] * cos_r - rz * sin_r;
+            let wz_new = w[1] * sin_r + rz * cos_r + z_mid;
+            w[1] = wy_new;
+            w[2] = wz_new;
+        }
+        let s = project_world_to_screen(
+            w, height_mm, half_w, half_h, scale, cos_cy, sin_cy, cos_cp, sin_cp,
+        );
+        world_verts.push(w);
+        scr_verts.push(s);
+    }
 
-    for (t_idx, tri) in mesh.triangles.iter().enumerate().step_by(stride) {
+    for (t_idx, tri) in mesh.triangles.iter().enumerate() {
         let i0 = tri[0] as usize;
         let i1 = tri[1] as usize;
         let i2 = tri[2] as usize;
 
-        let w0 = local_to_world_turntable(
-            mesh.positions[i0],
-            center_xy,
-            z_min,
-            height_mm,
-            cos_p,
-            sin_p,
-            cos_t,
-            sin_t,
-        );
-        let w1 = local_to_world_turntable(
-            mesh.positions[i1],
-            center_xy,
-            z_min,
-            height_mm,
-            cos_p,
-            sin_p,
-            cos_t,
-            sin_t,
-        );
-        let w2 = local_to_world_turntable(
-            mesh.positions[i2],
-            center_xy,
-            z_min,
-            height_mm,
-            cos_p,
-            sin_p,
-            cos_t,
-            sin_t,
-        );
+        let w0 = world_verts[i0];
+        let w1 = world_verts[i1];
+        let w2 = world_verts[i2];
 
         let c_wx = (w0[0] + w1[0] + w2[0]) / 3.0;
         let c_wy = (w0[1] + w1[1] + w2[1]) / 3.0;
@@ -281,38 +438,9 @@ pub fn render_mesh_zbuffer_rgba(
             continue;
         }
 
-        let s0 = project_world_to_screen(
-            w0, height_mm, half_w, half_h, scale, cos_cy, sin_cy, cos_cp, sin_cp,
-        );
-        let s1 = project_world_to_screen(
-            w1, height_mm, half_w, half_h, scale, cos_cy, sin_cy, cos_cp, sin_cp,
-        );
-        let s2 = project_world_to_screen(
-            w2, height_mm, half_w, half_h, scale, cos_cy, sin_cy, cos_cp, sin_cp,
-        );
-
-        let tc_x = (s0[0] + s1[0] + s2[0]) / 3.0;
-        let tc_y = (s0[1] + s1[1] + s2[1]) / 3.0;
-        let expand = |pt: [f64; 3]| -> [f64; 3] {
-            if pad_px <= 0.0 {
-                return pt;
-            }
-            let dx = pt[0] - tc_x;
-            let dy = pt[1] - tc_y;
-            let len = dx.hypot(dy);
-            if len > 1e-5 {
-                [
-                    pt[0] + dx / len * pad_px,
-                    pt[1] + dy / len * pad_px,
-                    pt[2],
-                ]
-            } else {
-                pt
-            }
-        };
-        let p0 = expand(s0);
-        let p1 = expand(s1);
-        let p2 = expand(s2);
+        let p0 = scr_verts[i0];
+        let p1 = scr_verts[i1];
+        let p2 = scr_verts[i2];
 
         let min_x = p0[0].min(p1[0]).min(p2[0]).floor().max(0.0) as usize;
         let max_x = p0[0]
@@ -717,25 +845,38 @@ pub fn render_view3d_pane_egui(
         let painter = ui.painter_at(rect);
         painter.rect_filled(rect, 3.0, wash);
 
-        // Z-버퍼 오프스크린 렌더링 후 egui 텍스처로 즉시 업로드·표시
-        let render_w = (rect.width().round() as u32).clamp(180, 480);
-        let render_h = (rect.height().round() as u32).clamp(180, 640);
-        let zbuf_img = render_mesh_zbuffer_rgba(mesh, region_labels, state, render_w, render_h);
-        let color_image = egui::ColorImage::from_rgba_unmultiplied(
-            [zbuf_img.width() as usize, zbuf_img.height() as usize],
-            zbuf_img.as_raw(),
-        );
-        let tex_handle = ui.ctx().load_texture(
-            "strata_view3d_zbuffer",
-            color_image,
-            egui::TextureOptions::LINEAR,
-        );
-        painter.image(
-            tex_handle.id(),
-            rect,
-            egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-            egui::Color32::WHITE,
-        );
+        // 더티 캐시 기반 Z-버퍼 렌더링: 드래그 중에는 고속 인터랙티브 배율(0.75x), 정지 시에는 초고해상도(1.2x, 최대 640px)
+        let is_dragging = response.dragged();
+        let res_mult = if is_dragging { 0.72 } else { 1.18 };
+        let render_w = ((rect.width() * res_mult).round() as u32).clamp(200, 640);
+        let render_h = ((rect.height() * res_mult).round() as u32).clamp(200, 640);
+        let _ = state.ensure_zbuffer_cached(mesh, region_labels, render_w, render_h);
+
+        if state.cached_zbuffer_tex.is_none() {
+            if let Some(ref zbuf_img) = state.cached_zbuffer_rgba {
+                let color_image = egui::ColorImage::from_rgba_unmultiplied(
+                    [zbuf_img.width() as usize, zbuf_img.height() as usize],
+                    zbuf_img.as_raw(),
+                );
+                state.cached_zbuffer_tex = Some(ui.ctx().load_texture(
+                    "strata_view3d_zbuffer",
+                    color_image,
+                    egui::TextureOptions::LINEAR,
+                ));
+            }
+        }
+        if let Some(ref tex_handle) = state.cached_zbuffer_tex {
+            painter.image(
+                tex_handle.id(),
+                rect,
+                egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                egui::Color32::WHITE,
+            );
+        }
+        if is_dragging {
+            // 드래그 종료 직후 고해상도(1.18x) 프레임이 즉시 그려지도록 예약
+            ui.ctx().request_repaint();
+        }
 
         // 2. 3D 투영 변환 도우미 (동심원 바닥 격자 + 고정 레이저 절단틀 + 실시간 3D 교차 단면선 오버레이)
         let scale =
@@ -801,15 +942,9 @@ pub fn render_view3d_pane_egui(
             let ax_top = proj_pos2([0.0, y_cut, hh + 4.0]);
             painter.line_segment([ax_bot, ax_top], egui::Stroke::new(1.3_f32, terra));
 
-            // 실시간 수직 종단면 3D 교차선 (`wy = cut_y_mm`) — 절개된 단면 벽면 위를 따라 빛나는 실측 단면선!
-            let v_segs = extract_3d_plane_intersection_segments(
-                mesh,
-                state.active_section_angle_deg,
-                state.tilt_deg,
-                state.cut_y_mm,
-                true,
-            );
-            for seg in &v_segs {
+            // 더티 캐시된 3D 수직/수평 교차 단면 곡선 사용 (정지 시 재계산 0회)
+            state.ensure_3d_curves_cached(mesh);
+            for seg in &state.cached_v_segs {
                 let a = proj_pos2(seg[0]);
                 let b = proj_pos2(seg[1]);
                 painter.line_segment(
@@ -823,14 +958,7 @@ pub fn render_view3d_pane_egui(
             }
 
             // 실시간 수평 횡단면 3D 교차선 (`wz = top_cut_z_mm`)
-            let h_segs = extract_3d_plane_intersection_segments(
-                mesh,
-                state.active_section_angle_deg,
-                state.tilt_deg,
-                state.top_cut_z_mm,
-                false,
-            );
-            for seg in &h_segs {
+            for seg in &state.cached_h_segs {
                 let a = proj_pos2(seg[0]);
                 let b = proj_pos2(seg[1]);
                 painter.line_segment([a, b], egui::Stroke::new(1.5_f32, clay_focus));
@@ -993,7 +1121,7 @@ pub fn render_view3d_pane_egui(
             egui::StrokeKind::Inside,
         );
 
-        // 5. 하단 3모드 드래그 전환기 & 4대 절단·회전 스크럽 컨트롤 패널 (HTML Gate 1 1:1 계승)
+        // 5. 하단 유물 상하좌우 3D 핸드 다이얼 (구면 트랙볼 패드 + 360° 링 + 방향 조작부)
         egui::Frame::NONE
             .fill(hanji)
             .stroke(egui::Stroke::new(1.0_f32, border))
@@ -1001,66 +1129,199 @@ pub fn render_view3d_pane_egui(
             .inner_margin(egui::Margin::symmetric(6, 4))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 4.0;
-                    for (mode, label) in [
-                        (DragMode3D::TurntableArtifact, "유물회전(절단틀고정)"),
-                        (DragMode3D::CameraOrbit, "카메라회전"),
-                        (DragMode3D::AxisTilt, "기울기(0.1°)"),
-                    ] {
-                        let is_sel = state.drag_mode == mode;
-                        let btn = egui::Button::new(
-                            egui::RichText::new(label)
-                                .size(10.5)
-                                .color(if is_sel { clay_ink } else { ink }),
-                        )
-                        .fill(if is_sel { clay_wash } else { desk })
-                        .stroke(egui::Stroke::new(1.0_f32, if is_sel { terra } else { line_col }))
-                        .corner_radius(4.0);
-                        if ui.add(btn).clicked() {
-                            state.drag_mode = mode;
-                        }
+                    ui.spacing_mut().item_spacing.x = 8.0;
+
+                    // 좌측: 원형 3D 핸드 다이얼 (사용자가 손으로 유물을 잡고 상하좌우로 굴리는 구면 다이얼)
+                    let dial_size = egui::vec2(96.0, 96.0);
+                    let (dial_rect, dial_resp) =
+                        ui.allocate_exact_size(dial_size, egui::Sense::click_and_drag());
+                    if dial_resp.dragged() {
+                        let d = dial_resp.drag_delta();
+                        state.apply_hand_dial_drag(
+                            d.x,
+                            d.y,
+                            state.drag_mode == DragMode3D::AxisTilt,
+                        );
                     }
-                });
+                    let dp = ui.painter_at(dial_rect);
+                    let dc = dial_rect.center();
+                    let r_outer = 44.0_f32;
+                    let r_sphere = 34.0_f32;
 
-                ui.add_space(2.0);
-                egui::Grid::new("view3d_scrub_grid")
-                    .num_columns(2)
-                    .spacing([6.0, 2.0])
-                    .show(ui, |ui| {
-                        ui.colored_label(muted, "회전 ψ:");
-                        ui.add(
-                            egui::Slider::new(&mut state.active_section_angle_deg, 0.0..=359.0)
-                                .suffix("°")
-                                .fixed_decimals(0),
-                        );
-                        ui.end_row();
+                    // 외곽 360° 방위각 링 및 눈금
+                    dp.circle_filled(dc, r_outer, desk);
+                    dp.circle_stroke(dc, r_outer, egui::Stroke::new(1.2_f32, border));
+                    dp.circle_filled(dc, r_sphere, surface);
+                    dp.circle_stroke(dc, r_sphere, egui::Stroke::new(1.1_f32, ink));
 
+                    // 구면 경위도 가이드 선 (상하좌우 3D 구체 감각 표현)
+                    dp.line_segment(
+                        [
+                            egui::pos2(dc.x - r_sphere, dc.y),
+                            egui::pos2(dc.x + r_sphere, dc.y),
+                        ],
+                        egui::Stroke::new(0.8_f32, line_col),
+                    );
+                    dp.line_segment(
+                        [
+                            egui::pos2(dc.x, dc.y - r_sphere),
+                            egui::pos2(dc.x, dc.y + r_sphere),
+                        ],
+                        egui::Stroke::new(0.8_f32, line_col),
+                    );
+                    dp.circle_stroke(dc, r_sphere * 0.58, egui::Stroke::new(0.7_f32, line_col));
+
+                    // 상·하·좌·우 방향 표식
+                    dp.text(
+                        egui::pos2(dc.x, dc.y - r_outer + 5.0),
+                        egui::Align2::CENTER_CENTER,
+                        "상",
+                        egui::FontId::proportional(8.5),
+                        muted,
+                    );
+                    dp.text(
+                        egui::pos2(dc.x, dc.y + r_outer - 5.0),
+                        egui::Align2::CENTER_CENTER,
+                        "하",
+                        egui::FontId::proportional(8.5),
+                        muted,
+                    );
+                    dp.text(
+                        egui::pos2(dc.x - r_outer + 5.0, dc.y),
+                        egui::Align2::CENTER_CENTER,
+                        "좌",
+                        egui::FontId::proportional(8.5),
+                        muted,
+                    );
+                    dp.text(
+                        egui::pos2(dc.x + r_outer - 5.0, dc.y),
+                        egui::Align2::CENTER_CENTER,
+                        "우",
+                        egui::FontId::proportional(8.5),
+                        muted,
+                    );
+
+                    // 외곽 360° 회전각(ψ) 마커 & 구면 내부 상하좌우 핸드 볼 노브 위치
+                    let psi_r = state.active_section_angle_deg.to_radians() as f32;
+                    let ring_pt = egui::pos2(
+                        dc.x + (r_outer - 4.0) * psi_r.cos(),
+                        dc.y + (r_outer - 4.0) * psi_r.sin(),
+                    );
+                    dp.circle_filled(ring_pt, 3.5, profile_red);
+
+                    let nx = (psi_r.sin() * 0.65).clamp(-0.85, 0.85);
+                    let ny = ((state.pitch_deg - 22.0) / 65.0).clamp(-0.85, 0.85);
+                    let puck_pos =
+                        egui::pos2(dc.x + nx * (r_sphere - 8.0), dc.y + ny * (r_sphere - 8.0));
+                    dp.line_segment([dc, puck_pos], egui::Stroke::new(1.5_f32, terra));
+                    dp.circle_filled(puck_pos, 6.5, terra);
+                    dp.circle_stroke(puck_pos, 6.5, egui::Stroke::new(1.2_f32, hanji));
+
+                    // 우측: 핸드 다이얼 모드 전환 + 방향 미세조절 버튼 + 절단면 ΔY / Z 컨트롤
+                    ui.vertical(|ui| {
+                        ui.spacing_mut().item_spacing.y = 3.0;
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 3.0;
+                            for (mode, label) in [
+                                (DragMode3D::TurntableArtifact, "손회전(절단틀고정)"),
+                                (DragMode3D::AxisTilt, "축기울기(0.1°)"),
+                                (DragMode3D::CameraOrbit, "카메라"),
+                            ] {
+                                let is_sel = state.drag_mode == mode;
+                                let btn = egui::Button::new(
+                                    egui::RichText::new(label)
+                                        .size(10.0)
+                                        .color(if is_sel { clay_ink } else { ink }),
+                                )
+                                .fill(if is_sel { clay_wash } else { desk })
+                                .stroke(egui::Stroke::new(
+                                    1.0_f32,
+                                    if is_sel { terra } else { line_col },
+                                ))
+                                .corner_radius(3.0);
+                                if ui.add(btn).clicked() {
+                                    state.drag_mode = mode;
+                                }
+                            }
+                            if ui
+                                .add(
+                                    egui::Button::new(
+                                        egui::RichText::new("정위치 0°").size(10.0).color(ink),
+                                    )
+                                    .fill(surface)
+                                    .stroke(egui::Stroke::new(1.0_f32, border))
+                                    .corner_radius(3.0),
+                                )
+                                .clicked()
+                            {
+                                state.reset_hand_orientation();
+                            }
+                        });
+
+                        // 상하좌우 스텝 버튼 + 현재 각도 표시
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 3.0;
+                            if ui.small_button("◀ 좌 5°").clicked() {
+                                state.apply_hand_dial_drag(
+                                    -6.0,
+                                    0.0,
+                                    state.drag_mode == DragMode3D::AxisTilt,
+                                );
+                            }
+                            if ui.small_button("▶ 우 5°").clicked() {
+                                state.apply_hand_dial_drag(
+                                    6.0,
+                                    0.0,
+                                    state.drag_mode == DragMode3D::AxisTilt,
+                                );
+                            }
+                            if ui.small_button("▲ 상").clicked() {
+                                state.apply_hand_dial_drag(
+                                    0.0,
+                                    -8.0,
+                                    state.drag_mode == DragMode3D::AxisTilt,
+                                );
+                            }
+                            if ui.small_button("▼ 하").clicked() {
+                                state.apply_hand_dial_drag(
+                                    0.0,
+                                    8.0,
+                                    state.drag_mode == DragMode3D::AxisTilt,
+                                );
+                            }
+                            ui.colored_label(
+                                muted,
+                                format!(
+                                    "ψ={:.0}° · 기울기 {:+.1}°/{:+.1}°",
+                                    state.active_section_angle_deg, state.tilt_deg, state.roll_deg
+                                ),
+                            );
+                        });
+
+                        // 절단틀 위치(ΔY, Z) 정밀 드래그값 (컴팩트 1줄)
                         let max_off = (radius_mm * 0.85).max(10.0);
-                        ui.colored_label(muted, "종단면 ΔY:");
-                        ui.add(
-                            egui::Slider::new(&mut state.cut_y_mm, -max_off..=max_off)
-                                .suffix("mm")
-                                .fixed_decimals(1),
-                        );
-                        ui.end_row();
-
-                        ui.colored_label(muted, "횡단면 Z:");
-                        ui.add(
-                            egui::Slider::new(&mut state.top_cut_z_mm, 0.0..=height_mm)
-                                .suffix("mm")
-                                .fixed_decimals(1),
-                        );
-                        ui.end_row();
-
-                        ui.colored_label(muted, "기울기:");
-                        ui.add(
-                            egui::Slider::new(&mut state.tilt_deg, -25.0..=25.0)
-                                .step_by(0.1)
-                                .suffix("°")
-                                .fixed_decimals(1),
-                        );
-                        ui.end_row();
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 4.0;
+                            ui.colored_label(muted, "종단면 ΔY:");
+                            ui.add(
+                                egui::DragValue::new(&mut state.cut_y_mm)
+                                    .speed(0.2)
+                                    .range(-max_off..=max_off)
+                                    .suffix("mm")
+                                    .fixed_decimals(1),
+                            );
+                            ui.add_space(4.0);
+                            ui.colored_label(muted, "횡단면 Z:");
+                            ui.add(
+                                egui::DragValue::new(&mut state.top_cut_z_mm)
+                                    .speed(0.3)
+                                    .range(0.0..=height_mm)
+                                    .suffix("mm")
+                                    .fixed_decimals(1),
+                            );
+                        });
                     });
+                });
             });
 
         // 6. 하단 0°~360° 구연 잔존·결손 띠 (`[★ 최적 단면각 ...° 즉시 이동]`)
@@ -1184,5 +1445,55 @@ mod tests {
             !h_segs.is_empty(),
             "horizontal Z=18mm plane intersection must produce 3D segments"
         );
+    }
+
+    #[test]
+    fn test_tdd1_view3d_dirty_cache_skips_redundant_rerender_and_supports_hd_resolution() {
+        let mesh = make_test_bowl_mesh();
+        let mut state = View3DPaneState::default();
+
+        // 1차 호출: 캐시 미스 -> 실제 렌더링 수행 및 560x560 고해상도(기존 360 제한 돌파) 확인
+        let (w1, h1, recomputed1) = state.ensure_zbuffer_cached(&mesh, None, 560, 560);
+        assert!(recomputed1, "first frame must recompute Z-buffer");
+        assert_eq!((w1, h1), (560, 560), "must support HD 560x560 resolution without 360px clamp");
+
+        // 2차 호출 (상태 불변): 캐시 히트 -> 재렌더링 0회 (버벅거림 원천 차단)
+        let (w2, h2, recomputed2) = state.ensure_zbuffer_cached(&mesh, None, 560, 560);
+        assert!(!recomputed2, "identical state must hit dirty cache with 0 recomputation");
+        assert_eq!((w2, h2), (560, 560));
+
+        // 3차 호출 (유물 회전 변화): 캐시 무효화 -> 재렌더링 수행
+        state.active_section_angle_deg = 45.0;
+        let (_, _, recomputed3) = state.ensure_zbuffer_cached(&mesh, None, 560, 560);
+        assert!(recomputed3, "changed rotation angle must trigger Z-buffer recomputation");
+    }
+
+    #[test]
+    fn test_tdd4_hand_dial_spherical_rotation_updates_pitch_yaw_roll() {
+        let mut state = View3DPaneState::default();
+        let initial_psi = state.active_section_angle_deg;
+        let initial_pitch = state.pitch_deg;
+
+        // 손으로 다이얼을 우측(+40px), 상단(-30px)으로 굴렸을 때 유물 좌우 회전(ψ)과 상하 시야/기울기가 직관적으로 변해야 함
+        state.apply_hand_dial_drag(40.0, -30.0, false);
+        assert!(
+            (state.active_section_angle_deg - initial_psi).abs() > 10.0,
+            "horizontal dial drag must rotate artifact ψ"
+        );
+        assert!(
+            (state.pitch_deg - initial_pitch).abs() > 5.0,
+            "vertical dial drag must tilt/rotate vertical viewing angle"
+        );
+
+        // 미세 중심축 기울기 다이얼 모드에서는 상하/좌우 드래그가 tilt_deg와 roll_deg를 직접 변경해야 함
+        state.apply_hand_dial_drag(20.0, -15.0, true);
+        assert!(state.roll_deg.abs() > 0.5, "fine axis dial horizontal drag must adjust roll_deg");
+        assert!(state.tilt_deg.abs() > 0.5, "fine axis dial vertical drag must adjust tilt_deg");
+
+        // 정위치 초기화 시 0도로 복귀해야 함
+        state.reset_hand_orientation();
+        assert_eq!(state.active_section_angle_deg, 0.0);
+        assert_eq!(state.tilt_deg, 0.0);
+        assert_eq!(state.roll_deg, 0.0);
     }
 }
