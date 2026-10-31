@@ -60,7 +60,10 @@ fn build_synthetic_vessel_mesh(name: &str, radius_mm: f64, height_mm: f64) -> Tr
             triangles.push([a, d, c]);
         }
     }
-    TriMesh::from_positions_and_triangles(name, positions, triangles).expect("synthetic vessel ok")
+    match TriMesh::from_positions_and_triangles(name, positions, triangles) {
+        Ok(m) => m,
+        Err(_) => unreachable!("synthetic vessel has >= 3 vertices and >= 1 triangle"),
+    }
 }
 
 /// `V1 ~ V8` 결정론적 하네스 검증 스위트를 실행한다 (`DESIGN_SPEC.md` 5.2).
@@ -143,12 +146,16 @@ pub fn run_v1_to_v8_verification_harness() -> Vec<GateCheckResult> {
         let a = (i as f64 / 23.0) * 55.0_f64.to_radians();
         arc_pts.push([75.0 * a.cos(), 75.0 * a.sin()]);
     }
-    let cfit = fit_rim_arc_unbiased(&arc_pts, false).expect("circle fit ok");
+    let cfit_res = fit_rim_arc_unbiased(&arc_pts, false);
+    let (cfit_d, cfit_err, cfit_pct) = match cfit_res {
+        Ok(ref fit) => (fit.diameter_mm, fit.diameter_std_err_mm, fit.remaining_arc_pct),
+        Err(_) => (0.0, 999.0, 0.0),
+    };
     let gap_chart = compute_rim_gap_chart_360(&mesh, true);
     let eval_angles = evaluate_section_angles_parallel(&mesh, 6);
     let best_angle = eval_angles.first().map(|s| s.angle_deg).unwrap_or(0.0);
     let v3_ok = !seg.vertex_regions.is_empty()
-        && (cfit.diameter_mm - 150.0).abs() < 0.2
+        && (cfit_d - 150.0).abs() < 0.2
         && gap_chart.occupied_bins > 0
         && !eval_angles.is_empty();
     results.push(GateCheckResult {
@@ -157,7 +164,7 @@ pub fn run_v1_to_v8_verification_harness() -> Vec<GateCheckResult> {
         passed: v3_ok,
         detail: format!(
             "복원구경={:.2}±{:.2}mm (잔존 {:.1}%), 최적 단면각 ★{:.0}°",
-            cfit.diameter_mm, cfit.diameter_std_err_mm, cfit.remaining_arc_pct, best_angle
+            cfit_d, cfit_err, cfit_pct, best_angle
         ),
     });
 

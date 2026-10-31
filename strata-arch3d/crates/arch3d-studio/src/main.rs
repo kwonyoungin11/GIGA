@@ -300,8 +300,10 @@ impl StrataStudioApp {
                 triangles.push([a, d, c]);
             }
         }
-        let mesh = TriMesh::from_positions_and_triangles(title, positions, triangles)
-            .expect("preset mesh ok");
+        let mesh = match TriMesh::from_positions_and_triangles(title, positions, triangles) {
+            Ok(m) => m,
+            Err(_) => unreachable!("preset mesh has >= 3 vertices and >= 1 triangle"),
+        };
         ArtifactSlotEntry::from_mesh(
             title,
             None,
