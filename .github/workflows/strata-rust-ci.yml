@@ -1,0 +1,74 @@
+name: STRATA DongArch3D Rust CI (V1-V8 Harness)
+
+on:
+  push:
+    branches: [master, main, "feat/**", "factory/**"]
+    paths:
+      - "strata-arch3d/**"
+      - "docs/ui/**"
+      - ".github/workflows/strata-rust-ci.yml"
+  pull_request:
+    branches: [master, main]
+    paths:
+      - "strata-arch3d/**"
+      - "docs/ui/**"
+      - ".github/workflows/strata-rust-ci.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: strata-rust-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  rust-harness-verify:
+    name: Rust Stable · Clippy (-D warnings) · V1-V8 Harness · 8-Mode Plate Shots
+    runs-on: windows-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust Stable Toolchain (rustfmt + clippy)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Cargo Registry & Target
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "strata-arch3d -> target"
+
+      - name: "[V1] Verify Cargo Check & Clippy Zero Warnings"
+        working-directory: strata-arch3d
+        run: |
+          cargo check --workspace --all-targets
+          cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: "[V2-V8] Run Full Workspace Test Suite (Core, IO, Orient, Measure, Section, Shade, Export, Studio)"
+        working-directory: strata-arch3d
+        run: |
+          cargo test --workspace -- --nocapture
+
+      - name: "[V8] Run Headless Harness Supervisor & Capture Canonical UI/Plate Verification Shots"
+        working-directory: strata-arch3d
+        run: |
+          $shotDir = "target/ci-shots"
+          New-Item -ItemType Directory -Force -Path $shotDir | Out-Null
+          cargo run --release -p arch3d-studio -- --verify-all --screenshot-tour "$shotDir"
+          Get-ChildItem "$shotDir/*" | ForEach-Object {
+            if ($_.Length -lt 1000) { throw "Artifact $($_.Name) is unexpectedly small ($($_.Length) bytes)" }
+          }
+
+      - name: Upload STRATA Rust Verification Artifacts (PNG, SVG, DXF, PDF, Harness Report)
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: strata-arch3d-rust-verification
+          retention-days: 14
+          path: |
+            strata-arch3d/target/ci-shots/*

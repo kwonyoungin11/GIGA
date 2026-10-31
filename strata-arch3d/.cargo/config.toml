@@ -1,0 +1,8 @@
+[build]
+# Fast parallel incremental compilation for STRATA DongArch3D workspace
+jobs = 8
+
+[alias]
+verify-v1 = "clippy --workspace --all-targets -- -D warnings"
+verify-all = "test --workspace -- --nocapture"
+studio = "run --release -p arch3d-studio --"

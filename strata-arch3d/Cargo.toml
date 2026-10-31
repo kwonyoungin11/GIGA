@@ -1,0 +1,44 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/arch3d-core",
+    "crates/arch3d-io",
+    "crates/arch3d-orient",
+    "crates/arch3d-measure",
+    "crates/arch3d-section",
+    "crates/arch3d-shade",
+    "crates/arch3d-export",
+    "crates/arch3d-studio",
+]
+
+[workspace.package]
+version = "2.0.0"
+edition = "2021"
+license = "Proprietary"
+authors = ["Dongguk Cultural Heritage Research Institute · STRATA Engineering Team"]
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_debug_implementations = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+unwrap_used = "warn"
+
+[workspace.dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "2.0"
+rayon = "1.10"
+kurbo = "0.11"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+eframe = "0.31"
+egui = "0.31"
+rfd = "0.15"
+arch3d-core = { path = "crates/arch3d-core" }
+arch3d-io = { path = "crates/arch3d-io" }
+arch3d-orient = { path = "crates/arch3d-orient" }
+arch3d-measure = { path = "crates/arch3d-measure" }
+arch3d-section = { path = "crates/arch3d-section" }
+arch3d-shade = { path = "crates/arch3d-shade" }
+arch3d-export = { path = "crates/arch3d-export" }
