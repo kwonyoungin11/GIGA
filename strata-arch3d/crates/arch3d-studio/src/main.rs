@@ -1023,9 +1023,9 @@ impl eframe::App for StrataStudioApp {
                             },
                         );
                     });
-                    if (self.view3d_state.active_section_angle_deg - prev_angle).abs() > 0.1
-                        || (self.view3d_state.cut_y_mm - prev_cut_y).abs() > 0.1
-                        || (self.view3d_state.top_cut_z_mm - prev_top_z).abs() > 0.1
+                    if (self.view3d_state.active_section_angle_deg - prev_angle).abs() > 1e-4
+                        || (self.view3d_state.cut_y_mm - prev_cut_y).abs() > 1e-4
+                        || (self.view3d_state.top_cut_z_mm - prev_top_z).abs() > 1e-4
                     {
                         slot.rebuild_plate(
                             self.flip_exterior_right,

@@ -45,6 +45,39 @@ pub enum DragMode3D {
     AxisTilt,
 }
 
+/// 3D 뷰포트 내부 상·하·좌·우 4방향 정밀 미세 다이얼 방향
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CardinalDialDir {
+    /// 상단 미세 다이얼 (`▲ 미세 상 (Up) [ 0.01mm ]`): 종단면 ΔY `+0.01 mm` 정밀 이동
+    Up,
+    /// 하단 미세 다이얼 (`▼ 미세 하 (Down) [ 0.01mm ]`): 종단면 ΔY `-0.01 mm` 정밀 이동
+    Down,
+    /// 좌측 미세 다이얼 (`◀ 미세 좌 (Left) [ 0.1° ]`): 유물 회전각 ψ `-0.1°` 정밀 회전
+    Left,
+    /// 우측 미세 다이얼 (`▶ 미세 우 (Right) [ 0.1° ]`): 유물 회전각 ψ `+0.1°` 정밀 회전
+    Right,
+}
+
+/// 3D 뷰포트의 가로·세로 종횡비(`rect_w / rect_h`)를 드래그 중(`is_dragging = true`)과
+/// 마우스 해제 후(`is_dragging = false`)에 100% 동일하게 보존하는 등방성(Isotropic) 렌더 해상도를 계산한다.
+/// - 기존처럼 가로·세로를 개별적으로 `.clamp(200, 640)`하면 세로가 긴 뷰포트에서 마우스를 놓는 순간
+///   세로 해상도만 640에 걸려 유물이 위아래로 늘어나는 치명적 왜곡이 발생하므로, 단일 스케일 계수 `s`만 곱한다.
+pub fn compute_isotropic_render_dimensions(
+    rect_w: f32,
+    rect_h: f32,
+    is_dragging: bool,
+) -> (u32, u32) {
+    let rw = f64::from(rect_w.max(64.0));
+    let rh = f64::from(rect_h.max(64.0));
+    let max_dim = rw.max(rh);
+    let desired_mult = if is_dragging { 0.78 } else { 1.0 };
+    let max_cap = if is_dragging { 540.0 } else { 720.0 };
+    let s = (max_cap / max_dim).min(desired_mult).max(160.0 / max_dim);
+    let w = (rw * s).round().max(64.0) as u32;
+    let h = ((w as f64) * (rh / rw)).round().max(64.0) as u32;
+    (w, h)
+}
+
 /// 3D Z-버퍼 프레임 더티 캐시 키 (동일 파라미터에서 재렌더링 및 GPU 텍스처 재할당을 0회로 차단).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct View3DRenderCacheKey {
@@ -168,11 +201,11 @@ impl View3DPaneState {
             yaw_q: (self.yaw_deg * 5.0).round() as i32,
             pitch_q: (self.pitch_deg * 5.0).round() as i32,
             zoom_q: (self.zoom * 100.0).round() as i32,
-            psi_q: (self.active_section_angle_deg * 5.0).round() as i32,
+            psi_q: (self.active_section_angle_deg * 10.0).round() as i32,
             tilt_q: (self.tilt_deg * 10.0).round() as i32,
             roll_q: (self.roll_deg * 10.0).round() as i32,
-            cut_y_q: (self.cut_y_mm * 10.0).round() as i32,
-            top_z_q: (self.top_cut_z_mm * 10.0).round() as i32,
+            cut_y_q: (self.cut_y_mm * 100.0).round() as i32,
+            top_z_q: (self.top_cut_z_mm * 100.0).round() as i32,
         }
     }
 
@@ -185,8 +218,16 @@ impl View3DPaneState {
         width: u32,
         height: u32,
     ) -> (u32, u32, bool) {
-        let w = width.clamp(160, 720);
-        let h = height.clamp(160, 720);
+        let max_dim = width.max(height).max(64);
+        let (w, h) = if max_dim > 760 {
+            let s = 760.0 / (max_dim as f64);
+            (
+                ((width as f64) * s).round().max(64.0) as u32,
+                ((height as f64) * s).round().max(64.0) as u32,
+            )
+        } else {
+            (width.max(64), height.max(64))
+        };
         let key = self.build_cache_key(&mesh.name, w, h);
         if self.cached_zbuffer_key.as_ref() == Some(&key) {
             if let Some(ref img) = self.cached_zbuffer_rgba {
@@ -206,11 +247,11 @@ impl View3DPaneState {
     pub fn ensure_3d_curves_cached(&mut self, mesh: &TriMesh) {
         let ckey = (
             mesh.name.clone(),
-            (self.active_section_angle_deg * 5.0).round() as i32,
+            (self.active_section_angle_deg * 10.0).round() as i32,
             (self.tilt_deg * 10.0).round() as i32,
             (self.roll_deg * 10.0).round() as i32,
-            (self.cut_y_mm * 10.0).round() as i32,
-            (self.top_cut_z_mm * 10.0).round() as i32,
+            (self.cut_y_mm * 100.0).round() as i32,
+            (self.top_cut_z_mm * 100.0).round() as i32,
         );
         if self.cached_curves_key.as_ref() == Some(&ckey) {
             return;
@@ -230,6 +271,30 @@ impl View3DPaneState {
             false,
         );
         self.cached_curves_key = Some(ckey);
+    }
+
+    /// 상·하·좌·우 4방향 미세 다이얼 스텝을 부동소수점 누적 오차 없이(정수 양자화 연산) 정확히 적용한다.
+    /// - `Up` / `Down`: `cut_y_mm`을 정확히 `±0.01 mm` (`1/100 mm` 정수 반올림) 단위로 조절
+    /// - `Left` / `Right`: `active_section_angle_deg`를 정확히 `±0.1°` (`1/10°` 정수 반올림) 단위로 조절
+    pub fn apply_cardinal_fine_dial(&mut self, dir: CardinalDialDir, steps: i32) {
+        match dir {
+            CardinalDialDir::Up => {
+                let hundredths = (self.cut_y_mm * 100.0).round() as i64 + i64::from(steps);
+                self.cut_y_mm = (hundredths as f64) / 100.0;
+            }
+            CardinalDialDir::Down => {
+                let hundredths = (self.cut_y_mm * 100.0).round() as i64 - i64::from(steps);
+                self.cut_y_mm = (hundredths as f64) / 100.0;
+            }
+            CardinalDialDir::Right => {
+                let tenths = (self.active_section_angle_deg * 10.0).round() as i64 + i64::from(steps);
+                self.active_section_angle_deg = ((tenths as f64) / 10.0).rem_euclid(360.0);
+            }
+            CardinalDialDir::Left => {
+                let tenths = (self.active_section_angle_deg * 10.0).round() as i64 - i64::from(steps);
+                self.active_section_angle_deg = ((tenths as f64) / 10.0).rem_euclid(360.0);
+            }
+        }
     }
 
     /// 유물 상하좌우 핸드 다이얼(구면 트랙볼) 드래그 입력을 적용한다.
@@ -812,15 +877,108 @@ pub fn render_view3d_pane_egui(
         let (rect, response) =
             ui.allocate_exact_size(egui::vec2(avail.x, canvas_h), egui::Sense::click_and_drag());
 
-        // 마우스 드래그: HTML Gate 1의 3가지 드래그 모드와 1:1 동일하게 작동
-        if response.dragged() {
+        // 1-A. 뷰포트 내부 상·하·좌·우 4방향 정밀 미세 다이얼 영역 선할당 (다이얼 조작 시 캔버스 드래그와 간섭 차단)
+        let dial_horiz_w = (rect.width() * 0.38).clamp(136.0, 168.0);
+        let dial_horiz_h = 22.0_f32;
+        let top_dial_rect = egui::Rect::from_center_size(
+            egui::pos2(rect.center().x - 14.0, rect.top() + 100.0),
+            egui::vec2(dial_horiz_w, dial_horiz_h),
+        );
+        let bot_dial_rect = egui::Rect::from_center_size(
+            egui::pos2(rect.center().x - 14.0, rect.bottom() - 36.0),
+            egui::vec2(dial_horiz_w, dial_horiz_h),
+        );
+        let dial_vert_w = 24.0_f32;
+        let dial_vert_h = (rect.height() * 0.36).clamp(118.0, 184.0);
+        let dial_mid_y = (top_dial_rect.bottom() + bot_dial_rect.top()) * 0.5;
+        let left_dial_rect = egui::Rect::from_center_size(
+            egui::pos2(rect.left() + 36.0, dial_mid_y),
+            egui::vec2(dial_vert_w, dial_vert_h),
+        );
+        let right_dial_rect = egui::Rect::from_center_size(
+            egui::pos2(rect.right() - 36.0, dial_mid_y),
+            egui::vec2(dial_vert_w, dial_vert_h),
+        );
+
+        let top_dial_resp = ui.interact(
+            top_dial_rect,
+            egui::Id::new("v3d_cardinal_dial_up"),
+            egui::Sense::click_and_drag(),
+        );
+        let bot_dial_resp = ui.interact(
+            bot_dial_rect,
+            egui::Id::new("v3d_cardinal_dial_down"),
+            egui::Sense::click_and_drag(),
+        );
+        let left_dial_resp = ui.interact(
+            left_dial_rect,
+            egui::Id::new("v3d_cardinal_dial_left"),
+            egui::Sense::click_and_drag(),
+        );
+        let right_dial_resp = ui.interact(
+            right_dial_rect,
+            egui::Id::new("v3d_cardinal_dial_right"),
+            egui::Sense::click_and_drag(),
+        );
+
+        // 상단 미세 다이얼 (▲ 미세 상 [0.01mm]): 클릭 시 +0.01mm, 좌우 스크럽 시 3px당 0.01mm 정밀 이동
+        if top_dial_resp.clicked() {
+            state.apply_cardinal_fine_dial(CardinalDialDir::Up, 1);
+        } else if top_dial_resp.dragged() {
+            let steps = (top_dial_resp.drag_delta().x / 2.5).round() as i32;
+            if steps != 0 {
+                state.apply_cardinal_fine_dial(CardinalDialDir::Up, steps);
+            }
+        }
+        // 하단 미세 다이얼 (▼ 미세 하 [0.01mm]): 클릭 시 -0.01mm, 좌우 스크럽 시 3px당 0.01mm 정밀 이동
+        if bot_dial_resp.clicked() {
+            state.apply_cardinal_fine_dial(CardinalDialDir::Down, 1);
+        } else if bot_dial_resp.dragged() {
+            let steps = (bot_dial_resp.drag_delta().x / 2.5).round() as i32;
+            if steps != 0 {
+                state.apply_cardinal_fine_dial(CardinalDialDir::Down, steps.abs().max(1));
+            }
+        }
+        // 좌측 미세 다이얼 (◀ 미세 좌 [0.1°]): 클릭 시 -0.1°, 상하 스크럽 시 0.1° 정밀 회전
+        if left_dial_resp.clicked() {
+            state.apply_cardinal_fine_dial(CardinalDialDir::Left, 1);
+        } else if left_dial_resp.dragged() {
+            let steps = (left_dial_resp.drag_delta().y / 2.5).round() as i32;
+            if steps != 0 {
+                state.apply_cardinal_fine_dial(CardinalDialDir::Left, steps.abs().max(1));
+            }
+        }
+        // 우측 미세 다이얼 (▶ 미세 우 [0.1°]): 클릭 시 +0.1°, 상하 스크럽 시 0.1° 정밀 회전
+        if right_dial_resp.clicked() {
+            state.apply_cardinal_fine_dial(CardinalDialDir::Right, 1);
+        } else if right_dial_resp.dragged() {
+            let steps = (right_dial_resp.drag_delta().y / 2.5).round() as i32;
+            if steps != 0 {
+                state.apply_cardinal_fine_dial(CardinalDialDir::Right, steps.abs().max(1));
+            }
+        }
+
+        let any_fine_dial_active = top_dial_resp.dragged()
+            || bot_dial_resp.dragged()
+            || left_dial_resp.dragged()
+            || right_dial_resp.dragged()
+            || top_dial_resp.hovered()
+            || bot_dial_resp.hovered()
+            || left_dial_resp.hovered()
+            || right_dial_resp.hovered();
+
+        // 마우스 드래그: 미세 다이얼 위가 아닐 때만 3D 뷰포트 회전 동작 수행
+        if response.dragged() && !any_fine_dial_active {
             let delta = response.drag_delta();
             match state.drag_mode {
                 DragMode3D::TurntableArtifact => {
-                    // 절단틀(P_cut)은 고정하고 유물만 회전축 둘레로 회전(ψ)
+                    // 절단틀(P_cut)은 고정하고 유물만 회전축 둘레로 0.1° 정밀 단위로 회전(ψ)
+                    let next_psi = state.active_section_angle_deg + f64::from(delta.x) * 0.6;
                     state.active_section_angle_deg =
-                        (state.active_section_angle_deg + f64::from(delta.x) * 0.65).rem_euclid(360.0);
-                    state.pitch_deg = (state.pitch_deg + delta.y * 0.35).clamp(-65.0, 75.0);
+                        ((next_psi * 10.0).round() / 10.0).rem_euclid(360.0);
+                    // 정면 실측 시야각(8° ~ 36°) 범위로 피치를 안전하게 제한하여
+                    // 마우스 이동 중 위에서 내려다보는 평면도(75°)로 뒤집히거나 늘어나는 현상을 원천 방지
+                    state.pitch_deg = (state.pitch_deg + delta.y * 0.22).clamp(8.0, 36.0);
                 }
                 DragMode3D::CameraOrbit => {
                     state.yaw_deg = (state.yaw_deg + delta.x * 0.6).rem_euclid(360.0);
@@ -845,11 +1003,16 @@ pub fn render_view3d_pane_egui(
         let painter = ui.painter_at(rect);
         painter.rect_filled(rect, 3.0, wash);
 
-        // 더티 캐시 기반 Z-버퍼 렌더링: 드래그 중에는 고속 인터랙티브 배율(0.75x), 정지 시에는 초고해상도(1.2x, 최대 640px)
-        let is_dragging = response.dragged();
-        let res_mult = if is_dragging { 0.72 } else { 1.18 };
-        let render_w = ((rect.width() * res_mult).round() as u32).clamp(200, 640);
-        let render_h = ((rect.height() * res_mult).round() as u32).clamp(200, 640);
+        // 등방성(Isotropic) 더티 캐시 Z-버퍼 렌더링:
+        // 드래그 중과 마우스를 놓았을 때(release) 가로·세로 종횡비(render_w / render_h)를 100% 동일하게 유지하여
+        // 마우스를 놓는 순간 유물이 위로 늘어나는 종횡비 왜곡을 원천 차단한다.
+        let is_dragging = response.dragged()
+            || top_dial_resp.dragged()
+            || bot_dial_resp.dragged()
+            || left_dial_resp.dragged()
+            || right_dial_resp.dragged();
+        let (render_w, render_h) =
+            compute_isotropic_render_dimensions(rect.width(), rect.height(), is_dragging);
         let _ = state.ensure_zbuffer_cached(mesh, region_labels, render_w, render_h);
 
         if state.cached_zbuffer_tex.is_none() {
@@ -874,7 +1037,7 @@ pub fn render_view3d_pane_egui(
             );
         }
         if is_dragging {
-            // 드래그 종료 직후 고해상도(1.18x) 프레임이 즉시 그려지도록 예약
+            // 드래그 종료 직후 동일 종횡비의 1.0x 정밀 프레임이 즉시 그려지도록 예약
             ui.ctx().request_repaint();
         }
 
@@ -892,6 +1055,22 @@ pub fn render_view3d_pane_egui(
             );
             egui::pos2(rect.left() + s[0] as f32, rect.top() + s[1] as f32)
         };
+
+        // 2-0: 중앙 턴테이블 2중 가이드 원 (Image 1 기준: 상·하·좌·우 미세 다이얼 안쪽 회전 영역 표시)
+        let ring_center = egui::pos2(rect.center().x, dial_mid_y);
+        let ring_r_outer =
+            ((right_dial_rect.left() - left_dial_rect.right()) * 0.42).clamp(76.0, 148.0);
+        let ring_r_inner = ring_r_outer - 8.0;
+        painter.circle_stroke(
+            ring_center,
+            ring_r_outer,
+            egui::Stroke::new(0.9_f32, egui::Color32::from_rgba_unmultiplied(168, 164, 154, 140)),
+        );
+        painter.circle_stroke(
+            ring_center,
+            ring_r_inner,
+            egui::Stroke::new(0.8_f32, egui::Color32::from_rgba_unmultiplied(168, 164, 154, 110)),
+        );
 
         // 2-A: 바닥 동심원 정위 타겟 격자 (Z = 0 평면)
         if state.show_concentric_scope {
@@ -965,6 +1144,172 @@ pub fn render_view3d_pane_egui(
             }
         }
 
+        // 2-C: 상·하·좌·우 4방향 정밀 미세 다이얼 렌더링 (`media_1793488638335_43ae290a.jpg` 1:1 구현)
+        let dial_fill = egui::Color32::from_rgb(232, 229, 220);
+        let dial_stroke = egui::Color32::from_rgb(184, 180, 168);
+        let tick_col = egui::Color32::from_rgb(162, 158, 148);
+        let tick_major_col = egui::Color32::from_rgb(118, 114, 106);
+
+        // 상단 미세 다이얼 (`▲ 미세 상 (Up) [ 0.01mm ]`)
+        painter.text(
+            egui::pos2(top_dial_rect.center().x, top_dial_rect.top() - 9.0),
+            egui::Align2::CENTER_CENTER,
+            "▲ 미세 상 (Up) [ 0.01mm ]",
+            egui::FontId::proportional(10.5),
+            ink,
+        );
+        painter.rect_filled(top_dial_rect, 11.0, dial_fill);
+        painter.rect_stroke(
+            top_dial_rect,
+            11.0,
+            egui::Stroke::new(
+                if top_dial_resp.hovered() { 1.4_f32 } else { 1.0_f32 },
+                if top_dial_resp.hovered() { terra } else { dial_stroke },
+            ),
+            egui::StrokeKind::Inside,
+        );
+        let n_ticks_h = 36usize;
+        let phase_up = ((state.cut_y_mm * 100.0).rem_euclid(5.0) / 5.0) as f32;
+        for ti in 0..=n_ticks_h {
+            let frac = ((ti as f32 + phase_up) / (n_ticks_h as f32)).clamp(0.0, 1.0);
+            let tx = top_dial_rect.left() + 10.0 + frac * (top_dial_rect.width() - 20.0);
+            let is_mid = ti == n_ticks_h / 2;
+            let th = if is_mid { 13.0 } else if ti % 5 == 0 { 10.0 } else { 7.0 };
+            painter.line_segment(
+                [
+                    egui::pos2(tx, top_dial_rect.center().y - th * 0.5),
+                    egui::pos2(tx, top_dial_rect.center().y + th * 0.5),
+                ],
+                egui::Stroke::new(
+                    if is_mid { 1.3_f32 } else { 0.8_f32 },
+                    if is_mid { tick_major_col } else { tick_col },
+                ),
+            );
+        }
+
+        // 하단 미세 다이얼 (`▼ 미세 하 (Down) [ 0.01mm ]`)
+        painter.rect_filled(bot_dial_rect, 11.0, dial_fill);
+        painter.rect_stroke(
+            bot_dial_rect,
+            11.0,
+            egui::Stroke::new(
+                if bot_dial_resp.hovered() { 1.4_f32 } else { 1.0_f32 },
+                if bot_dial_resp.hovered() { terra } else { dial_stroke },
+            ),
+            egui::StrokeKind::Inside,
+        );
+        for ti in 0..=n_ticks_h {
+            let frac = ((ti as f32 - phase_up).rem_euclid(n_ticks_h as f32) / (n_ticks_h as f32))
+                .clamp(0.0, 1.0);
+            let tx = bot_dial_rect.left() + 10.0 + frac * (bot_dial_rect.width() - 20.0);
+            let is_mid = ti == n_ticks_h / 2;
+            let th = if is_mid { 13.0 } else if ti % 5 == 0 { 10.0 } else { 7.0 };
+            painter.line_segment(
+                [
+                    egui::pos2(tx, bot_dial_rect.center().y - th * 0.5),
+                    egui::pos2(tx, bot_dial_rect.center().y + th * 0.5),
+                ],
+                egui::Stroke::new(
+                    if is_mid { 1.3_f32 } else { 0.8_f32 },
+                    if is_mid { tick_major_col } else { tick_col },
+                ),
+            );
+        }
+        painter.text(
+            egui::pos2(bot_dial_rect.center().x, bot_dial_rect.bottom() + 10.0),
+            egui::Align2::CENTER_CENTER,
+            "▼ 미세 하 (Down) [ 0.01mm ]",
+            egui::FontId::proportional(10.5),
+            ink,
+        );
+
+        // 좌측 미세 다이얼 (`◀ 미세 좌 (Left) [ 0.1° ]`)
+        painter.rect_filled(left_dial_rect, 12.0, dial_fill);
+        painter.rect_stroke(
+            left_dial_rect,
+            12.0,
+            egui::Stroke::new(
+                if left_dial_resp.hovered() { 1.4_f32 } else { 1.0_f32 },
+                if left_dial_resp.hovered() { terra } else { dial_stroke },
+            ),
+            egui::StrokeKind::Inside,
+        );
+        let n_ticks_v = 32usize;
+        let phase_ang = ((state.active_section_angle_deg * 10.0).rem_euclid(5.0) / 5.0) as f32;
+        for ti in 0..=n_ticks_v {
+            let frac = ((ti as f32 + phase_ang) / (n_ticks_v as f32)).clamp(0.0, 1.0);
+            let ty = left_dial_rect.top() + 10.0 + frac * (left_dial_rect.height() - 20.0);
+            let is_mid = ti == n_ticks_v / 2;
+            let tw = if is_mid { 16.0 } else if ti % 4 == 0 { 11.0 } else { 7.5 };
+            painter.line_segment(
+                [
+                    egui::pos2(left_dial_rect.center().x - tw * 0.5, ty),
+                    egui::pos2(left_dial_rect.center().x + tw * 0.5, ty),
+                ],
+                egui::Stroke::new(
+                    if is_mid { 1.3_f32 } else { 0.8_f32 },
+                    if is_mid { tick_major_col } else { tick_col },
+                ),
+            );
+        }
+        painter.text(
+            egui::pos2(left_dial_rect.center().x, left_dial_rect.top() - 9.0),
+            egui::Align2::CENTER_CENTER,
+            "◀ 미세 좌 [0.1°]",
+            egui::FontId::proportional(9.5),
+            ink,
+        );
+        painter.text(
+            egui::pos2(left_dial_rect.center().x, left_dial_rect.bottom() + 9.0),
+            egui::Align2::CENTER_CENTER,
+            "0.1°",
+            egui::FontId::monospace(9.5),
+            muted,
+        );
+
+        // 우측 미세 다이얼 (`▶ 미세 우 (Right) [ 0.1° ]`)
+        painter.rect_filled(right_dial_rect, 12.0, dial_fill);
+        painter.rect_stroke(
+            right_dial_rect,
+            12.0,
+            egui::Stroke::new(
+                if right_dial_resp.hovered() { 1.4_f32 } else { 1.0_f32 },
+                if right_dial_resp.hovered() { terra } else { dial_stroke },
+            ),
+            egui::StrokeKind::Inside,
+        );
+        for ti in 0..=n_ticks_v {
+            let frac = ((ti as f32 - phase_ang).rem_euclid(n_ticks_v as f32) / (n_ticks_v as f32))
+                .clamp(0.0, 1.0);
+            let ty = right_dial_rect.top() + 10.0 + frac * (right_dial_rect.height() - 20.0);
+            let is_mid = ti == n_ticks_v / 2;
+            let tw = if is_mid { 16.0 } else if ti % 4 == 0 { 11.0 } else { 7.5 };
+            painter.line_segment(
+                [
+                    egui::pos2(right_dial_rect.center().x - tw * 0.5, ty),
+                    egui::pos2(right_dial_rect.center().x + tw * 0.5, ty),
+                ],
+                egui::Stroke::new(
+                    if is_mid { 1.3_f32 } else { 0.8_f32 },
+                    if is_mid { tick_major_col } else { tick_col },
+                ),
+            );
+        }
+        painter.text(
+            egui::pos2(right_dial_rect.center().x, right_dial_rect.top() - 9.0),
+            egui::Align2::CENTER_CENTER,
+            "미세 우 [0.1°] ▶",
+            egui::FontId::proportional(9.5),
+            ink,
+        );
+        painter.text(
+            egui::pos2(right_dial_rect.center().x, right_dial_rect.bottom() + 9.0),
+            egui::Align2::CENTER_CENTER,
+            "0.1°",
+            egui::FontId::monospace(9.5),
+            muted,
+        );
+
         // 3. 상단 헤더 텍스트 & 셰이더 전환 알약 칩 (실사텍스처 · 솔리드 · 정밀탁본 · 3분류파단 · X-Ray · 1/4절개)
         let top_bar_rect = egui::Rect::from_min_size(
             egui::pos2(rect.left() + 6.0, rect.top() + 6.0),
@@ -979,7 +1324,7 @@ pub fn render_view3d_pane_egui(
             egui::pos2(top_bar_rect.left() + 8.0, top_bar_rect.center().y),
             egui::Align2::LEFT_CENTER,
             format!(
-                "고정 절단틀 P_cut (ψ={:.0}° · ΔY={:+.1}mm · Z={:.1}mm)",
+                "고정 절단틀 P_cut (ψ={:.1}° · ΔY={:+.2}mm · Z={:.1}mm)",
                 state.active_section_angle_deg, state.cut_y_mm, state.top_cut_z_mm
             ),
             egui::FontId::proportional(11.0),
@@ -1292,29 +1637,29 @@ pub fn render_view3d_pane_egui(
                             ui.colored_label(
                                 muted,
                                 format!(
-                                    "ψ={:.0}° · 기울기 {:+.1}°/{:+.1}°",
+                                    "ψ={:.1}° · 기울기 {:+.1}°/{:+.1}°",
                                     state.active_section_angle_deg, state.tilt_deg, state.roll_deg
                                 ),
                             );
                         });
 
-                        // 절단틀 위치(ΔY, Z) 정밀 드래그값 (컴팩트 1줄)
+                        // 절단틀 위치(ΔY, Z) 정밀 드래그값 (0.01mm / 0.1mm 정밀도)
                         let max_off = (radius_mm * 0.85).max(10.0);
                         ui.horizontal(|ui| {
                             ui.spacing_mut().item_spacing.x = 4.0;
                             ui.colored_label(muted, "종단면 ΔY:");
                             ui.add(
                                 egui::DragValue::new(&mut state.cut_y_mm)
-                                    .speed(0.2)
+                                    .speed(0.01)
                                     .range(-max_off..=max_off)
                                     .suffix("mm")
-                                    .fixed_decimals(1),
+                                    .fixed_decimals(2),
                             );
                             ui.add_space(4.0);
                             ui.colored_label(muted, "횡단면 Z:");
                             ui.add(
                                 egui::DragValue::new(&mut state.top_cut_z_mm)
-                                    .speed(0.3)
+                                    .speed(0.1)
                                     .range(0.0..=height_mm)
                                     .suffix("mm")
                                     .fixed_decimals(1),
@@ -1495,5 +1840,106 @@ mod tests {
         assert_eq!(state.active_section_angle_deg, 0.0);
         assert_eq!(state.tilt_deg, 0.0);
         assert_eq!(state.roll_deg, 0.0);
+    }
+
+    #[test]
+    fn test_tdd8_isotropic_projection_never_stretches_vertically_on_drag_release() {
+        let mesh = make_test_bowl_mesh();
+        let state = View3DPaneState::default();
+
+        // 세로로 긴 3D 뷰포트(예: 420x680)에서 드래그 중(is_dragging=true)과 마우스를 놓았을 때(is_dragging=false)
+        // 렌더 타깃 종횡비(w/h)가 100% 동일하게 보존되어 유물이 위로 늘어나는 왜곡이 절대 발생하지 않아야 한다.
+        let (dw, dh) = compute_isotropic_render_dimensions(420.0, 680.0, true);
+        let (rw, rh) = compute_isotropic_render_dimensions(420.0, 680.0, false);
+        let target_aspect = 420.0 / 680.0;
+        let drag_aspect = (dw as f64) / (dh as f64);
+        let release_aspect = (rw as f64) / (rh as f64);
+        assert!(
+            (drag_aspect - target_aspect).abs() < 0.005,
+            "drag aspect {drag_aspect} must match target {target_aspect}"
+        );
+        assert!(
+            (release_aspect - target_aspect).abs() < 0.005,
+            "release aspect {release_aspect} must match target {target_aspect} (never clamp height alone!)"
+        );
+
+        // 실제 렌더링된 유물 픽셀의 정규화 세로/가로 바운딩 비율이 드래그 중과 드래그 해제 후 0.8% 이내로 일치해야 함
+        let img_drag = render_mesh_zbuffer_rgba(&mesh, None, &state, dw, dh);
+        let img_rel = render_mesh_zbuffer_rgba(&mesh, None, &state, rw, rh);
+
+        let normalized_bbox = |img: &RgbaImage| -> (f64, f64) {
+            let mut min_x = img.width();
+            let mut max_x = 0u32;
+            let mut min_y = img.height();
+            let mut max_y = 0u32;
+            for (x, y, px) in img.enumerate_pixels() {
+                if (i32::from(px[0]) - i32::from(WASH.rgb[0])).abs() > 14
+                    || (i32::from(px[1]) - i32::from(WASH.rgb[1])).abs() > 14
+                {
+                    min_x = min_x.min(x);
+                    max_x = max_x.max(x);
+                    min_y = min_y.min(y);
+                    max_y = max_y.max(y);
+                }
+            }
+            (
+                (max_x.saturating_sub(min_x) as f64) / (img.width() as f64),
+                (max_y.saturating_sub(min_y) as f64) / (img.height() as f64),
+            )
+        };
+
+        let (nw_d, nh_d) = normalized_bbox(&img_drag);
+        let (nw_r, nh_r) = normalized_bbox(&img_rel);
+        assert!(
+            (nw_d - nw_r).abs() < 0.012 && (nh_d - nh_r).abs() < 0.012,
+            "normalized artifact span changed on mouse release! drag=({nw_d:.4},{nh_d:.4}) vs release=({nw_r:.4},{nh_r:.4})"
+        );
+    }
+
+    #[test]
+    fn test_tdd9_four_cardinal_fine_dials_step_exact_001mm_and_01deg() {
+        let mut state = View3DPaneState::default();
+        assert_eq!(state.cut_y_mm, 0.0);
+        assert_eq!(state.active_section_angle_deg, 0.0);
+
+        // 상단 미세 다이얼(▲ 미세 상 [0.01mm]) 100회 스텝 -> 정확히 +1.00mm (부동소수점 누적 오차 0)
+        for _ in 0..100 {
+            state.apply_cardinal_fine_dial(CardinalDialDir::Up, 1);
+        }
+        assert!(
+            (state.cut_y_mm - 1.00).abs() < 1e-9,
+            "100 steps of +0.01mm must equal exactly 1.00mm, got {}",
+            state.cut_y_mm
+        );
+
+        // 하단 미세 다이얼(▼ 미세 하 [0.01mm]) 35회 스텝 -> 정확히 +0.65mm
+        for _ in 0..35 {
+            state.apply_cardinal_fine_dial(CardinalDialDir::Down, 1);
+        }
+        assert!(
+            (state.cut_y_mm - 0.65).abs() < 1e-9,
+            "expected 0.65mm, got {}",
+            state.cut_y_mm
+        );
+
+        // 우측 미세 다이얼(▶ 미세 우 [0.1°]) 15회 스텝 -> 정확히 +1.5°
+        for _ in 0..15 {
+            state.apply_cardinal_fine_dial(CardinalDialDir::Right, 1);
+        }
+        assert!(
+            (state.active_section_angle_deg - 1.5).abs() < 1e-9,
+            "expected 1.5 deg, got {}",
+            state.active_section_angle_deg
+        );
+
+        // 좌측 미세 다이얼(◀ 미세 좌 [0.1°]) 5회 스텝 -> 정확히 +1.0°
+        for _ in 0..5 {
+            state.apply_cardinal_fine_dial(CardinalDialDir::Left, 1);
+        }
+        assert!(
+            (state.active_section_angle_deg - 1.0).abs() < 1e-9,
+            "expected 1.0 deg, got {}",
+            state.active_section_angle_deg
+        );
     }
 }

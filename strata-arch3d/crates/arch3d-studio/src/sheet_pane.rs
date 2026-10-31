@@ -525,6 +525,23 @@ pub fn render_orthographic_rubbing_rgba_with_params(
     img
 }
 
+/// 문화재청 발굴조사보고서 도판 상단 표제란(Title Block, `media_1793488638383_24317f2d.jpg` 1:1 대응) 텍스트 4종을 생성한다.
+/// 반환값: `(좌측 유적명 셀, 중앙 도판 국문 제목, 중앙 도판 영문 부제, 우측 유물·조사기관 셀)`
+pub fn build_chs_plate_title_block(
+    title: &str,
+    mode_label: &str,
+    report: &ArtifactMeasurementReport,
+) -> (String, String, String, String) {
+    let left_cell = String::from("유적명 : 국가유산청 발굴조사 연구단");
+    let center_title = format!("圖版 · 출토유물 정밀 실측도 — {}", title);
+    let center_sub = format!("(Plate. Excavated Artifact Drawings · {})", mode_label);
+    let right_cell = format!(
+        "조사기관 : 동국유물실측 · STRATA (축척 {})",
+        report.recommended_scale.label()
+    );
+    (left_cell, center_title, center_sub, right_cell)
+}
+
 /// 정밀 탁본 래스터 이미지를 도판 좌/우 반쪽 클리핑 및 사용자 드래그 ROI(`rubbing_roi_mm`) 영역에 맞춰 마스킹한다 (`Todo 7`).
 pub fn rgba_to_color_image_clipped_with_roi(
     src: &RgbaImage,
@@ -1167,13 +1184,16 @@ pub fn render_sheet_pane_egui(
             }
         }
 
-        // 3-D. 텍스트 주석 및 치수 콜아웃
+        // 3-D. 텍스트 주석 및 치수 콜아웃 (상단 표제란·대장 띠와 중복되는 장문 요약줄은 생략하여 도판 여백 정밀 유지)
         for c in &plate.callouts {
+            if c.text.contains("평균두께") || c.text.contains("최대동경") {
+                continue;
+            }
             let pos = egui::pos2(
                 (origin_x + (c.pos_mm[0] as f32) * scale)
                     .clamp(sheet_rect.left() + 34.0, sheet_rect.right() - 150.0),
                 (origin_y - (c.pos_mm[1] as f32) * scale)
-                    .clamp(sheet_rect.top() + 22.0, sheet_rect.bottom() - 18.0),
+                    .clamp(sheet_rect.top() + 58.0, sheet_rect.bottom() - 18.0),
             );
             let col = match c.color_hex.as_str() {
                 "#B5573A" => terra,
@@ -1188,6 +1208,201 @@ pub fn render_sheet_pane_egui(
                 col,
             );
         }
+
+        // 3-E. 문화재청 발굴조사보고서 도판 상단 표제란(Title Block) & 정밀 치수 화살표 보조선 (`media_1793488638383_24317f2d.jpg` 1:1 구현)
+        let (left_cell, center_title, center_sub, right_cell) =
+            build_chs_plate_title_block(&plate.title, plate.mode.label_kr(), report);
+        let tb_rect = egui::Rect::from_min_max(
+            egui::pos2(sheet_rect.left() + 26.0, sheet_rect.top() + 20.0),
+            egui::pos2(sheet_rect.right() - 4.0, sheet_rect.top() + 54.0),
+        );
+        paper_painter.rect_filled(
+            tb_rect,
+            0.0,
+            egui::Color32::from_rgba_unmultiplied(250, 249, 245, 236),
+        );
+        paper_painter.rect_stroke(
+            tb_rect,
+            0.0,
+            egui::Stroke::new(1.2_f32, ink),
+            egui::StrokeKind::Inside,
+        );
+        let col1_x = tb_rect.left() + tb_rect.width() * 0.25;
+        let col2_x = tb_rect.left() + tb_rect.width() * 0.72;
+        paper_painter.line_segment(
+            [
+                egui::pos2(col1_x, tb_rect.top()),
+                egui::pos2(col1_x, tb_rect.bottom()),
+            ],
+            egui::Stroke::new(1.0_f32, ink),
+        );
+        paper_painter.line_segment(
+            [
+                egui::pos2(col2_x, tb_rect.top()),
+                egui::pos2(col2_x, tb_rect.bottom()),
+            ],
+            egui::Stroke::new(1.0_f32, ink),
+        );
+        paper_painter.line_segment(
+            [
+                egui::pos2(col2_x, tb_rect.center().y),
+                egui::pos2(tb_rect.right(), tb_rect.center().y),
+            ],
+            egui::Stroke::new(0.8_f32, border),
+        );
+        paper_painter.text(
+            egui::pos2(tb_rect.left() + 8.0, tb_rect.center().y),
+            egui::Align2::LEFT_CENTER,
+            &left_cell,
+            egui::FontId::proportional(10.5),
+            ink,
+        );
+        paper_painter.text(
+            egui::pos2((col1_x + col2_x) * 0.5, tb_rect.top() + 10.0),
+            egui::Align2::CENTER_CENTER,
+            &center_title,
+            egui::FontId::proportional(11.5),
+            ink,
+        );
+        paper_painter.text(
+            egui::pos2((col1_x + col2_x) * 0.5, tb_rect.bottom() - 9.0),
+            egui::Align2::CENTER_CENTER,
+            &center_sub,
+            egui::FontId::proportional(9.5),
+            muted,
+        );
+        paper_painter.text(
+            egui::pos2(col2_x + 8.0, tb_rect.top() + 8.5),
+            egui::Align2::LEFT_CENTER,
+            format!("유구·유물 : {}", plate.title),
+            egui::FontId::proportional(9.5),
+            ink,
+        );
+        paper_painter.text(
+            egui::pos2(col2_x + 8.0, tb_rect.bottom() - 8.5),
+            egui::Align2::LEFT_CENTER,
+            &right_cell,
+            egui::FontId::proportional(9.5),
+            ink,
+        );
+
+        // 유물 외곽 구경/복원 구역 수평 치수선(◀─── 복원 구역 / 구경 ───▶) 및 기고/높이 수직 치수선(▲ │ 높이 │ ▼)
+        if let Some(first_reg) = plate.raster_regions.first() {
+            let rx0 = origin_x + (first_reg.rect_mm[0].min(first_reg.rect_mm[2]) as f32) * scale;
+            let rx1 = origin_x + (first_reg.rect_mm[0].max(first_reg.rect_mm[2]) as f32) * scale;
+            let ry_top = origin_y - (first_reg.rect_mm[1].max(first_reg.rect_mm[3]) as f32) * scale;
+            let ry_bot = origin_y - (first_reg.rect_mm[1].min(first_reg.rect_mm[3]) as f32) * scale;
+
+            // (a) 상단 수평 복원 구역·구경 화살표 치수선
+            let dim_y = (ry_top - 16.0).max(tb_rect.bottom() + 12.0);
+            paper_painter.line_segment(
+                [egui::pos2(rx0, ry_top - 2.0), egui::pos2(rx0, dim_y - 4.0)],
+                egui::Stroke::new(0.8_f32, muted),
+            );
+            paper_painter.line_segment(
+                [egui::pos2(rx1, ry_top - 2.0), egui::pos2(rx1, dim_y - 4.0)],
+                egui::Stroke::new(0.8_f32, muted),
+            );
+            paper_painter.line_segment(
+                [egui::pos2(rx0, dim_y), egui::pos2(rx1, dim_y)],
+                egui::Stroke::new(1.0_f32, ink),
+            );
+            // 좌우 화살촉
+            for &(ax, dir_s) in &[(rx0, 1.0_f32), (rx1, -1.0_f32)] {
+                paper_painter.add(egui::Shape::convex_polygon(
+                    vec![
+                        egui::pos2(ax, dim_y),
+                        egui::pos2(ax + dir_s * 5.5, dim_y - 2.6),
+                        egui::pos2(ax + dir_s * 5.5, dim_y + 2.6),
+                    ],
+                    ink,
+                    egui::Stroke::NONE,
+                ));
+            }
+            let rim_mm = (first_reg.rect_mm[2] - first_reg.rect_mm[0]).abs();
+            paper_painter.text(
+                egui::pos2((rx0 + rx1) * 0.5, dim_y - 7.0),
+                egui::Align2::CENTER_CENTER,
+                format!("복원 구역 · 구경 ({:.1}mm)", rim_mm),
+                egui::FontId::proportional(9.5),
+                ink,
+            );
+
+            // (b) 좌측 수직 높이·잔존고 화살표 치수선
+            let dim_x = (rx0 - 18.0).max(sheet_rect.left() + 36.0);
+            paper_painter.line_segment(
+                [egui::pos2(dim_x - 4.0, ry_top), egui::pos2(rx0 - 2.0, ry_top)],
+                egui::Stroke::new(0.8_f32, muted),
+            );
+            paper_painter.line_segment(
+                [egui::pos2(dim_x - 4.0, ry_bot), egui::pos2(rx0 - 2.0, ry_bot)],
+                egui::Stroke::new(0.8_f32, muted),
+            );
+            paper_painter.line_segment(
+                [egui::pos2(dim_x, ry_top), egui::pos2(dim_x, ry_bot)],
+                egui::Stroke::new(1.0_f32, ink),
+            );
+            for &(ay, dir_s) in &[(ry_top, 1.0_f32), (ry_bot, -1.0_f32)] {
+                paper_painter.add(egui::Shape::convex_polygon(
+                    vec![
+                        egui::pos2(dim_x, ay),
+                        egui::pos2(dim_x - 2.6, ay + dir_s * 5.5),
+                        egui::pos2(dim_x + 2.6, ay + dir_s * 5.5),
+                    ],
+                    ink,
+                    egui::Stroke::NONE,
+                ));
+            }
+            let h_mm = (first_reg.rect_mm[3] - first_reg.rect_mm[1]).abs();
+            paper_painter.text(
+                egui::pos2(dim_x - 6.0, (ry_top + ry_bot) * 0.5),
+                egui::Align2::RIGHT_CENTER,
+                format!("높이 {:.1}mm", h_mm),
+                egui::FontId::proportional(9.5),
+                ink,
+            );
+        }
+
+        // 하단 좌측 0..5..10cm 교차 블록 보조 축척자 (`media_1793488638383_24317f2d.jpg` 하단 좌측 10cm 바 대응)
+        let left_sb_x = sheet_rect.left() + 46.0;
+        let left_sb_y = sheet_rect.bottom() - 22.0;
+        let left_sb_w = (50.0 * scale).clamp(80.0, 160.0);
+        let left_sb_h = 5.5_f32;
+        for bi in 0..4 {
+            let bx = left_sb_x + (bi as f32) * (left_sb_w / 4.0);
+            let b_rect = egui::Rect::from_min_size(
+                egui::pos2(bx, left_sb_y),
+                egui::vec2(left_sb_w / 4.0, left_sb_h),
+            );
+            paper_painter.rect_filled(b_rect, 0.0, if bi % 2 == 0 { ink } else { paper });
+            paper_painter.rect_stroke(
+                b_rect,
+                0.0,
+                egui::Stroke::new(0.9_f32, ink),
+                egui::StrokeKind::Inside,
+            );
+        }
+        paper_painter.text(
+            egui::pos2(left_sb_x, left_sb_y + left_sb_h + 7.0),
+            egui::Align2::LEFT_CENTER,
+            "0",
+            egui::FontId::monospace(9.5),
+            ink,
+        );
+        paper_painter.text(
+            egui::pos2(left_sb_x + left_sb_w * 0.5, left_sb_y + left_sb_h + 7.0),
+            egui::Align2::CENTER_CENTER,
+            "5",
+            egui::FontId::monospace(9.5),
+            ink,
+        );
+        paper_painter.text(
+            egui::pos2(left_sb_x + left_sb_w, left_sb_y + left_sb_h + 7.0),
+            egui::Align2::RIGHT_CENTER,
+            "10cm",
+            egui::FontId::monospace(9.5),
+            ink,
+        );
 
         // 4. 『부분 정밀 탁본 창 (ROI Rubbing Studio · 학술 MSII+DoG+Sigmoid 엔진)』 (Todo 6 & Todo 7)
         if state.show_roi_rubbing_window {
@@ -1636,5 +1851,21 @@ mod tests {
         let inside_px = clipped.pixels[60 * 100 + 45];
         assert_eq!(outside_px.a(), 0, "pixels outside dragged ROI must be transparent");
         assert!(inside_px.a() > 200, "pixels inside dragged ROI must show rubbing");
+    }
+
+    #[test]
+    fn test_tdd10_chs_plate_title_block_and_dimension_spans() {
+        let mesh = make_corrugated_stamped_sherd_mesh();
+        let report = arch3d_measure::compute_artifact_measurements(
+            &mesh,
+            arch3d_core::ArtifactCategory::CompleteVessel,
+        );
+        let (left_cell, center_title, center_sub, right_cell) =
+            build_chs_plate_title_block("7지구 9호-7 (완형 세트)", "완형 토기 표준 도법", &report);
+
+        assert!(left_cell.contains("유적명"), "left cell must contain 유적명");
+        assert!(center_title.contains("圖版"), "center title must contain 圖版");
+        assert!(center_sub.contains("Plate"), "center subtitle must contain Plate");
+        assert!(right_cell.contains("조사기관"), "right cell must contain 조사기관");
     }
 }
