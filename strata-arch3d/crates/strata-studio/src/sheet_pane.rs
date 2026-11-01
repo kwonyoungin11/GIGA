@@ -837,7 +837,7 @@ pub fn rubbing_provenance_line(p: &AcademicRubbingParams) -> String {
         Some(strata_shade::UnrollMode::Spherical) => "구면",
     };
     format!(
-        "L-Std {:.0}/{:.0}/{:.2} · MSII {:.2} · Sigmoid {:.1} · Ink {:.0}% · {} · #{:08x}",
+        "L-Std {:.0}/{:.0}/{:.2} · MSII {:.2} · Sigmoid {:.1} · Ink {:.0}% · 전개={} · 투영={} · #{:08x}",
         p.light_azimuth_deg,
         p.light_elevation_deg,
         p.light_intensity,
@@ -845,6 +845,7 @@ pub fn rubbing_provenance_line(p: &AcademicRubbingParams) -> String {
         p.sigmoid_contrast,
         p.ink_density_pct,
         unroll,
+        if p.unroll_mode.is_some() { "원통전개" } else { "직교" },
         (rubbing_params_hash(p) & 0xffff_ffff) as u32
     )
 }
@@ -3820,12 +3821,20 @@ mod tests {
     #[test]
     fn test_rubbing_provenance_line_records_standard_values() {
         let line = rubbing_provenance_line(&AcademicRubbingParams::default());
-        for token in ["L-Std 315/45/1.00", "MSII 1.45", "Ink 78", "평면"] {
+        for token in [
+            "L-Std 315/45/1.00",
+            "MSII 1.45",
+            "Ink 78",
+            "전개=평면",
+            "투영=직교",
+        ] {
             assert!(line.contains(token), "출처 문자열에 '{}' 없음: {}", token, line);
         }
         let mut unrolled = AcademicRubbingParams::default();
         unrolled.unroll_mode = Some(strata_shade::UnrollMode::Cylindrical);
-        assert!(rubbing_provenance_line(&unrolled).contains("원통"));
+        let u_line = rubbing_provenance_line(&unrolled);
+        assert!(u_line.contains("전개=원통"));
+        assert!(u_line.contains("투영=원통전개"));
     }
 
     #[test]
