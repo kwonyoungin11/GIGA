@@ -72,6 +72,16 @@ pub struct AcademicRubbingParams {
     pub contact_threshold: f32,
     /// 탁본 표현 기법
     pub style: AcademicRubbingStyle,
+    /// Image 1 ("전부 방향이 같아야한다 탁복한 유물과 방향이다르다"): 3D 유물 상하 회전(`tilt_deg`) 연동
+    pub pose_tilt_deg: f64,
+    /// Image 1: 3D 유물 좌우 기울기(`roll_deg + inner_level_deg`) 연동
+    pub pose_roll_deg: f64,
+    /// Image 2 ("광원을 조정할수있는 작은창"): 광원 방위각(`0..360°`)
+    pub light_azimuth_deg: f32,
+    /// Image 2: 광원 고도각(`5..85°`)
+    pub light_elevation_deg: f32,
+    /// Image 2: 광원 세기(`0.40..1.80`)
+    pub light_intensity: f32,
 }
 
 impl Default for AcademicRubbingParams {
@@ -82,6 +92,11 @@ impl Default for AcademicRubbingParams {
             sigmoid_contrast: 8.2,
             contact_threshold: -0.12,
             style: AcademicRubbingStyle::WetHanjiInk,
+            pose_tilt_deg: 0.0,
+            pose_roll_deg: 0.0,
+            light_azimuth_deg: 315.0,
+            light_elevation_deg: 45.0,
+            light_intensity: 1.0,
         }
     }
 }
@@ -201,7 +216,7 @@ pub struct PaperSheetGraphSpec {
     pub cm_labels_left: Vec<(f32, String)>,
 }
 
-/// 조판 용지(`PaperSheetPreset`) 내부에만 방안선을 생성하고 `5cm`(`50mm`)마다 얇은 빨간색 선을 배치한다 (`Image 3`).
+/// 방안지 여백은 무한대로 배경을 채우고(`sheet_rect` 전체), 출판 용지 경계(`paper_bounds_rect`)만 붉은선으로 표시한다.
 pub fn compute_paper_sheet_graph_spec(
     sheet_rect: egui::Rect,
     paper_preset: PaperSheetPreset,
@@ -236,40 +251,52 @@ pub fn compute_paper_sheet_graph_spec(
     let mut cm_labels_top = Vec::new();
     let mut cm_labels_left = Vec::new();
 
-    let max_mm_x = pw_mm.round() as i32;
-    for mm_x in 0..=max_mm_x {
+    // "방안지 여백은 무한대로 배경을 하고 용지만 붉은선으로 표시하게 하자":
+    // sheet_rect 전체 영역에 걸쳐 무한대 방안지(1mm·5mm·10mm·50mm) 격자를 생성한다!
+    let min_mm_x = ((sheet_rect.left() - origin_x) / scale).floor() as i32;
+    let max_mm_x = ((sheet_rect.right() - origin_x) / scale).ceil() as i32;
+    for mm_x in min_mm_x..=max_mm_x {
         let gx = origin_x + (mm_x as f32) * scale;
-        if gx < paper_bounds_rect.left() - 0.2 || gx > paper_bounds_rect.right() + 0.2 {
+        if gx < sheet_rect.left() - 0.5 || gx > sheet_rect.right() + 0.5 {
             continue;
         }
-        if mm_x % 50 == 0 {
+        if mm_x.rem_euclid(50) == 0 {
             lines_50mm_red_x.push(gx);
             lines_10mm_x.push(gx);
-            cm_labels_top.push((gx, format!("{}cm", mm_x / 10)));
-        } else if mm_x % 10 == 0 {
+            if mm_x >= 0 && (mm_x as f32) <= pw_mm + 0.5 {
+                cm_labels_top.push((gx, format!("{}cm", mm_x / 10)));
+            }
+        } else if mm_x.rem_euclid(10) == 0 {
             lines_10mm_x.push(gx);
-            cm_labels_top.push((gx, format!("{}cm", mm_x / 10)));
-        } else if mm_x % 5 == 0 {
+            if mm_x >= 0 && (mm_x as f32) <= pw_mm + 0.5 {
+                cm_labels_top.push((gx, format!("{}cm", mm_x / 10)));
+            }
+        } else if mm_x.rem_euclid(5) == 0 {
             lines_5mm_x.push(gx);
         } else if scale >= 1.8 {
             lines_1mm_x.push(gx);
         }
     }
 
-    let max_mm_y = ph_mm.round() as i32;
-    for mm_y in 0..=max_mm_y {
+    let min_mm_y = ((origin_y - sheet_rect.bottom()) / scale).floor() as i32;
+    let max_mm_y = ((origin_y - sheet_rect.top()) / scale).ceil() as i32;
+    for mm_y in min_mm_y..=max_mm_y {
         let gy = origin_y - (mm_y as f32) * scale;
-        if gy < paper_bounds_rect.top() - 0.2 || gy > paper_bounds_rect.bottom() + 0.2 {
+        if gy < sheet_rect.top() - 0.5 || gy > sheet_rect.bottom() + 0.5 {
             continue;
         }
-        if mm_y % 50 == 0 {
+        if mm_y.rem_euclid(50) == 0 {
             lines_50mm_red_y.push(gy);
             lines_10mm_y.push(gy);
-            cm_labels_left.push((gy, format!("{}cm", mm_y / 10)));
-        } else if mm_y % 10 == 0 {
+            if mm_y >= 0 && (mm_y as f32) <= ph_mm + 0.5 {
+                cm_labels_left.push((gy, format!("{}cm", mm_y / 10)));
+            }
+        } else if mm_y.rem_euclid(10) == 0 {
             lines_10mm_y.push(gy);
-            cm_labels_left.push((gy, format!("{}cm", mm_y / 10)));
-        } else if mm_y % 5 == 0 {
+            if mm_y >= 0 && (mm_y as f32) <= ph_mm + 0.5 {
+                cm_labels_left.push((gy, format!("{}cm", mm_y / 10)));
+            }
+        } else if mm_y.rem_euclid(5) == 0 {
             lines_5mm_y.push(gy);
         } else if scale >= 1.8 {
             lines_1mm_y.push(gy);
@@ -425,14 +452,33 @@ pub fn compute_full_bleed_graph_paper_spec(
     }
 }
 
-/// Image 7: 우측 2D 도판의 4개 개별 뷰(`0: 1:1 평면도`, `1: 1:1 정면 입·단면도`, `2: 1:1 정밀 탁본`, `3: 1:1 수평 횡단면`)를
-/// 각각 하나하나 개별로 `90° 회전`, `180° 상하뒤집기`, `앞으로 연속뒤집기(0°->90°->180°->270°->0°)` 할 수 있는 상태.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+/// Image 7 & 레이어 관리 ("레이어 모든것에는 방향조정 90도씩 delete키로 지우기 추가단면선 생성시 이것도 레이어에생성 삭제가능하고 키고끌수있게"):
+/// 우측 2D 도판의 6개 도면 레이어(`0: ① 1:1 평면도`, `1: ② 1:1 정면 입·단면도`, `2: ③ 1:1 정밀 탁본`, `3: ④ 1:1 수평 횡단면`, `4: ⑤ 추가 단면 A-A'`, `5: ⑥ 치수선·축척자`)를
+/// 각각 개별로 켜기/끄기(`visible`), `90° 회전`, `180° 상하뒤집기`, `앞으로 연속뒤집기`, 위치 이동(`offset_mm`), `Delete` 키로 삭제할 수 있는 상태.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct IndividualViewTransform2D {
+    /// 레이어 표시 여부 (`켜고 끌 수 있게`, 기본 `true`; `Delete` 키 삭제 시 `false`)
+    pub visible: bool,
     /// 평면 내 시계방향 90° 회전 단계 (`0..4` -> `0°, 90°, 180°, 270°`)
     pub rot_90_steps: u8,
     /// 앞으로 연속 뒤집기 단계 (`0..4` -> 누를 때마다 90°씩 앞으로 연속 뒤집힘)
     pub flip_forward_steps: u8,
+    /// 개별 레이어 자유 배치 오프셋 X (`0.1mm` 단위 정수)
+    pub offset_mm_x_tenths: i32,
+    /// 개별 레이어 자유 배치 오프셋 Y (`0.1mm` 단위 정수)
+    pub offset_mm_y_tenths: i32,
+}
+
+impl Default for IndividualViewTransform2D {
+    fn default() -> Self {
+        Self {
+            visible: true,
+            rot_90_steps: 0,
+            flip_forward_steps: 0,
+            offset_mm_x_tenths: 0,
+            offset_mm_y_tenths: 0,
+        }
+    }
 }
 
 impl IndividualViewTransform2D {
@@ -441,17 +487,32 @@ impl IndividualViewTransform2D {
         self.rot_90_steps = (self.rot_90_steps + 1) % 4;
     }
 
-    /// 180° 상하 뒤집기 (`🔃180°`)
+    /// 180° 상하 뒤집기 (`↕180°`)
     pub fn flip_180(&mut self) {
         self.flip_forward_steps = (self.flip_forward_steps + 2) % 4;
     }
 
-    /// 누를 때마다 앞으로 90°씩 연속 뒤집기 (`🔁앞으로연속: 0° -> 90° -> 180° -> 270° -> 0°`)
+    /// 누를 때마다 앞으로 90°씩 연속 뒤집기 (`↻앞으로연속: 0° -> 90° -> 180° -> 270° -> 0°`)
     pub fn flip_forward_continuous_90(&mut self) {
         self.flip_forward_steps = (self.flip_forward_steps + 1) % 4;
     }
 
-    /// 2D 도면 좌표 `pt_mm`을 해당 개별 뷰의 중심 `center_mm` 기준으로 회전·뒤집기 변환한다.
+    /// 개별 레이어 자유 배치 오프셋 (`mm`)
+    #[inline]
+    pub fn offset_mm(&self) -> [f64; 2] {
+        [
+            f64::from(self.offset_mm_x_tenths) * 0.1,
+            f64::from(self.offset_mm_y_tenths) * 0.1,
+        ]
+    }
+
+    /// 개별 레이어 자유 이동 (`dx_mm`, `dy_mm`)
+    pub fn translate_mm(&mut self, dx_mm: f64, dy_mm: f64) {
+        self.offset_mm_x_tenths += (dx_mm * 10.0).round() as i32;
+        self.offset_mm_y_tenths += (dy_mm * 10.0).round() as i32;
+    }
+
+    /// 2D 도면 좌표 `pt_mm`을 해당 개별 뷰의 중심 `center_mm` 기준으로 회전·뒤집기 및 오프셋 변환한다.
     #[inline]
     pub fn transform_point_around(&self, pt_mm: [f64; 2], center_mm: [f64; 2]) -> [f64; 2] {
         let mut dx = pt_mm[0] - center_mm[0];
@@ -478,21 +539,52 @@ impl IndividualViewTransform2D {
             3 => (-dy, dx),
             _ => (dx, dy),
         };
-        [center_mm[0] + rx, center_mm[1] + ry]
+        let off = self.offset_mm();
+        [center_mm[0] + rx + off[0], center_mm[1] + ry + off[1]]
+    }
+}
+
+/// 6개 도판 레이어 명칭 반환
+pub fn sheet_layer_title_kr(layer_idx: usize) -> &'static str {
+    match layer_idx {
+        0 => "① 1:1 평면도",
+        1 => "② 1:1 단면·입면도",
+        2 => "③ 1:1 정밀 탁본",
+        3 => "④ 1:1 수평 횡단면",
+        4 => "⑤ 추가 단면 A-A'",
+        _ => "⑥ 치수선·축척자",
+    }
+}
+
+/// 각 `PlatePathElement`의 `layer_id`로부터 6개 레이어 인덱스(`0..6`)를 판별한다.
+pub fn classify_plate_path_layer_idx(layer_id: &str) -> usize {
+    if layer_id.starts_with("추가단면_") {
+        4
+    } else if layer_id.starts_with("평면도_") {
+        0
+    } else if layer_id.starts_with("탁본_") {
+        2
+    } else if layer_id.starts_with("횡단면_") {
+        3
+    } else if layer_id.starts_with("치수_") || layer_id == "축척자_5cm" {
+        5
+    } else {
+        1
     }
 }
 
 type SheetRubbingCacheKey = (
-    String,
-    i32,
-    i32,
-    i32,
-    i32,
-    i32,
-    AcademicRubbingStyle,
-    bool,
-    Option<[i32; 4]>,
-    IndividualViewTransform2D,
+    (String, i32, i32, i32, i32, i32, i32),
+    (
+        i32,
+        i32,
+        i32,
+        i32,
+        AcademicRubbingStyle,
+        bool,
+        Option<[i32; 4]>,
+        IndividualViewTransform2D,
+    ),
 );
 
 /// 우측 2D 실측 도판 뷰포트(`SheetPane`)의 줌·팬, 드래그 `1:1` 부분 탁본(`ROI`), 선 굵기(`mm`)·색상 설정 및 정밀 탁본 캐시 상태.
@@ -514,8 +606,16 @@ pub struct SheetPaneState {
     pub show_roi_rubbing_window: bool,
     /// Image 0 & Image 1: 좌측 1:1 단면도는 일러스트용 순수 벡터 실측 선화로 표시하고, 우측 상단에 1:1 탁본을 단독 표시 (`기본값 = false`)
     pub show_elevation_rubbing_overlay: bool,
-    /// Image 7: 4개 개별 도면 뷰(`0: 평면도`, `1: 단면도`, `2: 1:1 탁본`, `3: 수평 횡단면`) 각각의 90°/180°/앞으로연속뒤집기 상태
-    pub view_transforms: [IndividualViewTransform2D; 4],
+    /// 6개 개별 도면 레이어(`0: 평면도`, `1: 단면도`, `2: 1:1 탁본`, `3: 수평 횡단면`, `4: 추가 단면 A-A'`, `5: 치수선·축척자`) 각각의 표시/90°회전/180°뒤집기/오프셋 상태
+    pub view_transforms: [IndividualViewTransform2D; 6],
+    /// 현재 선택된 도면 레이어 인덱스 (`Delete` 키로 삭제 또는 `↻90°` 회전 대상)
+    pub selected_layer_idx: Option<usize>,
+    /// 현재 도판에 `⑤ 추가 단면 A-A'` 레이어가 생성되어 있는지 여부
+    pub has_custom_section_layer: bool,
+    /// `⑤ 추가 단면 A-A'` 레이어 삭제 요청 플래그 (`main.rs`에서 `custom_section_line_mm = None` 처리)
+    pub request_clear_custom_section: bool,
+    /// 우측 상단 『🗂 레이어 관리』 패널 펼침 여부
+    pub show_layer_panel: bool,
     /// 학술 논문 기반 정밀 탁본 파라미터 (농도·MSII 감도·시그모이드 대비·여백 임계·기법)
     pub rubbing_params: AcademicRubbingParams,
     /// Image 11 & Image 15: 모든 제도선의 색상 및 `mm` 두께 즉시 조정 상태
@@ -541,6 +641,8 @@ impl std::fmt::Debug for SheetPaneState {
             .field("show_roi_rubbing_window", &self.show_roi_rubbing_window)
             .field("show_elevation_rubbing_overlay", &self.show_elevation_rubbing_overlay)
             .field("view_transforms", &self.view_transforms)
+            .field("selected_layer_idx", &self.selected_layer_idx)
+            .field("has_custom_section_layer", &self.has_custom_section_layer)
             .field("rubbing_params", &self.rubbing_params)
             .field("line_style", &self.line_style)
             .finish()
@@ -559,7 +661,11 @@ impl Default for SheetPaneState {
             rubbing_roi_mm: None,
             show_roi_rubbing_window: false,
             show_elevation_rubbing_overlay: false,
-            view_transforms: [IndividualViewTransform2D::default(); 4],
+            view_transforms: [IndividualViewTransform2D::default(); 6],
+            selected_layer_idx: Some(0),
+            has_custom_section_layer: false,
+            request_clear_custom_section: false,
+            show_layer_panel: true,
             rubbing_params: AcademicRubbingParams::default(),
             line_style: PlateLineStyleConfig::default(),
             cached_key: None,
@@ -574,6 +680,39 @@ impl Default for SheetPaneState {
 }
 
 impl SheetPaneState {
+    /// 선택된 레이어를 `Delete` 키(또는 `[🗑]` 버튼)로 삭제(숨김)한다.
+    /// `⑤ 추가 단면 A-A'`(인덱스 4) 삭제 시에는 3D 뷰의 추가단면선도 함께 제거하도록 `request_clear_custom_section = true`를 설정한다.
+    pub fn delete_selected_layer(&mut self) -> Option<usize> {
+        let idx = self.selected_layer_idx?;
+        if idx < self.view_transforms.len() {
+            self.view_transforms[idx].visible = false;
+            if idx == 4 {
+                self.request_clear_custom_section = true;
+            }
+            return Some(idx);
+        }
+        None
+    }
+
+    /// 특정 레이어를 삭제(숨김)한다.
+    pub fn delete_layer(&mut self, idx: usize) {
+        if idx < self.view_transforms.len() {
+            self.view_transforms[idx].visible = false;
+            if idx == 4 {
+                self.request_clear_custom_section = true;
+            }
+        }
+    }
+
+    /// 선택된 레이어를 시계방향 90° 회전한다.
+    pub fn rotate_selected_layer_cw_90(&mut self) {
+        if let Some(idx) = self.selected_layer_idx {
+            if idx < self.view_transforms.len() {
+                self.view_transforms[idx].rotate_cw_90();
+            }
+        }
+    }
+
     /// 사용자가 드래그한 부분 탁본 영역(`mm`)을 설정하고, 우측 탁본 영역에 `1:1` 실제 크기로 즉시 반영한다 (`Image 13`, `Image 14`).
     pub fn set_rubbing_roi_mm(&mut self, roi_mm: Option<[f64; 4]>) {
         if let Some([x0, y0, x1, y1]) = roi_mm {
@@ -665,28 +804,63 @@ pub fn render_orthographic_rubbing_rgba_with_params(
     }
 
     let ddg = get_or_build_ddg_mesh(mesh);
+    let center_xy = [
+        0.5 * (mesh.bbox.min[0] + mesh.bbox.max[0]),
+        0.5 * (mesh.bbox.min[1] + mesh.bbox.max[1]),
+    ];
+    let z_min = mesh.bbox.min[2];
+    let height_mm = (mesh.bbox.max[2] - mesh.bbox.min[2]).max(1.0);
     let psi_rad = psi_deg.to_radians();
     let (sin_p, cos_p) = psi_rad.sin_cos();
+    let tilt_rad = params.pose_tilt_deg.to_radians();
+    let (sin_t, cos_t) = tilt_rad.sin_cos();
+    let roll_rad = params.pose_roll_deg.to_radians();
+    let (sin_r, cos_r) = roll_rad.sin_cos();
+    let az_rad = params.light_azimuth_deg.to_radians();
+    let el_rad = params.light_elevation_deg.clamp(5.0, 88.0).to_radians();
+    let light_lx = el_rad.cos() * az_rad.cos();
+    let light_lz = el_rad.cos() * (-az_rad.sin());
+    let light_ly = el_rad.sin();
+    let light_int = params.light_intensity.clamp(0.4, 1.8);
 
     // 1. Rayon 병렬 정점 직교 투영 좌표 (u, v, depth) 및 Nelson Max 가중 정점 법선 회전 계산
+    // Image 1 ("전부 방향이 같아야한다 탁복한 유물과 방향이다르다"):
+    // 3D 직상방/정면 뷰 및 1:1 평면도와 동일한 3D 회전(psi_deg, pose_tilt_deg, pose_roll_deg)을 적용한다!
     let projected: Vec<([f64; 3], [f32; 3])> = ddg
         .positions
         .par_iter()
         .enumerate()
         .map(|(vi, &p)| {
-            let rx = p[0] * cos_p - p[1] * sin_p;
-            let ry = p[0] * sin_p + p[1] * cos_p;
-            let rz = p[2];
+            let [rx, ry, rz] = crate::view3d_pane::transform_local_vertex_full(
+                p,
+                center_xy,
+                z_min,
+                height_mm,
+                cos_p,
+                sin_p,
+                cos_t,
+                sin_t,
+                cos_r,
+                sin_r,
+                0.0,
+            );
 
             let n = ddg.normals.get(vi).copied().unwrap_or([0.0, -1.0, 0.0]);
-            let nrx = n[0] * cos_p - n[1] * sin_p;
-            let nry = n[0] * sin_p + n[1] * cos_p;
-            let nrz = n[2];
+            let [nrx, nry, nrz] = crate::view3d_pane::transform_local_normal_full(
+                n,
+                cos_p,
+                sin_p,
+                cos_t,
+                sin_t,
+                cos_r,
+                sin_r,
+            );
 
             let (u, v, depth, vn) = match kind {
                 PlateRasterKind::FrontExteriorRubbing => (rx, rz, -ry, [nrx, -nry, nrz]),
                 PlateRasterKind::BackInteriorRubbing => (-rx, rz, ry, [-nrx, nry, nrz]),
-                PlateRasterKind::BottomPlanRubbing => (rx, ry, -rz, [nrx, nry, -nrz]),
+                // 3D 직상방 뷰 및 1:1 평면도와 100% 동일한 직상방(위에서 아래로 내려다보는 +rz 우선) 투영!
+                PlateRasterKind::BottomPlanRubbing => (rx, ry, rz, [nrx, nrz, nry]),
             };
             ([u, v, depth], [vn[0] as f32, vn[1] as f32, vn[2] as f32])
         })
@@ -922,9 +1096,14 @@ pub fn render_orthographic_rubbing_rgba_with_params(
                 let denom_pad = (1.0 - pad_threshold).max(0.05);
                 let t = ((norm_curv - pad_threshold) / denom_pad).clamp(0.0, 1.0);
                 let smooth = t * t * (3.0 - 2.0 * t);
-                let nz_vis = nbuf[idx][1].clamp(0.15, 1.0);
+                let n_cur = nbuf[idx];
+                let nz_vis = n_cur[1].clamp(0.15, 1.0);
+                let ndotl = (n_cur[0] * light_lx + n_cur[1] * light_ly + n_cur[2] * light_lz)
+                    .clamp(0.12, 1.0);
+                let relief_light = (0.78 + 0.28 * ndotl * light_int).clamp(0.55, 1.35);
 
-                out_row[x] = (ao_val.powf(1.35) * smooth * nz_vis.powf(0.28)).clamp(0.0, 1.0);
+                out_row[x] =
+                    (ao_val.powf(1.35) * smooth * nz_vis.powf(0.28) * relief_light).clamp(0.0, 1.0);
             }
         });
 
@@ -1275,16 +1454,20 @@ fn draw_line_style_vector_icon(
     }
 }
 
-/// Image 7: 개별 도면 뷰(`0: 평면도`, `1: 단면도`, `2: 1:1 탁본`, `3: 수평 횡단면`) 상단에
-/// `[↻90°] [🔃180°] [🔁앞으로연속]` 소형 아이콘 버튼을 렌더링한다.
+/// Image 7 & 레이어 관리: 개별 도면 레이어(`0..5`) 상단에
+/// `[✓/□] [↻90°] [↕180°] [↻앞으로] [🗑Del]` 소형 아이콘 컨트롤 바를 렌더링하고 드래그 이동을 지원한다.
+#[allow(clippy::too_many_arguments)]
 fn draw_individual_view_flip_controls(
     ui: &mut egui::Ui,
     painter: &egui::Painter,
     anchor_top_center: egui::Pos2,
     view_id_prefix: &str,
+    layer_idx: usize,
+    is_selected: bool,
+    scale_px_per_mm: f32,
     transform: &mut IndividualViewTransform2D,
-) {
-    let total_w = 136.0_f32;
+) -> (bool, bool) {
+    let total_w = 184.0_f32;
     let bar_h = 18.0_f32;
     let bar_rect = egui::Rect::from_center_size(
         egui::pos2(anchor_top_center.x, anchor_top_center.y - 12.0),
@@ -1292,6 +1475,11 @@ fn draw_individual_view_flip_controls(
     );
     let terra = egui::Color32::from_rgb(ACTION.rgb[0], ACTION.rgb[1], ACTION.rgb[2]);
     let ink = egui::Color32::from_rgb(INK.rgb[0], INK.rgb[1], INK.rgb[2]);
+    let select_blue = egui::Color32::from_rgb(
+        SELECT_BLUE.rgb[0],
+        SELECT_BLUE.rgb[1],
+        SELECT_BLUE.rgb[2],
+    );
     let profile_red = egui::Color32::from_rgb(
         PROFILE_RED.rgb[0],
         PROFILE_RED.rgb[1],
@@ -1300,21 +1488,63 @@ fn draw_individual_view_flip_controls(
     painter.rect_filled(
         bar_rect,
         3.5,
-        egui::Color32::from_rgba_unmultiplied(250, 249, 245, 238),
+        egui::Color32::from_rgba_unmultiplied(250, 249, 245, 244),
     );
     painter.rect_stroke(
         bar_rect,
         3.5,
-        egui::Stroke::new(1.0_f32, terra),
+        egui::Stroke::new(
+            if is_selected { 1.5_f32 } else { 1.0_f32 },
+            if is_selected { select_blue } else { terra },
+        ),
         egui::StrokeKind::Inside,
     );
 
+    let mut clicked_select = false;
+    let mut clicked_delete = false;
+
+    // 좌측 그립(`✥` 드래그 시 해당 레이어만 자유 이동, 억지로 붙이지 않고 원하는 간격으로 배치 가능!)
+    let grip_rect = egui::Rect::from_min_size(
+        egui::pos2(bar_rect.left() + 2.0, bar_rect.top() + 1.5),
+        egui::vec2(20.0, bar_h - 3.0),
+    );
+    let grip_resp = ui.interact(
+        grip_rect,
+        egui::Id::new((view_id_prefix, "drag_grip", layer_idx)),
+        egui::Sense::click_and_drag(),
+    );
+    if grip_resp.clicked() || grip_resp.dragged() {
+        clicked_select = true;
+    }
+    if grip_resp.dragged() {
+        let sc = scale_px_per_mm.max(0.5);
+        let d = grip_resp.drag_delta();
+        transform.translate_mm(f64::from(d.x / sc), f64::from(-d.y / sc));
+    }
+    painter.rect_filled(
+        grip_rect,
+        2.5,
+        if is_selected {
+            select_blue
+        } else {
+            egui::Color32::from_rgb(236, 232, 222)
+        },
+    );
+    painter.text(
+        grip_rect.center(),
+        egui::Align2::CENTER_CENTER,
+        "✥",
+        egui::FontId::proportional(9.0),
+        if is_selected { egui::Color32::WHITE } else { ink },
+    );
+
     let specs = [
-        ("rot90", "↻90°", 36.0_f32, 0u8),
-        ("flip180", "↕180°", 40.0_f32, 1u8),
-        ("flipfwd", "↻앞으로", 52.0_f32, 2u8),
+        ("rot90", "↻90°", 34.0_f32, 0u8),
+        ("flip180", "↕180°", 38.0_f32, 1u8),
+        ("flipfwd", "↻앞으로", 48.0_f32, 2u8),
+        ("del", "🗑Del", 34.0_f32, 3u8),
     ];
-    let mut bx = bar_rect.left() + 2.0;
+    let mut bx = grip_rect.right() + 2.0;
     for (suffix, lbl, bw, kind) in specs {
         let brect = egui::Rect::from_min_size(
             egui::pos2(bx, bar_rect.top() + 1.5),
@@ -1322,23 +1552,27 @@ fn draw_individual_view_flip_controls(
         );
         let resp = ui.interact(
             brect,
-            egui::Id::new((view_id_prefix, suffix)),
+            egui::Id::new((view_id_prefix, suffix, layer_idx)),
             egui::Sense::click(),
         );
         if resp.clicked() {
+            clicked_select = true;
             match kind {
                 0 => transform.rotate_cw_90(),
                 1 => transform.flip_180(),
-                _ => transform.flip_forward_continuous_90(),
+                2 => transform.flip_forward_continuous_90(),
+                _ => clicked_delete = true,
             }
         }
         let active = (kind == 0 && transform.rot_90_steps != 0)
-            || (kind > 0 && transform.flip_forward_steps != 0);
+            || ((kind == 1 || kind == 2) && transform.flip_forward_steps != 0);
         painter.rect_filled(
             brect,
             2.5,
             if active {
                 profile_red
+            } else if kind == 3 && resp.hovered() {
+                egui::Color32::from_rgb(252, 224, 224)
             } else if resp.hovered() {
                 egui::Color32::from_rgb(240, 232, 220)
             } else {
@@ -1349,11 +1583,19 @@ fn draw_individual_view_flip_controls(
             brect.center(),
             egui::Align2::CENTER_CENTER,
             lbl,
-            egui::FontId::proportional(8.4),
-            if active { egui::Color32::WHITE } else { ink },
+            egui::FontId::proportional(8.2),
+            if active {
+                egui::Color32::WHITE
+            } else if kind == 3 {
+                profile_red
+            } else {
+                ink
+            },
         );
-        bx += bw + 2.0;
+        bx += bw + 1.5;
     }
+
+    (clicked_select, clicked_delete)
 }
 
 /// 우측 `73%` (또는 `Tab` 키 `100%`) 2D 실측 도판 작업대(`SheetPane`)를 렌더링한다.
@@ -1403,16 +1645,25 @@ pub fn render_sheet_pane_egui(
 
     let rub_view_tf = state.view_transforms[2];
     let key: SheetRubbingCacheKey = (
-        mesh.name.clone(),
-        psi_deg.round() as i32,
-        state.rubbing_params.ink_density_pct.round() as i32,
-        (state.rubbing_params.msii_detail_boost * 100.0).round() as i32,
-        (state.rubbing_params.sigmoid_contrast * 10.0).round() as i32,
-        (state.rubbing_params.contact_threshold * 100.0).round() as i32,
-        state.rubbing_params.style,
-        plate.flip_exterior_right,
-        None,
-        rub_view_tf,
+        (
+            mesh.name.clone(),
+            psi_deg.round() as i32,
+            (state.rubbing_params.pose_tilt_deg * 10.0).round() as i32,
+            (state.rubbing_params.pose_roll_deg * 10.0).round() as i32,
+            state.rubbing_params.light_azimuth_deg.round() as i32,
+            state.rubbing_params.light_elevation_deg.round() as i32,
+            (state.rubbing_params.light_intensity * 100.0).round() as i32,
+        ),
+        (
+            state.rubbing_params.ink_density_pct.round() as i32,
+            (state.rubbing_params.msii_detail_boost * 100.0).round() as i32,
+            (state.rubbing_params.sigmoid_contrast * 10.0).round() as i32,
+            (state.rubbing_params.contact_threshold * 100.0).round() as i32,
+            state.rubbing_params.style,
+            plate.flip_exterior_right,
+            None,
+            rub_view_tf,
+        ),
     );
     // Rayon 3-뷰 동시 병렬 탁본 버퍼 생성 (560x560 고선명 + 멀티코어 병렬화로 렉 제로 달성!)
     // Image 7: 우측 상단 1:1 정밀 탁본(bottom_img)은 개별 뷰의 [🔁앞으로], [🔃180°], [↻90°] 조작에 따라
@@ -1564,66 +1815,59 @@ pub fn render_sheet_pane_egui(
         }
 
         let paper_painter = ui.painter_at(sheet_rect);
-        // 조판 책상 배경 (용지 바깥은 방안선이 없는 차분한 조판 대지 색상)
-        paper_painter.rect_filled(sheet_rect, 0.0, egui::Color32::from_rgb(225, 221, 210));
-        // 조판 용지 그림자 및 한지 용지(p_rect) 채움
-        paper_painter.rect_filled(
-            p_rect.translate(egui::vec2(3.0, 4.0)),
-            2.0,
-            egui::Color32::from_rgba_unmultiplied(40, 38, 34, 42),
-        );
-        paper_painter.rect_filled(p_rect, 1.5, paper);
+        // "방안지 여백은 무한대로 배경을 하고 용지만 붉은선으로 표시하게 하자":
+        // sheet_rect 전체를 한지 방안지 배경색(paper)으로 채우고, 방안선을 화면 끝에서 끝까지 무한대로 그린다!
+        paper_painter.rect_filled(sheet_rect, 0.0, paper);
 
-        // 1. Image 3: 용지(p_rect) 안에만 방안선(1mm·5mm·10mm)을 그리고 5cm(50mm)마다 얇은 빨간색선을 제도!
         if show_mm_grid {
             for &gx in &spec.lines_1mm_x {
                 paper_painter.line_segment(
-                    [egui::pos2(gx, p_rect.top()), egui::pos2(gx, p_rect.bottom())],
+                    [egui::pos2(gx, sheet_rect.top()), egui::pos2(gx, sheet_rect.bottom())],
                     egui::Stroke::new(0.45_f32, grid_1),
                 );
             }
             for &gy in &spec.lines_1mm_y {
                 paper_painter.line_segment(
-                    [egui::pos2(p_rect.left(), gy), egui::pos2(p_rect.right(), gy)],
+                    [egui::pos2(sheet_rect.left(), gy), egui::pos2(sheet_rect.right(), gy)],
                     egui::Stroke::new(0.45_f32, grid_1),
                 );
             }
             for &gx in &spec.lines_5mm_x {
                 paper_painter.line_segment(
-                    [egui::pos2(gx, p_rect.top()), egui::pos2(gx, p_rect.bottom())],
+                    [egui::pos2(gx, sheet_rect.top()), egui::pos2(gx, sheet_rect.bottom())],
                     egui::Stroke::new(0.70_f32, grid_5),
                 );
             }
             for &gy in &spec.lines_5mm_y {
                 paper_painter.line_segment(
-                    [egui::pos2(p_rect.left(), gy), egui::pos2(p_rect.right(), gy)],
+                    [egui::pos2(sheet_rect.left(), gy), egui::pos2(sheet_rect.right(), gy)],
                     egui::Stroke::new(0.70_f32, grid_5),
                 );
             }
             for &gx in &spec.lines_10mm_x {
                 paper_painter.line_segment(
-                    [egui::pos2(gx, p_rect.top()), egui::pos2(gx, p_rect.bottom())],
+                    [egui::pos2(gx, sheet_rect.top()), egui::pos2(gx, sheet_rect.bottom())],
                     egui::Stroke::new(0.95_f32, grid_10),
                 );
             }
             for &gy in &spec.lines_10mm_y {
                 paper_painter.line_segment(
-                    [egui::pos2(p_rect.left(), gy), egui::pos2(p_rect.right(), gy)],
+                    [egui::pos2(sheet_rect.left(), gy), egui::pos2(sheet_rect.right(), gy)],
                     egui::Stroke::new(0.95_f32, grid_10),
                 );
             }
-            // Image 3: 5cm(50mm)마다 얇은 빨간색선!
-            let red_5cm_col = egui::Color32::from_rgba_unmultiplied(218, 46, 36, 185);
+            // 5cm(50mm)마다 얇은 빨간색선!
+            let red_5cm_col = egui::Color32::from_rgba_unmultiplied(218, 46, 36, 175);
             for &rx in &spec.lines_50mm_red_x {
                 paper_painter.line_segment(
-                    [egui::pos2(rx, p_rect.top()), egui::pos2(rx, p_rect.bottom())],
-                    egui::Stroke::new(1.05_f32, red_5cm_col),
+                    [egui::pos2(rx, sheet_rect.top()), egui::pos2(rx, sheet_rect.bottom())],
+                    egui::Stroke::new(1.00_f32, red_5cm_col),
                 );
             }
             for &ry in &spec.lines_50mm_red_y {
                 paper_painter.line_segment(
-                    [egui::pos2(p_rect.left(), ry), egui::pos2(p_rect.right(), ry)],
-                    egui::Stroke::new(1.05_f32, red_5cm_col),
+                    [egui::pos2(sheet_rect.left(), ry), egui::pos2(sheet_rect.right(), ry)],
+                    egui::Stroke::new(1.00_f32, red_5cm_col),
                 );
             }
 
@@ -1653,11 +1897,26 @@ pub fn render_sheet_pane_egui(
             }
         }
 
+        // "용지만 붉은선으로 표시하게 하자": 출판 용지 경계(p_rect)를 선명한 붉은색 실선 테두리로 표시!
+        let paper_red_border = egui::Color32::from_rgb(218, 34, 34);
         paper_painter.rect_stroke(
             p_rect,
             1.5,
-            egui::Stroke::new(1.4_f32, ink),
+            egui::Stroke::new(2.2_f32, paper_red_border),
             egui::StrokeKind::Inside,
+        );
+        let (pw_mm_lbl, ph_mm_lbl) = state.paper_preset.dimensions_mm();
+        paper_painter.text(
+            egui::pos2(p_rect.left() + 6.0, (p_rect.top() - 8.0).max(sheet_rect.top() + 38.0)),
+            egui::Align2::LEFT_CENTER,
+            format!(
+                "📄 용지 경계 (붉은선): {} ({:.0}×{:.0}mm · 무한대 방안지 배경)",
+                state.paper_preset.label_kr(),
+                pw_mm_lbl,
+                ph_mm_lbl
+            ),
+            egui::FontId::proportional(9.2),
+            paper_red_border,
         );
         paper_painter.rect_stroke(
             sheet_rect,
@@ -1665,6 +1924,21 @@ pub fn render_sheet_pane_egui(
             egui::Stroke::new(1.0_f32, border),
             egui::StrokeKind::Inside,
         );
+
+        // `Delete` / `Backspace` 키 입력 시 현재 선택된 레이어 즉시 삭제 ("delete키로 지우기")
+        if ui.input(|i| i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace)) {
+            let _ = state.delete_selected_layer();
+        }
+        state.has_custom_section_layer = plate
+            .paths
+            .iter()
+            .any(|p| p.layer_id.starts_with("추가단면_"));
+        if state.has_custom_section_layer && !state.request_clear_custom_section {
+            // 추가단면선 생성 시 레이어 목록에 활성 표시
+            if state.selected_layer_idx.is_none() {
+                state.selected_layer_idx = Some(4);
+            }
+        }
 
         // 2. 다중 뷰 정밀 탁본(`Rubbing`) 래스터 영역 합성 및 Image 0 / Image 1 반영:
         //    - Image 0 ("평단면을 그려야한다 이렇게나오는게 맞나 ? 이것은 일러스트에서 그려야한다. 내가."):
@@ -1674,6 +1948,14 @@ pub fn render_sheet_pane_egui(
         let mut right_rubbing_box_px: Option<egui::Rect> = None;
 
         for (ri, region) in plate.raster_regions.iter().enumerate() {
+            let raster_layer_idx = if ri == 0 && region.kind == PlateRasterKind::FrontExteriorRubbing {
+                1usize
+            } else {
+                2usize
+            };
+            if !state.view_transforms[raster_layer_idx].visible {
+                continue;
+            }
             if ri == 0
                 && region.kind == PlateRasterKind::FrontExteriorRubbing
                 && !state.show_elevation_rubbing_overlay
@@ -1682,10 +1964,11 @@ pub fn render_sheet_pane_egui(
                 // 좌측 평단면(1:1 평면도 + 1:1 정면 입·단면도)은 일러스트용 순수 벡터 실측 선화로 유지!
                 continue;
             }
-            let rx0 = origin_x + (region.rect_mm[0] as f32) * scale;
-            let ry1 = origin_y - (region.rect_mm[1] as f32) * scale;
-            let rx1 = origin_x + (region.rect_mm[2] as f32) * scale;
-            let ry0 = origin_y - (region.rect_mm[3] as f32) * scale;
+            let r_off = state.view_transforms[raster_layer_idx].offset_mm();
+            let rx0 = origin_x + ((region.rect_mm[0] + r_off[0]) as f32) * scale;
+            let ry1 = origin_y - ((region.rect_mm[1] + r_off[1]) as f32) * scale;
+            let rx1 = origin_x + ((region.rect_mm[2] + r_off[0]) as f32) * scale;
+            let ry0 = origin_y - ((region.rect_mm[3] + r_off[1]) as f32) * scale;
             let mut dst_rect = egui::Rect::from_min_max(
                 egui::pos2(rx0.min(rx1), ry0.min(ry1)),
                 egui::pos2(rx0.max(rx1), ry0.max(ry1)),
@@ -1967,7 +2250,7 @@ pub fn render_sheet_pane_egui(
         let mut main_vessel_bot_y = f32::NEG_INFINITY;
         let mut section_badge_anchor: Option<egui::Pos2> = None;
 
-        // Image 7: 4개 개별 뷰(0: 좌상 1:1 평면도, 1: 좌하 1:1 단면도, 2: 우상 1:1 정밀 탁본, 3: 우하 1:1 수평 횡단면)의 중심점 산출
+        // 6개 개별 도면 레이어(0: 1:1 평면도, 1: 1:1 단면도, 2: 1:1 정밀 탁본, 3: 1:1 수평 횡단면, 4: 추가 단면 A-A', 5: 치수선·축척자)의 중심점 산출
         let elev_reg_mm = plate
             .raster_regions
             .first()
@@ -1982,12 +2265,20 @@ pub fn render_sheet_pane_egui(
         let cy_elev_mm = 0.5 * (elev_reg_mm[1] + elev_reg_mm[3]);
         let top_elev_mm = elev_reg_mm[1].max(elev_reg_mm[3]);
         let half_d_mm = 0.5 * (elev_reg_mm[2] - elev_reg_mm[0]).abs().max(20.0);
-        let cy_plan_mm = top_elev_mm + half_d_mm + 24.0;
+        let cy_plan_mm = top_elev_mm + half_d_mm + 34.0;
         let cx_right_mm = 0.5 * (rub_reg_mm[0] + rub_reg_mm[2]);
         let cy_rub_mm = 0.5 * (rub_reg_mm[1] + rub_reg_mm[3]);
         let cy_hsec_mm = cy_elev_mm;
-        let mid_split_x_mm = 0.5 * (elev_reg_mm[0].max(elev_reg_mm[2]) + rub_reg_mm[0].min(rub_reg_mm[2]));
-        let mid_split_y_mm = top_elev_mm + 12.0;
+        let cx_custom_mm = cx_right_mm + half_d_mm * 1.85 + 42.0;
+        let cy_custom_mm = cy_rub_mm;
+        let layer_centers_mm: [[f64; 2]; 6] = [
+            [cx_left_mm, cy_plan_mm],
+            [cx_left_mm, cy_elev_mm],
+            [cx_right_mm, cy_rub_mm],
+            [cx_right_mm, cy_hsec_mm],
+            [cx_custom_mm, cy_custom_mm],
+            [cx_left_mm, cy_elev_mm],
+        ];
 
         for elem in &plate.paths {
             if elem.points_mm.len() < 2 {
@@ -2000,23 +2291,18 @@ pub fn render_sheet_pane_egui(
             {
                 continue;
             }
-            // Image 7: 각 선분이 속한 개별 뷰(0: 평면도, 1: 단면도, 2: 탁본, 3: 수평 횡단면) 판별 및 개별 90°/180°/앞으로연속뒤집기 변환 적용
-            let first_pt_mm = elem.points_mm[0];
-            let is_scale_bar = elem.layer_id == "치수_축척막대" || elem.layer_id == "축척자_5cm";
-            let (view_idx, view_center_mm) = if first_pt_mm[0] <= mid_split_x_mm {
-                if first_pt_mm[1] >= mid_split_y_mm {
-                    (0usize, [cx_left_mm, cy_plan_mm])
-                } else {
-                    (1usize, [cx_left_mm, cy_elev_mm])
-                }
-            } else if first_pt_mm[1] >= mid_split_y_mm {
-                (2usize, [cx_right_mm, cy_rub_mm])
-            } else {
-                (3usize, [cx_right_mm, cy_hsec_mm])
-            };
+            let view_idx = classify_plate_path_layer_idx(&elem.layer_id);
             let vtf = state.view_transforms[view_idx];
+            if !vtf.visible {
+                continue;
+            }
+            let view_center_mm = layer_centers_mm[view_idx];
+            let is_scale_bar = elem.layer_id == "치수_축척막대" || elem.layer_id == "축척자_5cm";
             let transformed_points_mm: Vec<[f64; 2]> = if !is_scale_bar
-                && (vtf.rot_90_steps != 0 || vtf.flip_forward_steps != 0)
+                && (vtf.rot_90_steps != 0
+                    || vtf.flip_forward_steps != 0
+                    || vtf.offset_mm_x_tenths != 0
+                    || vtf.offset_mm_y_tenths != 0)
             {
                 elem.points_mm
                     .iter()
@@ -2155,7 +2441,7 @@ pub fn render_sheet_pane_egui(
             }
         }
 
-        // 텍스트 주석 및 치수 콜아웃
+        // 텍스트 주석 및 치수 콜아웃 (각 레이어의 가시성 및 오프셋 연동)
         for c in &plate.callouts {
             if c.text.contains("평균두께")
                 || c.text.contains("최대동경")
@@ -2163,10 +2449,25 @@ pub fn render_sheet_pane_egui(
             {
                 continue;
             }
+            let callout_layer = if c.text.contains("추가 단면") {
+                4usize
+            } else if c.text.contains("평면도") {
+                0usize
+            } else if c.text.contains("탁본") {
+                2usize
+            } else if c.text.contains("수평 횡단면") {
+                3usize
+            } else {
+                5usize
+            };
+            if !state.view_transforms[callout_layer].visible {
+                continue;
+            }
+            let c_off = state.view_transforms[callout_layer].offset_mm();
             let pos = egui::pos2(
-                (origin_x + (c.pos_mm[0] as f32) * scale)
+                (origin_x + ((c.pos_mm[0] + c_off[0]) as f32) * scale)
                     .clamp(sheet_rect.left() + 34.0, sheet_rect.right() - 150.0),
-                (origin_y - (c.pos_mm[1] as f32) * scale)
+                (origin_y - ((c.pos_mm[1] + c_off[1]) as f32) * scale)
                     .clamp(sheet_rect.top() + 50.0, sheet_rect.bottom() - 18.0),
             );
             let col = match c.color_hex.as_str() {
@@ -2187,169 +2488,275 @@ pub fn render_sheet_pane_egui(
         // 4. Image 15: "이것도 도면안에 필요한 부분에 최대한 가깝게 와야한다. 유물의 크기 이동에따라 이동할수있게"
         // 유물 실제 외곽 경계(main_vessel_min_x .. max_x, top_y .. bot_y)에 최대한 밀착되어 함께 이동하는 치수선!
         // =========================================================================================
-        if let Some(first_reg) = plate.raster_regions.first() {
-            let fallback_rx0 =
-                origin_x + (first_reg.rect_mm[0].min(first_reg.rect_mm[2]) as f32) * scale;
-            let fallback_rx1 =
-                origin_x + (first_reg.rect_mm[0].max(first_reg.rect_mm[2]) as f32) * scale;
-            let fallback_top =
-                origin_y - (first_reg.rect_mm[1].max(first_reg.rect_mm[3]) as f32) * scale;
-            let fallback_bot =
-                origin_y - (first_reg.rect_mm[1].min(first_reg.rect_mm[3]) as f32) * scale;
+        if state.view_transforms[5].visible && state.view_transforms[1].visible {
+            if let Some(first_reg) = plate.raster_regions.first() {
+                let fallback_rx0 =
+                    origin_x + (first_reg.rect_mm[0].min(first_reg.rect_mm[2]) as f32) * scale;
+                let fallback_rx1 =
+                    origin_x + (first_reg.rect_mm[0].max(first_reg.rect_mm[2]) as f32) * scale;
+                let fallback_top =
+                    origin_y - (first_reg.rect_mm[1].max(first_reg.rect_mm[3]) as f32) * scale;
+                let fallback_bot =
+                    origin_y - (first_reg.rect_mm[1].min(first_reg.rect_mm[3]) as f32) * scale;
 
-            let rx0 = if main_vessel_min_x.is_finite() {
-                main_vessel_min_x
-            } else {
-                fallback_rx0
-            };
-            let rx1 = if main_vessel_max_x.is_finite() {
-                main_vessel_max_x
-            } else {
-                fallback_rx1
-            };
-            let ry_top = if main_vessel_top_y.is_finite() {
-                main_vessel_top_y
-            } else {
-                fallback_top
-            };
-            let ry_bot = if main_vessel_bot_y.is_finite() {
-                main_vessel_bot_y
-            } else {
-                fallback_bot
-            };
+                let rx0 = if main_vessel_min_x.is_finite() {
+                    main_vessel_min_x
+                } else {
+                    fallback_rx0
+                };
+                let rx1 = if main_vessel_max_x.is_finite() {
+                    main_vessel_max_x
+                } else {
+                    fallback_rx1
+                };
+                let ry_top = if main_vessel_top_y.is_finite() {
+                    main_vessel_top_y
+                } else {
+                    fallback_top
+                };
+                let ry_bot = if main_vessel_bot_y.is_finite() {
+                    main_vessel_bot_y
+                } else {
+                    fallback_bot
+                };
 
-            let dim_w_px = (state.line_style.dim_width_mm * scale).clamp(0.9, 3.0);
+                let dim_w_px = (state.line_style.dim_width_mm * scale).clamp(0.9, 3.0);
 
-            // (a) 상단 수평 구경 화살표 치수선 — 유물 구연부 바로 위 9px 위치에 밀착!
-            let dim_y = (ry_top - 9.0).max(sheet_rect.top() + 48.0);
-            paper_painter.line_segment(
-                [egui::pos2(rx0, ry_top - 1.5), egui::pos2(rx0, dim_y - 3.0)],
-                egui::Stroke::new(dim_w_px * 0.85, dim_col),
-            );
-            paper_painter.line_segment(
-                [egui::pos2(rx1, ry_top - 1.5), egui::pos2(rx1, dim_y - 3.0)],
-                egui::Stroke::new(dim_w_px * 0.85, dim_col),
-            );
-            paper_painter.line_segment(
-                [egui::pos2(rx0, dim_y), egui::pos2(rx1, dim_y)],
-                egui::Stroke::new(dim_w_px, dim_col),
-            );
-            for &(ax, dir_s) in &[(rx0, 1.0_f32), (rx1, -1.0_f32)] {
-                paper_painter.add(egui::Shape::convex_polygon(
-                    vec![
-                        egui::pos2(ax, dim_y),
-                        egui::pos2(ax + dir_s * 5.0, dim_y - 2.4),
-                        egui::pos2(ax + dir_s * 5.0, dim_y + 2.4),
-                    ],
+                // (a) 상단 수평 구경 화살표 치수선 — 유물 구연부 바로 위 9px 위치에 밀착!
+                let dim_y = (ry_top - 9.0).max(sheet_rect.top() + 48.0);
+                paper_painter.line_segment(
+                    [egui::pos2(rx0, ry_top - 1.5), egui::pos2(rx0, dim_y - 3.0)],
+                    egui::Stroke::new(dim_w_px * 0.85, dim_col),
+                );
+                paper_painter.line_segment(
+                    [egui::pos2(rx1, ry_top - 1.5), egui::pos2(rx1, dim_y - 3.0)],
+                    egui::Stroke::new(dim_w_px * 0.85, dim_col),
+                );
+                paper_painter.line_segment(
+                    [egui::pos2(rx0, dim_y), egui::pos2(rx1, dim_y)],
+                    egui::Stroke::new(dim_w_px, dim_col),
+                );
+                for &(ax, dir_s) in &[(rx0, 1.0_f32), (rx1, -1.0_f32)] {
+                    paper_painter.add(egui::Shape::convex_polygon(
+                        vec![
+                            egui::pos2(ax, dim_y),
+                            egui::pos2(ax + dir_s * 5.0, dim_y - 2.4),
+                            egui::pos2(ax + dir_s * 5.0, dim_y + 2.4),
+                        ],
+                        dim_col,
+                        egui::Stroke::NONE,
+                    ));
+                }
+                let rim_mm = (first_reg.rect_mm[2] - first_reg.rect_mm[0]).abs();
+                paper_painter.text(
+                    egui::pos2((rx0 + rx1) * 0.5, dim_y - 6.5),
+                    egui::Align2::CENTER_CENTER,
+                    format!("구경 {:.1}mm", rim_mm),
+                    egui::FontId::proportional(9.5),
                     dim_col,
-                    egui::Stroke::NONE,
-                ));
-            }
-            let rim_mm = (first_reg.rect_mm[2] - first_reg.rect_mm[0]).abs();
-            paper_painter.text(
-                egui::pos2((rx0 + rx1) * 0.5, dim_y - 6.5),
-                egui::Align2::CENTER_CENTER,
-                format!("구경 {:.1}mm", rim_mm),
-                egui::FontId::proportional(9.5),
-                dim_col,
-            );
+                );
 
-            // (b) 좌측 수직 높이 화살표 치수선 — 유물 좌측 외곽선 바로 옆 10px 위치에 밀착!
-            let dim_x = (rx0 - 10.0).max(sheet_rect.left() + 36.0);
-            paper_painter.line_segment(
-                [egui::pos2(dim_x - 3.0, ry_top), egui::pos2(rx0 - 1.5, ry_top)],
-                egui::Stroke::new(dim_w_px * 0.85, dim_col),
-            );
-            paper_painter.line_segment(
-                [egui::pos2(dim_x - 3.0, ry_bot), egui::pos2(rx0 - 1.5, ry_bot)],
-                egui::Stroke::new(dim_w_px * 0.85, dim_col),
-            );
-            paper_painter.line_segment(
-                [egui::pos2(dim_x, ry_top), egui::pos2(dim_x, ry_bot)],
-                egui::Stroke::new(dim_w_px, dim_col),
-            );
-            for &(ay, dir_s) in &[(ry_top, 1.0_f32), (ry_bot, -1.0_f32)] {
-                paper_painter.add(egui::Shape::convex_polygon(
-                    vec![
-                        egui::pos2(dim_x, ay),
-                        egui::pos2(dim_x - 2.4, ay + dir_s * 5.0),
-                        egui::pos2(dim_x + 2.4, ay + dir_s * 5.0),
-                    ],
+                // (b) 좌측 수직 높이 화살표 치수선 — 유물 좌측 외곽선 바로 옆 10px 위치에 밀착!
+                let dim_x = (rx0 - 10.0).max(sheet_rect.left() + 36.0);
+                paper_painter.line_segment(
+                    [egui::pos2(dim_x - 3.0, ry_top), egui::pos2(rx0 - 1.5, ry_top)],
+                    egui::Stroke::new(dim_w_px * 0.85, dim_col),
+                );
+                paper_painter.line_segment(
+                    [egui::pos2(dim_x - 3.0, ry_bot), egui::pos2(rx0 - 1.5, ry_bot)],
+                    egui::Stroke::new(dim_w_px * 0.85, dim_col),
+                );
+                paper_painter.line_segment(
+                    [egui::pos2(dim_x, ry_top), egui::pos2(dim_x, ry_bot)],
+                    egui::Stroke::new(dim_w_px, dim_col),
+                );
+                for &(ay, dir_s) in &[(ry_top, 1.0_f32), (ry_bot, -1.0_f32)] {
+                    paper_painter.add(egui::Shape::convex_polygon(
+                        vec![
+                            egui::pos2(dim_x, ay),
+                            egui::pos2(dim_x - 2.4, ay + dir_s * 5.0),
+                            egui::pos2(dim_x + 2.4, ay + dir_s * 5.0),
+                        ],
+                        dim_col,
+                        egui::Stroke::NONE,
+                    ));
+                }
+                let h_mm = (first_reg.rect_mm[3] - first_reg.rect_mm[1]).abs();
+                let h_lbl_rect = egui::Rect::from_center_size(
+                    egui::pos2(dim_x - 28.0, (ry_top + ry_bot) * 0.5),
+                    egui::vec2(52.0, 15.0),
+                );
+                paper_painter.rect_filled(
+                    h_lbl_rect,
+                    2.0,
+                    egui::Color32::from_rgba_unmultiplied(250, 249, 245, 220),
+                );
+                paper_painter.text(
+                    egui::pos2(dim_x - 4.0, (ry_top + ry_bot) * 0.5),
+                    egui::Align2::RIGHT_CENTER,
+                    format!("높이 {:.1}mm", h_mm),
+                    egui::FontId::proportional(9.5),
                     dim_col,
-                    egui::Stroke::NONE,
-                ));
+                );
             }
-            let h_mm = (first_reg.rect_mm[3] - first_reg.rect_mm[1]).abs();
-            let h_lbl_rect = egui::Rect::from_center_size(
-                egui::pos2(dim_x - 28.0, (ry_top + ry_bot) * 0.5),
-                egui::vec2(52.0, 15.0),
-            );
-            paper_painter.rect_filled(
-                h_lbl_rect,
-                2.0,
-                egui::Color32::from_rgba_unmultiplied(250, 249, 245, 220),
-            );
-            paper_painter.text(
-                egui::pos2(dim_x - 4.0, (ry_top + ry_bot) * 0.5),
-                egui::Align2::RIGHT_CENTER,
-                format!("높이 {:.1}mm", h_mm),
-                egui::FontId::proportional(9.5),
-                dim_col,
-            );
         }
 
         // =========================================================================================
-        // 4-B. Image 7 ("이것도 하나하나 개별로 90도 180도 뒤집을수있게하라 누르면 연속으로 앞으로 두집히게하라")
-        // 4개 개별 도면 뷰(0: 1:1 평면도, 1: 1:1 단면도, 2: 1:1 정밀 탁본, 3: 1:1 수평 횡단면) 상단에
-        // 각각 독립된 [↻90°] [🔃180°] [🔁앞으로] 컨트롤 바를 배치한다!
+        // 4-B. Image 7 & 레이어 관리 ("레이어 모든것에는 방향조정 90도씩 delete키로 지우기 추가단면선 생성시 이것도 레이어에생성 삭제가능하고 키고끌수있게")
+        // 5개 도면 뷰(0: 1:1 평면도, 1: 1:1 단면도, 2: 1:1 정밀 탁본, 3: 1:1 수평 횡단면, 4: 추가 단면 A-A') 상단에
+        // 각각 독립된 [✥이동] [↻90°] [↕180°] [↻앞으로] [🗑Del] 컨트롤 바를 배치한다!
         // =========================================================================================
-        let plan_top_mm = cy_plan_mm + half_d_mm + 12.0;
+        let plan_top_mm = cy_plan_mm + half_d_mm + 14.0;
         let elev_top_ctrl_mm = top_elev_mm + 16.0;
-        let rub_top_mm = rub_reg_mm[1].max(rub_reg_mm[3]) + 12.0;
-        // 우하단 1:1 수평 횡단면의 개별 회전·뒤집기 바는 수평 횡단면 바로 아래쪽에 배치하여 상단 1:1 정밀 탁본과 절대 겹치지 않게 함!
+        let rub_top_mm = rub_reg_mm[1].max(rub_reg_mm[3]) + 14.0;
         let hsec_bot_ctrl_mm = (cy_hsec_mm - half_d_mm * 0.86 - 4.0).max(8.0);
+        let custom_top_mm = cy_custom_mm + half_d_mm * 0.65 + 14.0;
         let individual_anchors = [
+            (0usize, "sheet_view_tf_plan", [cx_left_mm, plan_top_mm], true),
+            (1usize, "sheet_view_tf_elev", [cx_left_mm, elev_top_ctrl_mm], true),
+            (2usize, "sheet_view_tf_rubbing", [cx_right_mm, rub_top_mm], true),
+            (3usize, "sheet_view_tf_hsec", [cx_right_mm, hsec_bot_ctrl_mm], true),
             (
-                0usize,
-                "sheet_view_tf_plan",
-                egui::pos2(
-                    origin_x + (cx_left_mm as f32) * scale,
-                    (origin_y - (plan_top_mm as f32) * scale).max(sheet_rect.top() + 78.0),
-                ),
-            ),
-            (
-                1usize,
-                "sheet_view_tf_elev",
-                egui::pos2(
-                    origin_x + (cx_left_mm as f32) * scale,
-                    (origin_y - (elev_top_ctrl_mm as f32) * scale).max(sheet_rect.top() + 180.0),
-                ),
-            ),
-            (
-                2usize,
-                "sheet_view_tf_rubbing",
-                egui::pos2(
-                    origin_x + (cx_right_mm as f32) * scale,
-                    (origin_y - (rub_top_mm as f32) * scale).max(sheet_rect.top() + 78.0),
-                ),
-            ),
-            (
-                3usize,
-                "sheet_view_tf_hsec",
-                egui::pos2(
-                    origin_x + (cx_right_mm as f32) * scale,
-                    (origin_y - (hsec_bot_ctrl_mm as f32) * scale).min(sheet_rect.bottom() - 48.0),
-                ),
+                4usize,
+                "sheet_view_tf_custom_aa",
+                [cx_custom_mm, custom_top_mm],
+                state.has_custom_section_layer,
             ),
         ];
-        for (v_idx, v_prefix, anchor_px) in individual_anchors {
-            draw_individual_view_flip_controls(
+        let mut pending_del_layer = None;
+        for (v_idx, v_prefix, base_anchor_mm, exists) in individual_anchors {
+            if !exists || !state.view_transforms[v_idx].visible {
+                continue;
+            }
+            let off = state.view_transforms[v_idx].offset_mm();
+            let raw_y = (origin_y - ((base_anchor_mm[1] + off[1]) as f32) * scale)
+                .clamp(sheet_rect.top() + 76.0, sheet_rect.bottom() - 46.0);
+            let max_x_for_bar = if raw_y < sheet_rect.top() + 195.0 {
+                sheet_rect.right() - 320.0
+            } else {
+                sheet_rect.right() - 100.0
+            };
+            let anchor_px = egui::pos2(
+                (origin_x + ((base_anchor_mm[0] + off[0]) as f32) * scale)
+                    .clamp(sheet_rect.left() + 100.0, max_x_for_bar.max(sheet_rect.left() + 100.0)),
+                raw_y,
+            );
+            let is_sel = state.selected_layer_idx == Some(v_idx);
+            let (sel_clicked, del_clicked) = draw_individual_view_flip_controls(
                 ui,
                 &paper_painter,
                 anchor_px,
                 v_prefix,
+                v_idx,
+                is_sel,
+                scale,
                 &mut state.view_transforms[v_idx],
             );
+            if sel_clicked {
+                state.selected_layer_idx = Some(v_idx);
+            }
+            if del_clicked {
+                pending_del_layer = Some(v_idx);
+            }
+        }
+        if let Some(d_idx) = pending_del_layer {
+            state.delete_layer(d_idx);
+        }
+
+        // =========================================================================================
+        // 4-C. 우측 상단 『🗂 레이어 관리 (켜기/끄기 · 90° 회전 · Delete 지우기 · 추가단면 A-A' 연동)』 패널
+        // =========================================================================================
+        if state.show_layer_panel {
+            let active_layer_indices: Vec<usize> = if state.has_custom_section_layer {
+                vec![0, 1, 2, 3, 4, 5]
+            } else {
+                vec![0, 1, 2, 3, 5]
+            };
+            let row_h = 20.0_f32;
+            let panel_w = 238.0_f32;
+            let panel_h = 26.0 + (active_layer_indices.len() as f32) * row_h + 6.0;
+            let layer_panel_rect = egui::Rect::from_min_size(
+                egui::pos2(
+                    (sheet_rect.right() - panel_w - 8.0).max(sheet_rect.left() + 12.0),
+                    sheet_rect.top() + 34.0,
+                ),
+                egui::vec2(panel_w, panel_h),
+            );
+            paper_painter.rect_filled(
+                layer_panel_rect,
+                4.5,
+                egui::Color32::from_rgba_unmultiplied(250, 249, 245, 246),
+            );
+            paper_painter.rect_stroke(
+                layer_panel_rect,
+                4.5,
+                egui::Stroke::new(1.1_f32, terra),
+                egui::StrokeKind::Inside,
+            );
+            paper_painter.text(
+                egui::pos2(layer_panel_rect.left() + 8.0, layer_panel_rect.top() + 12.0),
+                egui::Align2::LEFT_CENTER,
+                "🗂 도면 레이어 (켜기/끄기 · 90°회전 · Del삭제)",
+                egui::FontId::proportional(9.0),
+                terra,
+            );
+
+            let mut row_del_idx = None;
+            for (ri_row, l_idx) in active_layer_indices.into_iter().enumerate() {
+                let ry = layer_panel_rect.top() + 24.0 + (ri_row as f32) * row_h;
+                let r_rect = egui::Rect::from_min_size(
+                    egui::pos2(layer_panel_rect.left() + 4.0, ry),
+                    egui::vec2(panel_w - 8.0, row_h - 2.0),
+                );
+                let is_sel = state.selected_layer_idx == Some(l_idx);
+                if is_sel {
+                    paper_painter.rect_filled(
+                        r_rect,
+                        2.5,
+                        egui::Color32::from_rgba_unmultiplied(226, 238, 252, 230),
+                    );
+                }
+                let mut l_ui = ui.new_child(
+                    egui::UiBuilder::new()
+                        .max_rect(r_rect)
+                        .layout(egui::Layout::left_to_right(egui::Align::Center)),
+                );
+                l_ui.spacing_mut().item_spacing.x = 3.0;
+                let vis = &mut state.view_transforms[l_idx].visible;
+                let _ = l_ui.checkbox(vis, "");
+                let lbl_resp = l_ui.selectable_label(
+                    is_sel,
+                    egui::RichText::new(sheet_layer_title_kr(l_idx))
+                        .size(8.8)
+                        .color(if *vis { ink } else { muted }),
+                );
+                if lbl_resp.clicked() {
+                    state.selected_layer_idx = Some(l_idx);
+                }
+                if l_ui
+                    .add(egui::Button::new(egui::RichText::new("↻90°").size(8.2)).corner_radius(2.5))
+                    .clicked()
+                {
+                    state.selected_layer_idx = Some(l_idx);
+                    state.view_transforms[l_idx].rotate_cw_90();
+                }
+                if l_ui
+                    .add(
+                        egui::Button::new(
+                            egui::RichText::new("🗑").size(8.2).color(profile_red),
+                        )
+                        .corner_radius(2.5),
+                    )
+                    .on_hover_text("이 레이어 지우기 (Delete 키와 동일)")
+                    .clicked()
+                {
+                    state.selected_layer_idx = Some(l_idx);
+                    row_del_idx = Some(l_idx);
+                }
+            }
+            if let Some(d_idx) = row_del_idx {
+                state.delete_layer(d_idx);
+            }
         }
 
         // =========================================================================================
@@ -3144,6 +3551,7 @@ mod tests {
             sigmoid_contrast: 8.5,
             contact_threshold: -0.12,
             style: AcademicRubbingStyle::WetHanjiInk,
+            ..Default::default()
         };
         let img = render_orthographic_rubbing_rgba_with_params(
             &mesh,
@@ -3212,7 +3620,8 @@ mod tests {
         );
         assert!((state.line_style.section_width_mm - 0.40).abs() < 1e-5);
 
-        // 2. Image 12: 완형 토기 도판에서 수평 횡단면(횡단면_외벽윤곽선)이 유물 정면도 위쪽(top_y 보다 큰 Y 좌표)에 배치되어야 함
+        // 2. "겹치잖아.? 수평횡단면은 아래에만하라고":
+        // 완형 토기 도판에서 수평 횡단면(횡단면_외벽윤곽선)이 평면도와 겹치지 않고 우측 하단(vessel_top_y 아래쪽, vessel_right_x 오른쪽)에만 배치되어야 함!
         let mesh = make_patterned_bowl_mesh();
         let m = compute_artifact_measurements(&mesh, ArtifactCategory::CompleteVessel);
         let vsec = strata_section::slice_mesh_with_fixed_plane(
@@ -3246,17 +3655,20 @@ mod tests {
             hemp_density_label: None,
             flip_exterior_right: false,
         });
+        let vessel_right_x = plate.raster_regions[0].rect_mm[2];
         let vessel_top_y = plate.raster_regions[0].rect_mm[3];
         let hsec_ring = plate
             .paths
             .iter()
             .find(|p| p.layer_id == "횡단면_외벽윤곽선")
             .expect("horizontal section ring must exist");
+        let hsec_mean_x: f64 = hsec_ring.points_mm.iter().map(|p| p[0]).sum::<f64>()
+            / (hsec_ring.points_mm.len() as f64);
         let hsec_mean_y: f64 = hsec_ring.points_mm.iter().map(|p| p[1]).sum::<f64>()
             / (hsec_ring.points_mm.len() as f64);
         assert!(
-            hsec_mean_y > vessel_top_y,
-            "horizontal cross-section Y ({hsec_mean_y:.1}mm) must be positioned ABOVE vessel top ({vessel_top_y:.1}mm)"
+            hsec_mean_x > vessel_right_x && hsec_mean_y < vessel_top_y,
+            "horizontal cross-section ({hsec_mean_x:.1}, {hsec_mean_y:.1}mm) must be positioned ONLY in the bottom-right column"
         );
     }
 
@@ -3282,7 +3694,8 @@ mod tests {
 
     #[test]
     fn test_tdd20_paper_sheet_5cm_red_grid_and_non_overlapping_line_widgets() {
-        // 1. Image 3: 용지 설정(PaperSheetPreset) 및 용지 내부 전용 방안선 + 5cm(50mm)마다 얇은 빨간색선 검증
+        // 1. "방안지 여백은 무한대로 배경을 하고 용지만 붉은선으로 표시하게 하자":
+        // 방안선이 용지 경계(paper_bounds_rect) 바깥 여백까지 무한대(sheet_rect 전체)로 확장되고, 용지 경계 사각형이 정확히 산출됨을 검증!
         let sheet_rect = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1000.0, 760.0));
         let spec = compute_paper_sheet_graph_spec(
             sheet_rect,
@@ -3293,18 +3706,17 @@ mod tests {
         assert!(
             spec.paper_bounds_rect.width() < sheet_rect.width()
                 && spec.paper_bounds_rect.height() < sheet_rect.height(),
-            "paper bounds must sit inside the desk viewport as a publication layout sheet"
+            "paper bounds must sit inside the viewport as the red-bordered publication sheet"
         );
         assert!(
             !spec.lines_50mm_red_x.is_empty() && !spec.lines_50mm_red_y.is_empty(),
-            "must generate 5cm (50mm) thin red grid lines inside paper"
+            "must generate 5cm (50mm) thin red grid lines"
         );
-        for &rx in &spec.lines_10mm_x {
-            assert!(
-                rx >= spec.paper_bounds_rect.left() - 0.5 && rx <= spec.paper_bounds_rect.right() + 0.5,
-                "grid lines must only be inside the paper sheet"
-            );
-        }
+        assert!(
+            spec.lines_10mm_x.iter().any(|&gx| gx < spec.paper_bounds_rect.left() - 2.0)
+                && spec.lines_10mm_x.iter().any(|&gx| gx > spec.paper_bounds_rect.right() + 2.0),
+            "infinite graph paper grid lines must extend into the margin beyond paper_bounds_rect"
+        );
 
         // 2. Image 2: 모든 선 조정 위젯이 유물이 움직이면 함께 이동하고 줌인/줌아웃 시 절대 중복(겹침)되지 않아야 함!
         for zoom in [0.55_f32, 1.0_f32, 2.2_f32] {
@@ -3410,5 +3822,82 @@ mod tests {
         assert!((v3d.tilt_deg.abs() - 180.0).abs() < 1e-5);
         v3d.flip_artifact_upside_down_180();
         assert!(v3d.tilt_deg.abs() < 1e-5);
+    }
+
+    #[test]
+    fn test_tdd22_measured_plan_dashed_fractures_light_control_and_6layer_delete() {
+        // 1. Image 0 ("실제 모습이 평면도에 나와야하지않나? 깨진부분은 점선아닌가?"):
+        // 구연부 일부가 결손(깨진)된 메쉬에서 extract_topdown_plan_slice_2d가 실제 윤곽과 결손 점선(평면도_결손복원_점선)을 생성함을 검증!
+        let mut mesh = make_patterned_bowl_mesh();
+        for pos in &mut mesh.positions {
+            let ang_deg = pos[1].atan2(pos[0]).to_degrees().rem_euclid(360.0);
+            if (25.0..=55.0).contains(&ang_deg) && pos[2] > 42.0 {
+                pos[2] = 36.0; // 구연부 결손(깨진 부분) 모사
+                pos[0] *= 0.86;
+                pos[1] *= 0.86;
+            }
+        }
+        let mut v3d = crate::view3d_pane::View3DPaneState::default();
+        let top_plan = crate::view3d_pane::extract_topdown_plan_slice_2d(&mesh, &v3d);
+        assert!(
+            top_plan.polylines_2d.len() >= 3,
+            "top-down plan slice must extract outer/inner rim, foot, and broken sector polylines"
+        );
+        let m = compute_artifact_measurements(&mesh, ArtifactCategory::CompleteVessel);
+        let vsec = crate::view3d_pane::slice_transformed_mesh_world_locked(&mesh, &v3d, true);
+        let hsec = crate::view3d_pane::slice_transformed_mesh_world_locked(&mesh, &v3d, false);
+        v3d.custom_section_line_mm = Some([[-42.0, -18.0], [42.0, 22.0]]);
+        let custom_sec = crate::view3d_pane::slice_custom_line_section_2d(&mesh, &v3d)
+            .expect("custom section A-A' must be extracted");
+
+        let plate = strata_export::compose_archaeological_plate(&strata_export::PlateComposeInput {
+            title: "결손 구연 완형 토기",
+            measurements: &m,
+            vertical_section: &vsec,
+            horizontal_sections: &[hsec, top_plan, custom_sec],
+            occluded_spans: &[],
+            sherd_subtype: None,
+            sherd_strategy: None,
+            handle_attachment: None,
+            bead_subtype: None,
+            bead_drill_type: None,
+            wado_cut_ratio: None,
+            hemp_density_label: None,
+            flip_exterior_right: false,
+        });
+        assert!(
+            plate
+                .paths
+                .iter()
+                .any(|p| p.layer_id == "평면도_결손복원_점선" && p.dash_pattern_mm.is_some()),
+            "chipped/broken rim segment in 1:1 plan view must be rendered as a dashed reconstruction line"
+        );
+        assert!(
+            plate.paths.iter().any(|p| p.layer_id.starts_with("추가단면_")),
+            "custom section A-A' must be placed in its dedicated layer"
+        );
+
+        // 2. Image 2 ("광원을 조정할수있는 작은창"): 광원 방위각/고도각/세기 벡터 정규화 검증
+        v3d.light_azimuth_deg = 225.0;
+        v3d.light_elevation_deg = 35.0;
+        v3d.light_intensity = 1.35;
+        let lvec = v3d.compute_light_direction_vector();
+        let llen = (lvec[0] * lvec[0] + lvec[1] * lvec[1] + lvec[2] * lvec[2]).sqrt();
+        assert!((llen - 1.0).abs() < 1e-4);
+
+        // 3. 전 레이어 관리 ("레이어 모든것에는 방향조정 90도씩 delete키로 지우기 추가단면선 생성시 이것도 레이어에생성 삭제가능하고 키고끌수있게")
+        let mut sheet = SheetPaneState {
+            selected_layer_idx: Some(4), // ⑤ 추가 단면 A-A' 선택
+            ..SheetPaneState::default()
+        };
+        sheet.rotate_selected_layer_cw_90();
+        assert_eq!(sheet.view_transforms[4].rot_90_steps, 1);
+        let deleted = sheet.delete_selected_layer();
+        assert_eq!(deleted, Some(4));
+        assert!(!sheet.view_transforms[4].visible);
+        assert!(
+            sheet.request_clear_custom_section,
+            "deleting layer 4 (추가 단면 A-A') must also signal clearing custom_section_line_mm"
+        );
     }
 }

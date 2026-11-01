@@ -193,6 +193,11 @@ impl ArtifactSlotEntry {
             .as_ref()
             .map(|f| f.plate_strategy);
         let mut h_secs = vec![self.horizontal_section.clone()];
+        let top_plan_sec =
+            crate::view3d_pane::extract_topdown_plan_slice_2d(&self.mesh, view3d_state);
+        if !top_plan_sec.polylines_2d.is_empty() {
+            h_secs.push(top_plan_sec);
+        }
         if let Some(custom_sec) =
             crate::view3d_pane::slice_custom_line_section_2d(&self.mesh, view3d_state)
         {
@@ -1018,6 +1023,24 @@ impl eframe::App for StrataStudioApp {
                         } else {
                             self.view3d_state.active_section_angle_deg
                         };
+                        // Image 1 & Image 2: 3D 유물 회전/뒤집기 및 광원 방향을 2D 탁본 파라미터에 100% 동기화!
+                        if !self.view3d_state.is_interacting {
+                            self.sheet_state.rubbing_params.pose_tilt_deg =
+                                self.view3d_state.tilt_deg;
+                            self.sheet_state.rubbing_params.pose_roll_deg =
+                                self.view3d_state.roll_deg + self.view3d_state.inner_level_deg;
+                        }
+                        self.sheet_state.rubbing_params.light_azimuth_deg =
+                            self.view3d_state.light_azimuth_deg;
+                        self.sheet_state.rubbing_params.light_elevation_deg =
+                            self.view3d_state.light_elevation_deg;
+                        self.sheet_state.rubbing_params.light_intensity =
+                            self.view3d_state.light_intensity;
+                        if self.view3d_state.custom_section_line_mm.is_some()
+                            && self.last_rebuilt_custom_line.is_none()
+                        {
+                            self.sheet_state.view_transforms[4].visible = true;
+                        }
                         ui.allocate_ui_with_layout(
                             egui::vec2(sheet_w, avail_h),
                             egui::Layout::top_down(egui::Align::Min),
@@ -1035,6 +1058,11 @@ impl eframe::App for StrataStudioApp {
                             },
                         );
                     });
+                    if self.sheet_state.request_clear_custom_section {
+                        self.sheet_state.request_clear_custom_section = false;
+                        self.view3d_state.custom_section_line_mm = None;
+                        self.view3d_state.custom_section_draw_mode = false;
+                    }
                     // Image 2: 수평횡단면 그리기 휠(top_cut_z_mm) 및 5대 휠/뒤집기 조작 시 드래그 중에도 즉시 2D 실측 단면·수평횡단면 도판을 실시간 갱신!
                     let top_z_changed =
                         (self.view3d_state.top_cut_z_mm - self.last_rebuilt_top_z_mm).abs() > 1e-4;

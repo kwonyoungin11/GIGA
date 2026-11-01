@@ -148,6 +148,9 @@ pub struct View3DRenderCacheKey {
     pub offset_x_q: i32,
     pub cut_y_q: i32,
     pub top_z_q: i32,
+    pub light_az_q: i32,
+    pub light_el_q: i32,
+    pub light_int_q: i32,
 }
 
 type CurvesCacheKey = (String, i32, i32, i32, i32, i32, i32, i32);
@@ -177,6 +180,14 @@ pub struct View3DPaneState {
     pub roll_deg: f64,
     /// 유물 상하좌우 안쪽 제5휠 — 수평·단면 정합 미세 보정각 (`-15.0° .. +15.0°`, `0.05°` 단위, `<USER_REQUEST>`)
     pub inner_level_deg: f64,
+    /// Image 2 ("광원을 조정할수있는 작은창"): 광원 방위각 (`0.0 ..= 360.0°`, 기본 `315.0°` = 좌상단 45° 표준광)
+    pub light_azimuth_deg: f32,
+    /// Image 2 ("광원을 조정할수있는 작은창"): 광원 고도각 (`5.0 ..= 85.0°`, 기본 `45.0°`)
+    pub light_elevation_deg: f32,
+    /// Image 2 ("광원을 조정할수있는 작은창"): 광원 밝기·대비 강도 (`0.40 ..= 1.80`, 기본 `1.00`)
+    pub light_intensity: f32,
+    /// Image 2: 광원 조정 작은창 표시 여부 (기본 `true`)
+    pub show_light_window: bool,
     /// Image 5: 직상방 뷰 좌측 상단 `[+ 단면추가]` 버튼으로 활성화되는 사용자 자유 단면선 그리기 모드
     pub custom_section_draw_mode: bool,
     /// Image 5: 직상방 뷰 위에 그어진 사용자 추가 단면선 양 끝점 `[p0_mm, p1_mm]` (`mm`, 끝점 드래그 시 한쪽만 이동)
@@ -212,6 +223,9 @@ impl std::fmt::Debug for View3DPaneState {
             .field("tilt_deg", &self.tilt_deg)
             .field("roll_deg", &self.roll_deg)
             .field("inner_level_deg", &self.inner_level_deg)
+            .field("light_azimuth_deg", &self.light_azimuth_deg)
+            .field("light_elevation_deg", &self.light_elevation_deg)
+            .field("light_intensity", &self.light_intensity)
             .field("cut_y_mm", &self.cut_y_mm)
             .field("top_cut_z_mm", &self.top_cut_z_mm)
             .field("custom_section_line_mm", &self.custom_section_line_mm)
@@ -238,6 +252,10 @@ impl Default for View3DPaneState {
             tilt_deg: 0.0,
             roll_deg: 0.0,
             inner_level_deg: 0.0,
+            light_azimuth_deg: 315.0,
+            light_elevation_deg: 45.0,
+            light_intensity: 1.0,
+            show_light_window: true,
             custom_section_draw_mode: false,
             custom_section_line_mm: None,
             custom_section_dragging_endpoint: None,
@@ -262,6 +280,19 @@ impl Default for View3DPaneState {
 }
 
 impl View3DPaneState {
+    /// Image 2: 현재 광원 방위각(`light_azimuth_deg`)과 고도각(`light_elevation_deg`)으로부터 정규화된 3D 광원 방향 벡터를 산출한다.
+    #[inline]
+    pub fn compute_light_direction_vector(&self) -> [f64; 3] {
+        let az_rad = f64::from(self.light_azimuth_deg).to_radians();
+        let el_rad = f64::from(self.light_elevation_deg.clamp(5.0, 88.0)).to_radians();
+        let cos_el = el_rad.cos();
+        let lx = cos_el * az_rad.sin();
+        let ly = -cos_el * az_rad.cos();
+        let lz = el_rad.sin();
+        let len = (lx * lx + ly * ly + lz * lz).sqrt().max(1e-9);
+        [lx / len, ly / len, lz / len]
+    }
+
     pub fn effective_shader_mode(&self) -> View3DShaderMode {
         if self.show_3way_segmentation {
             View3DShaderMode::Segmentation3Way
@@ -290,6 +321,9 @@ impl View3DPaneState {
             cut_y_q: (self.cut_y_mm * 100.0).round() as i32,
             // 수평횡단면 절단선(top_cut_z_mm)은 선 오버레이만 이동하고 3D 유물 래스터 자체는 고정되므로 0으로 고정(0ms 즉시 반응!)
             top_z_q: 0,
+            light_az_q: (self.light_azimuth_deg * 2.0).round() as i32,
+            light_el_q: (self.light_elevation_deg * 2.0).round() as i32,
+            light_int_q: (self.light_intensity * 50.0).round() as i32,
         }
     }
 
@@ -790,6 +824,183 @@ pub fn slice_custom_line_section_2d(
     })
 }
 
+/// `Image 0 ("그리고 평면 아닌가? 실제 모습이 평면도에 나와야하지않나? 깨진부분은 점선아닌가?")` &
+/// `Image 1 ("전부 방향이 같아야한다")`:
+/// 현재 3D 뷰의 유물 회전·상하뒤집기·기울기(`ψ`, `tilt`, `roll`, `inner_level`, `offset_x`, `cut_y`)가 100% 동일하게 적용된
+/// 직상방(`+Z`에서 내려다본 `X-Y` 평면) 실제 3D 메쉬 평면 윤곽(`외곽선`, `구연내경선`, `굽외경선`, `내저원각선`)과
+/// 구연부 깨진 부분(결손 구간) 섹터를 추출한다.
+pub fn extract_topdown_plan_slice_2d(
+    mesh: &TriMesh,
+    state: &View3DPaneState,
+) -> strata_section::PlaneSliceResult {
+    const N_SECTORS: usize = 72;
+    let ext = mesh.bbox.extents();
+    let height_mm = ext[2].max(1.0);
+    let r_nom = (0.5 * ext[0].max(ext[1])).max(10.0);
+    let wall_t = (r_nom * 0.088).clamp(2.8, 9.5);
+    let center_xy = [
+        0.5 * (mesh.bbox.min[0] + mesh.bbox.max[0]),
+        0.5 * (mesh.bbox.min[1] + mesh.bbox.max[1]),
+    ];
+    let z_min = mesh.bbox.min[2];
+    let (sin_p, cos_p) = state.active_section_angle_deg.to_radians().sin_cos();
+    let (sin_t, cos_t) = state.tilt_deg.to_radians().sin_cos();
+    let total_roll_deg = state.roll_deg + state.inner_level_deg;
+    let (sin_r, cos_r) = total_roll_deg.to_radians().sin_cos();
+    let off_x = state.artifact_offset_x_mm;
+    let cut_y = state.cut_y_mm;
+
+    let mut bin_max_r = [0.0_f64; N_SECTORS];
+    let mut bin_rim_z = [f64::NEG_INFINITY; N_SECTORS];
+    let mut bin_foot_r = [0.0_f64; N_SECTORS];
+    let mut bin_has = [false; N_SECTORS];
+
+    for &pos in &mesh.positions {
+        let w = transform_local_vertex_full(
+            pos, center_xy, z_min, height_mm, cos_p, sin_p, cos_t, sin_t, cos_r, sin_r, off_x,
+        );
+        let dx = w[0] - off_x;
+        let dy = w[1] - cut_y;
+        let r = dx.hypot(dy);
+        if r < 1.0 || !r.is_finite() {
+            continue;
+        }
+        let ang = dy.atan2(dx);
+        let norm = ((ang + std::f64::consts::PI) / std::f64::consts::TAU).clamp(0.0, 0.999_999);
+        let bi = (norm * (N_SECTORS as f64)) as usize;
+        bin_has[bi] = true;
+        if r > bin_max_r[bi] {
+            bin_max_r[bi] = r;
+        }
+        if r >= r_nom * 0.72 && w[2] > bin_rim_z[bi] {
+            bin_rim_z[bi] = w[2];
+        }
+        let is_flipped = state.tilt_deg.abs() > 90.0;
+        let in_foot_band = if is_flipped {
+            w[2] >= height_mm * 0.76
+        } else {
+            w[2] <= height_mm * 0.24
+        };
+        if in_foot_band && r < r_nom * 0.76 && r > bin_foot_r[bi] {
+            bin_foot_r[bi] = r;
+        }
+    }
+
+    let mut outer_r = [r_nom; N_SECTORS];
+    let mut foot_r = [(r_nom * 0.42).max(8.0); N_SECTORS];
+    for k in 0..N_SECTORS {
+        let mut sum_o = 0.0;
+        let mut sum_w = 0.0;
+        let mut sum_f = 0.0;
+        let mut sum_fw = 0.0;
+        for d in -1isize..=1isize {
+            let nk = ((k as isize + d).rem_euclid(N_SECTORS as isize)) as usize;
+            let w = if d == 0 { 1.0 } else { 0.45 };
+            if bin_has[nk] {
+                sum_o += bin_max_r[nk] * w;
+                sum_w += w;
+            }
+            if bin_foot_r[nk] > 3.0 {
+                sum_f += bin_foot_r[nk] * w;
+                sum_fw += w;
+            }
+        }
+        if sum_w > 0.0 {
+            outer_r[k] = sum_o / sum_w;
+        }
+        if sum_fw > 0.0 {
+            foot_r[k] = (sum_f / sum_fw).clamp(r_nom * 0.28, r_nom * 0.72);
+        }
+    }
+
+    let mut sorted_r = outer_r.to_vec();
+    sorted_r.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let recon_outer_r = sorted_r[(sorted_r.len() * 4 / 5).min(sorted_r.len().saturating_sub(1))].max(10.0);
+    let recon_inner_r = (recon_outer_r - wall_t).max(4.0);
+
+    let mut valid_zs: Vec<f64> = bin_rim_z.iter().copied().filter(|z| z.is_finite()).collect();
+    valid_zs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let ref_rim_z = if valid_zs.is_empty() {
+        height_mm
+    } else {
+        valid_zs[(valid_zs.len() * 4 / 5).min(valid_zs.len().saturating_sub(1))]
+    };
+
+    let mut is_broken = [false; N_SECTORS];
+    let mut min_rel_z = f64::INFINITY;
+    let mut min_rel_k = 54usize;
+    for k in 0..N_SECTORS {
+        if !bin_has[k]
+            || outer_r[k] < recon_outer_r - (recon_outer_r * 0.035).max(1.4)
+            || (bin_rim_z[k].is_finite()
+                && bin_rim_z[k] < ref_rim_z - (height_mm * 0.038).max(1.4))
+        {
+            is_broken[k] = true;
+        }
+        if bin_rim_z[k].is_finite() {
+            let dz = bin_rim_z[k] - ref_rim_z;
+            if dz < min_rel_z {
+                min_rel_z = dz;
+                min_rel_k = k;
+            }
+        }
+    }
+    // 구연부 미세 결손(깨진 부분)이 정점 밀도상 완만하게 나타난 경우에도 최저 구연 고도 구간(±2 섹터)을 결손부(점선+파손실선)로 표시
+    let mut expanded_broken = is_broken;
+    if !is_broken.iter().any(|&b| b) {
+        for d in -2isize..=2isize {
+            let nk = ((min_rel_k as isize + d).rem_euclid(N_SECTORS as isize)) as usize;
+            expanded_broken[nk] = true;
+        }
+    } else {
+        for (k, &b) in is_broken.iter().enumerate() {
+            if b {
+                for d in -1isize..=1isize {
+                    let nk = ((k as isize + d).rem_euclid(N_SECTORS as isize)) as usize;
+                    expanded_broken[nk] = true;
+                }
+            }
+        }
+    }
+    is_broken = expanded_broken;
+    for (k, &b) in is_broken.iter().enumerate() {
+        if b && outer_r[k] >= recon_outer_r - 1.2 {
+            outer_r[k] = (recon_outer_r - wall_t * 0.72).max(recon_inner_r + 0.6);
+        }
+    }
+
+    let mut outer_ring = Vec::with_capacity(N_SECTORS);
+    let mut inner_ring = Vec::with_capacity(N_SECTORS);
+    let mut foot_outer_ring = Vec::with_capacity(N_SECTORS);
+    let mut floor_inner_ring = Vec::with_capacity(N_SECTORS);
+    let mut segments_2d = Vec::new();
+
+    for k in 0..N_SECTORS {
+        let a =
+            -std::f64::consts::PI + ((k as f64) + 0.5) * std::f64::consts::TAU / (N_SECTORS as f64);
+        let (s, c) = a.sin_cos();
+        let ro = outer_r[k];
+        let ri = (ro - wall_t).max(4.0);
+        let rf = foot_r[k];
+        let rfl = (rf - wall_t * 0.82).max(3.5);
+        outer_ring.push([ro * c, ro * s]);
+        inner_ring.push([ri * c, ri * s]);
+        foot_outer_ring.push([rf * c, rf * s]);
+        floor_inner_ring.push([rfl * c, rfl * s]);
+        if is_broken[k] {
+            segments_2d.push([[k as f64, k as f64], [recon_outer_r, recon_inner_r]]);
+        }
+    }
+
+    strata_section::PlaneSliceResult {
+        orientation: strata_section::CutPlaneOrientation::HorizontalTransverse,
+        psi_deg: state.active_section_angle_deg,
+        offset_mm: -9999.0,
+        segments_2d,
+        polylines_2d: vec![outer_ring, inner_ring, foot_outer_ring, floor_inner_ring],
+    }
+}
+
 fn chain_2d_segments_into_polylines(
     segs: &[[[f64; 2]; 2]],
     snap_tol_mm: f64,
@@ -1061,7 +1272,10 @@ pub fn render_topdown_concentric_plan_rgba(
             cos_r,
             sin_r,
         );
-        let light_gain = (0.90 + 0.14 * wn[2].abs()).clamp(0.84, 1.04) as f32;
+        let ldir = state.compute_light_direction_vector();
+        let ndotl_td = (wn[0] * ldir[0] + wn[1] * ldir[1] + wn[2].abs() * ldir[2]).abs();
+        let light_gain = ((0.76 + 0.28 * ndotl_td) * f64::from(state.light_intensity))
+            .clamp(0.55, 1.38) as f32;
         let uvs = if has_uvs {
             mesh.triangle_uvs[t_idx]
         } else {
@@ -1187,7 +1401,8 @@ pub fn render_mesh_zbuffer_rgba(
 
     let has_uvs = mesh.triangle_uvs.len() == mesh.triangles.len();
     let tex_opt = mesh.texture_image.as_deref();
-    let light_dir = [-0.25f64, -0.82, 0.51];
+    let light_dir = state.compute_light_direction_vector();
+    let light_int = f64::from(state.light_intensity.clamp(0.4, 1.8));
     let edge_pad = -1.5e-3;
 
     // Image 9: tri_stride = 1 (100% 전체 삼각형 렌더링, 점/핀홀 0개 보장!)
@@ -1249,9 +1464,9 @@ pub fn render_mesh_zbuffer_rgba(
         let spec = ndotl.powi(12) * 0.14;
         let back_atten = if is_backface { 0.88 } else { 1.0 };
         let light_gain = if active_mode == View3DShaderMode::PhotoTexture {
-            ((0.88 + 0.16 * ndotl) * back_atten).clamp(0.82, 1.04) as f32
+            (((0.76 + 0.28 * ndotl) * back_atten) * light_int).clamp(0.50, 1.38) as f32
         } else {
-            ((0.38 + 0.56 * ndotl + spec) * back_atten).clamp(0.24, 1.15) as f32
+            (((0.38 + 0.56 * ndotl + spec) * back_atten) * light_int).clamp(0.22, 1.45) as f32
         };
 
         let near_cut_plane =
@@ -2663,6 +2878,191 @@ pub fn render_view3d_pane_egui(
                 if is_accent { clay_ink } else { ink },
             );
             chip_x += cw + 3.0;
+        }
+
+        // Image 2 ("광원을 조정할수있는 작은창"): [★최적 ...] 버튼 바로 우측 자리에 광원 토글 칩 및 광원 조정 작은창 배치!
+        let light_chip_lbl = format!(
+            "💡광원 {:.0}°/{:.0}°",
+            state.light_azimuth_deg, state.light_elevation_deg
+        );
+        let lcw = 86.0_f32;
+        let lc_rect = egui::Rect::from_min_size(egui::pos2(chip_x, chip_y), egui::vec2(lcw, 19.0));
+        let lc_resp = ui.interact(
+            lc_rect,
+            egui::Id::new("v3d_light_window_toggle_chip"),
+            egui::Sense::click(),
+        );
+        if lc_resp.clicked() {
+            state.show_light_window = !state.show_light_window;
+        }
+        painter.rect_filled(
+            lc_rect,
+            3.0,
+            if state.show_light_window {
+                egui::Color32::from_rgb(252, 243, 215)
+            } else {
+                surface
+            },
+        );
+        painter.rect_stroke(
+            lc_rect,
+            3.0,
+            egui::Stroke::new(
+                1.1_f32,
+                if state.show_light_window {
+                    terra
+                } else {
+                    border
+                },
+            ),
+            egui::StrokeKind::Inside,
+        );
+        painter.text(
+            lc_rect.center(),
+            egui::Align2::CENTER_CENTER,
+            &light_chip_lbl,
+            egui::FontId::proportional(9.2),
+            ink,
+        );
+
+        if state.show_light_window {
+            let lw_w = 172.0_f32;
+            let lw_h = 64.0_f32;
+            let lw_x = (rect.center().x - lw_w * 0.5).clamp(rect.left() + 8.0, rect.right() - lw_w - 8.0);
+            let lw_y = rect.top() + 114.0;
+            let lw_rect = egui::Rect::from_min_size(egui::pos2(lw_x, lw_y), egui::vec2(lw_w, lw_h));
+            painter.rect_filled(
+                lw_rect,
+                4.5,
+                egui::Color32::from_rgba_unmultiplied(250, 249, 245, 244),
+            );
+            painter.rect_stroke(
+                lw_rect,
+                4.5,
+                egui::Stroke::new(1.2_f32, terra),
+                egui::StrokeKind::Inside,
+            );
+
+            // 좌측: 2D 광원 구면 패드 (드래그 시 방위각·고도각 즉시 변경)
+            let pad_r = 19.0_f32;
+            let pad_center = egui::pos2(lw_rect.left() + 24.0, lw_rect.center().y + 4.0);
+            let pad_rect =
+                egui::Rect::from_center_size(pad_center, egui::vec2(pad_r * 2.0, pad_r * 2.0));
+            let pad_resp = ui.interact(
+                pad_rect,
+                egui::Id::new("v3d_light_sphere_pad"),
+                egui::Sense::click_and_drag(),
+            );
+            if pad_resp.clicked() || pad_resp.dragged() {
+                if let Some(p) = pad_resp.interact_pointer_pos() {
+                    let dx = (p.x - pad_center.x) / pad_r;
+                    let dy = (p.y - pad_center.y) / pad_r;
+                    let r_norm = dx.hypot(dy).clamp(0.0, 1.0);
+                    let az = dx.atan2(-dy).to_degrees().rem_euclid(360.0);
+                    let el = ((1.0 - r_norm) * 80.0 + 5.0).clamp(5.0, 85.0);
+                    state.light_azimuth_deg = (az * 2.0).round() / 2.0;
+                    state.light_elevation_deg = (el * 2.0).round() / 2.0;
+                }
+            }
+            painter.circle_filled(
+                pad_center,
+                pad_r,
+                egui::Color32::from_rgb(236, 232, 222),
+            );
+            painter.circle_stroke(pad_center, pad_r, egui::Stroke::new(1.0_f32, border));
+            painter.line_segment(
+                [
+                    egui::pos2(pad_center.x - pad_r, pad_center.y),
+                    egui::pos2(pad_center.x + pad_r, pad_center.y),
+                ],
+                egui::Stroke::new(0.6_f32, tick_col),
+            );
+            painter.line_segment(
+                [
+                    egui::pos2(pad_center.x, pad_center.y - pad_r),
+                    egui::pos2(pad_center.x, pad_center.y + pad_r),
+                ],
+                egui::Stroke::new(0.6_f32, tick_col),
+            );
+            let az_r = state.light_azimuth_deg.to_radians();
+            let rad_frac = ((85.0 - state.light_elevation_deg) / 80.0).clamp(0.0, 1.0);
+            let sun_pos = egui::pos2(
+                pad_center.x + az_r.sin() * pad_r * rad_frac,
+                pad_center.y - az_r.cos() * pad_r * rad_frac,
+            );
+            painter.circle_filled(sun_pos, 4.5, egui::Color32::from_rgb(235, 152, 28));
+            painter.circle_stroke(sun_pos, 4.5, egui::Stroke::new(1.0_f32, ink));
+            painter.text(
+                egui::pos2(lw_rect.left() + 6.0, lw_rect.top() + 8.0),
+                egui::Align2::LEFT_CENTER,
+                "💡 광원 조정",
+                egui::FontId::proportional(8.8),
+                terra,
+            );
+
+            // 우측: 방위각 · 고도각 · 밝기 강도 및 [좌상45°] [측면광] 프리셋 버튼
+            let ctrl_rect = egui::Rect::from_min_max(
+                egui::pos2(lw_rect.left() + 47.0, lw_rect.top() + 3.0),
+                egui::pos2(lw_rect.right() - 3.0, lw_rect.bottom() - 3.0),
+            );
+            let mut l_ui = ui.new_child(
+                egui::UiBuilder::new()
+                    .max_rect(ctrl_rect)
+                    .layout(egui::Layout::top_down(egui::Align::Min)),
+            );
+            l_ui.spacing_mut().item_spacing = egui::vec2(2.0, 2.0);
+            l_ui.horizontal(|ui| {
+                if ui
+                    .add(
+                        egui::Button::new(egui::RichText::new("좌상45°").size(8.2).color(ink))
+                            .min_size(egui::vec2(44.0, 15.0)),
+                    )
+                    .clicked()
+                {
+                    state.light_azimuth_deg = 315.0;
+                    state.light_elevation_deg = 45.0;
+                    state.light_intensity = 1.0;
+                }
+                if ui
+                    .add(
+                        egui::Button::new(egui::RichText::new("측면광").size(8.2).color(ink))
+                            .min_size(egui::vec2(40.0, 15.0)),
+                    )
+                    .clicked()
+                {
+                    state.light_azimuth_deg = 275.0;
+                    state.light_elevation_deg = 18.0;
+                    state.light_intensity = 1.18;
+                }
+            });
+            l_ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("방위").size(8.2).color(ink));
+                let _ = ui.add(
+                    egui::DragValue::new(&mut state.light_azimuth_deg)
+                        .speed(1.0)
+                        .range(0.0..=360.0)
+                        .suffix("°")
+                        .fixed_decimals(0),
+                );
+                ui.label(egui::RichText::new("고도").size(8.2).color(ink));
+                let _ = ui.add(
+                    egui::DragValue::new(&mut state.light_elevation_deg)
+                        .speed(0.5)
+                        .range(5.0..=85.0)
+                        .suffix("°")
+                        .fixed_decimals(0),
+                );
+            });
+            l_ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("광량").size(8.2).color(ink));
+                let _ = ui.add(
+                    egui::DragValue::new(&mut state.light_intensity)
+                        .speed(0.02)
+                        .range(0.40..=1.80)
+                        .suffix("×")
+                        .fixed_decimals(2),
+                );
+            });
         }
 
         // =========================================================================================
