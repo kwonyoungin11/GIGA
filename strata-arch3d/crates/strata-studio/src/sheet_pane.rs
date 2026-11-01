@@ -82,6 +82,8 @@ pub struct AcademicRubbingParams {
     pub light_elevation_deg: f32,
     /// Image 2: 광원 세기(`0.40..1.80`)
     pub light_intensity: f32,
+    /// 곡면 전개 탁본 모드 (`None` 이면 기존 평면/정면 탁본, `Some` 이면 0~360° 전개)
+    pub unroll_mode: Option<strata_shade::UnrollMode>,
 }
 
 impl Default for AcademicRubbingParams {
@@ -97,6 +99,7 @@ impl Default for AcademicRubbingParams {
             light_azimuth_deg: 315.0,
             light_elevation_deg: 45.0,
             light_intensity: 1.0,
+            unroll_mode: None,
         }
     }
 }
@@ -584,6 +587,7 @@ type SheetRubbingCacheKey = (
         bool,
         Option<[i32; 4]>,
         IndividualViewTransform2D,
+        Option<strata_shade::UnrollMode>,
     ),
 );
 
@@ -824,6 +828,17 @@ pub fn render_orthographic_rubbing_rgba_with_params(
     let light_int = params.light_intensity.clamp(0.4, 1.8);
 
     // 1. Rayon 병렬 정점 직교 투영 좌표 (u, v, depth) 및 Nelson Max 가중 정점 법선 회전 계산
+    // 곡면 전개 탁본 모드에서는 정점별 (호 길이 s, 높이 h, 부조 깊이 Δr) 로 대체한다.
+    let unrolled: Option<Vec<[f64; 3]>> = params.unroll_mode.map(|mode| {
+        let res = strata_shade::unroll_mesh_surface(mesh, mode);
+        let mut acc = vec![[0.0_f64; 3]; ddg.positions.len()];
+        for pt in &res.points {
+            if let Some(slot) = acc.get_mut(pt.vertex_index as usize) {
+                *slot = [pt.arc_s_mm, pt.height_h_mm, pt.relief_depth_mm];
+            }
+        }
+        acc
+    });
     // Image 1 ("전부 방향이 같아야한다 탁복한 유물과 방향이다르다"):
     // 3D 직상방/정면 뷰 및 1:1 평면도와 동일한 3D 회전(psi_deg, pose_tilt_deg, pose_roll_deg)을 적용한다!
     let projected: Vec<([f64; 3], [f32; 3])> = ddg
@@ -856,11 +871,20 @@ pub fn render_orthographic_rubbing_rgba_with_params(
                 sin_r,
             );
 
-            let (u, v, depth, vn) = match kind {
-                PlateRasterKind::FrontExteriorRubbing => (rx, rz, -ry, [nrx, -nry, nrz]),
-                PlateRasterKind::BackInteriorRubbing => (-rx, rz, ry, [-nrx, nry, nrz]),
-                // 3D 직상방 뷰 및 1:1 평면도와 100% 동일한 직상방(위에서 아래로 내려다보는 +rz 우선) 투영!
-                PlateRasterKind::BottomPlanRubbing => (rx, ry, rz, [nrx, nrz, nry]),
+            let (u, v, depth, vn) = match &unrolled {
+                // 곡면 전개 탁본: 원통/원뿔/구면 0~360° 무왜곡 전개 좌표 사용
+                Some(coords) if kind == PlateRasterKind::BottomPlanRubbing => {
+                    match coords.get(vi) {
+                        Some(&[su, sv, sd]) => (su, sv, sd, [nrx, nrz, nry]),
+                        None => (rx, ry, rz, [nrx, nrz, nry]),
+                    }
+                }
+                _ => match kind {
+                    PlateRasterKind::FrontExteriorRubbing => (rx, rz, -ry, [nrx, -nry, nrz]),
+                    PlateRasterKind::BackInteriorRubbing => (-rx, rz, ry, [-nrx, nry, nrz]),
+                    // 3D 직상방 뷰 및 1:1 평면도와 100% 동일한 직상방(위에서 아래로 내려다보는 +rz 우선) 투영!
+                    PlateRasterKind::BottomPlanRubbing => (rx, ry, rz, [nrx, nrz, nry]),
+                },
             };
             ([u, v, depth], [vn[0] as f32, vn[1] as f32, vn[2] as f32])
         })
@@ -1677,6 +1701,7 @@ pub fn render_sheet_pane_egui(
             plate.flip_exterior_right,
             None,
             rub_view_tf,
+            state.rubbing_params.unroll_mode,
         ),
     );
     // Rayon 3-뷰 동시 병렬 탁본 버퍼 생성 (560x560 고선명 + 멀티코어 병렬화로 렉 제로 달성!)
@@ -2958,7 +2983,40 @@ pub fn render_sheet_pane_egui(
         }
         bar_ui.separator();
 
-        // Image 13 & Image 4: 아이콘형 부분탁본 1:1 드래그 선택 버튼 + 단면채움 아이콘 버튼
+        // 곡면 전개 탁본 모드: 평면(기본) ↔ 원통/원뿔/구면 0~360° 전개
+        let cur_unroll = state.rubbing_params.unroll_mode;
+        let unroll_label = match cur_unroll {
+            None => "탁본 평면",
+            Some(strata_shade::UnrollMode::Cylindrical) => "원통 전개",
+            Some(strata_shade::UnrollMode::Conical) => "원뿔 전개",
+            Some(strata_shade::UnrollMode::Spherical) => "구면 전개",
+        };
+        let mut chosen_unroll = cur_unroll;
+        egui::ComboBox::from_id_salt("rubbing_unroll_mode_combo")
+            .selected_text(egui::RichText::new(unroll_label).size(9.2))
+            .width(86.0)
+            .show_ui(&mut bar_ui, |ui| {
+                ui.selectable_value(&mut chosen_unroll, None, "평면 탁본");
+                ui.selectable_value(
+                    &mut chosen_unroll,
+                    Some(strata_shade::UnrollMode::Cylindrical),
+                    "원통 1:1 전개",
+                );
+                ui.selectable_value(
+                    &mut chosen_unroll,
+                    Some(strata_shade::UnrollMode::Conical),
+                    "원뿔 전개",
+                );
+                ui.selectable_value(
+                    &mut chosen_unroll,
+                    Some(strata_shade::UnrollMode::Spherical),
+                    "구면 전개",
+                );
+            });
+        if chosen_unroll != cur_unroll {
+            state.rubbing_params.unroll_mode = chosen_unroll;
+        }
+        bar_ui.separator();
         let roi_btn = egui::Button::new(
             egui::RichText::new(if state.roi_drag_mode {
                 "✂ 부분탁본 1:1 드래그중"
@@ -3568,6 +3626,43 @@ mod tests {
             assert!(opaque_px > 2_000);
             assert!(ink_shaded_px > 400);
         }
+    }
+
+    #[test]
+    fn test_unrolled_cylindrical_rubbing_differs_from_plan_and_has_ink() {
+        let mesh = make_patterned_bowl_mesh();
+        let planar = AcademicRubbingParams::default();
+        let mut unrolled = AcademicRubbingParams::default();
+        unrolled.unroll_mode = Some(strata_shade::UnrollMode::Cylindrical);
+
+        let img_plan = render_orthographic_rubbing_rgba_with_params(
+            &mesh,
+            PlateRasterKind::BottomPlanRubbing,
+            0.0,
+            &planar,
+            200,
+            200,
+        );
+        let img_unroll = render_orthographic_rubbing_rgba_with_params(
+            &mesh,
+            PlateRasterKind::BottomPlanRubbing,
+            0.0,
+            &unrolled,
+            200,
+            200,
+        );
+
+        let opaque = |img: &RgbaImage| img.pixels().filter(|p| p[3] > 128).count();
+        assert!(
+            opaque(&img_unroll) > 1_000,
+            "원통 전개 탁본이 비어 있음: {} px",
+            opaque(&img_unroll)
+        );
+        assert_ne!(
+            img_plan.as_raw(),
+            img_unroll.as_raw(),
+            "전개 모드를 켜도 평면 탁본과 동일함"
+        );
     }
 
     #[test]
