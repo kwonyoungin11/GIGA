@@ -795,6 +795,16 @@ fn get_or_build_ddg_mesh(
 /// 3) Mara et al. (2010) 다중 스케일 구면 적분 불변량(MSII) + 반경 제한 PCV AO + Vergne et al. (2010) Radiance Scaling
 /// 4) Winnemöller et al. (2012) XDoG (`σ_fine = 0.8`, `σ_coarse = 14.0`) 대역통과 필터링
 /// 5) 5-Octave FBM Perlin 한지 섬유 + Cellular Worley 암석 입자 + Interleaved Gradient Noise (Blue-Noise) 다계조 점묘 합성
+/// CLI `--unroll <mode>` 값을 전개 모드로 해석한다. `none`/미지정은 평면 탁본(`None`).
+pub fn parse_unroll_mode(arg: &str) -> Option<strata_shade::UnrollMode> {
+    match arg.trim().to_ascii_lowercase().as_str() {
+        "cylindrical" | "cylinder" | "원통" => Some(strata_shade::UnrollMode::Cylindrical),
+        "conical" | "cone" | "원뿔" => Some(strata_shade::UnrollMode::Conical),
+        "spherical" | "sphere" | "구면" => Some(strata_shade::UnrollMode::Spherical),
+        _ => None,
+    }
+}
+
 /// 전개 탁본 텍스처 해상도를 물리 종횡비에 맞춰 계산한다.
 /// 정사각형으로 굽으면 모눈 위 1:1 계측이 깨지므로, 긴 변을 `base_px` 로 두고 짧은 변을 비례 축소한다.
 pub fn unrolled_texture_dims(size_mm: [f64; 2], base_px: u32) -> (u32, u32) {
@@ -3712,6 +3722,24 @@ mod tests {
             assert!(opaque_px > 2_000);
             assert!(ink_shaded_px > 400);
         }
+    }
+
+    #[test]
+    fn test_parse_unroll_mode_cli() {
+        assert_eq!(
+            parse_unroll_mode("cylindrical"),
+            Some(strata_shade::UnrollMode::Cylindrical)
+        );
+        assert_eq!(
+            parse_unroll_mode("conical"),
+            Some(strata_shade::UnrollMode::Conical)
+        );
+        assert_eq!(
+            parse_unroll_mode("spherical"),
+            Some(strata_shade::UnrollMode::Spherical)
+        );
+        assert_eq!(parse_unroll_mode("none"), None);
+        assert_eq!(parse_unroll_mode("bogus"), None);
     }
 
     #[test]

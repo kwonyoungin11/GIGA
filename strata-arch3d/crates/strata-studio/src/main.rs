@@ -272,6 +272,7 @@ impl StrataStudioApp {
         capture_window_path: Option<PathBuf>,
         initial_tab: Option<WorkflowTab>,
         initial_slot: Option<usize>,
+        initial_unroll: Option<strata_shade::UnrollMode>,
     ) -> Self {
         configure_korean_fonts_and_strata_theme(&cc.egui_ctx);
 
@@ -322,7 +323,11 @@ impl StrataStudioApp {
             slots,
             selected_slot_idx,
             view3d_state: View3DPaneState::default(),
-            sheet_state: SheetPaneState::default(),
+            sheet_state: {
+                let mut s = SheetPaneState::default();
+                s.rubbing_params.unroll_mode = initial_unroll;
+                s
+            },
             rubbing_params: RubbingRenderParams::default(),
             flip_exterior_right: false,
             sheet_full_tab_mode: false,
@@ -1187,6 +1192,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut initial_tab: Option<WorkflowTab> = None;
     let mut initial_slot: Option<usize> = None;
     let mut open_rubbing_win = false;
+    let mut initial_unroll: Option<strata_shade::UnrollMode> = None;
 
     let mut i = 1;
     while i < args.len() {
@@ -1218,6 +1224,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             "--open-rubbing-win" => {
                 open_rubbing_win = true;
+            }
+            "--unroll" if i + 1 < args.len() => {
+                initial_unroll = crate::sheet_pane::parse_unroll_mode(&args[i + 1]);
+                i += 1;
             }
             _ => {}
         }
@@ -1276,6 +1286,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 capture_window_path,
                 initial_tab,
                 initial_slot,
+                initial_unroll,
             );
             if open_rubbing_win {
                 app.handle_tile_click("ROI_RUBBING_WIN");
