@@ -832,6 +832,78 @@ fn append_measured_top_plan_view_paths(
     });
 }
 
+/// 닫힌 폴리곤 내부에 45° 사선 해칭 선분을 생성한다(스캔라인 even-odd).
+/// 「유물제도선」 규격처럼 단면을 빗금으로 표시할 때 쓴다.
+pub fn hatch_polygon_45(poly: &[[f64; 2]], gap_mm: f64) -> Vec<[[f64; 2]; 2]> {
+    if poly.len() < 3 || gap_mm <= 1e-6 {
+        return Vec::new();
+    }
+    let inv = std::f64::consts::FRAC_1_SQRT_2;
+    // 45° 회전 좌표계로 옮겨 수평 스캔라인으로 처리한다.
+    let rot = |p: [f64; 2]| -> [f64; 2] {
+        [(p[0] - p[1]) * inv, (p[0] + p[1]) * inv]
+    };
+    let unrot = |p: [f64; 2]| -> [f64; 2] {
+        [(p[0] + p[1]) * inv, (p[1] - p[0]) * inv]
+    };
+    let rp: Vec<[f64; 2]> = poly.iter().map(|&p| rot(p)).collect();
+    let mut min_v = f64::INFINITY;
+    let mut max_v = f64::NEG_INFINITY;
+    for p in &rp {
+        min_v = min_v.min(p[1]);
+        max_v = max_v.max(p[1]);
+    }
+    let mut out = Vec::new();
+    let mut v = min_v + gap_mm * 0.5;
+    while v < max_v {
+        let mut xs: Vec<f64> = Vec::new();
+        for i in 0..rp.len() {
+            let a = rp[i];
+            let b = rp[(i + 1) % rp.len()];
+            if (a[1] <= v && b[1] > v) || (b[1] <= v && a[1] > v) {
+                let t = (v - a[1]) / (b[1] - a[1]);
+                xs.push(a[0] + t * (b[0] - a[0]));
+            }
+        }
+        xs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let mut i = 0;
+        while i + 1 < xs.len() {
+            let (x0, x1) = (xs[i], xs[i + 1]);
+            if x1 - x0 > 1e-6 {
+                out.push([unrot([x0, v]), unrot([x1, v])]);
+            }
+            i += 2;
+        }
+        v += gap_mm;
+    }
+    out
+}
+
+/// 판 안의 닫힌 단면 폴리곤에 해칭 레이어를 추가한다(`간격 기본 1.2mm`).
+pub fn append_section_hatching(plate: &mut ComposedPlate2D, gap_mm: f64) {
+    let mut added = Vec::new();
+    for elem in &plate.paths {
+        // 세로 단면 절단면만 해칭한다(수평 횡단면·평면도 윤곽선은 제외).
+        let is_section = (elem.layer_id.contains("단면") || elem.layer_id.contains("내벽"))
+            && !elem.layer_id.contains("횡단면");
+        if !is_section || !elem.closed || elem.points_mm.len() < 3 {
+            continue;
+        }
+        for seg in hatch_polygon_45(&elem.points_mm, gap_mm) {
+            added.push(PlatePathElement {
+                layer_id: String::from("단면_해칭"),
+                points_mm: vec![seg[0], seg[1]],
+                closed: false,
+                stroke_hex: String::from("#5E5D59"),
+                stroke_width_mm: 0.12,
+                dash_pattern_mm: None,
+                fill_hex: None,
+            });
+        }
+    }
+    plate.paths.extend(added);
+}
+
 /// 판 하단 중앙에 **유물번호 + 캡션** 블록을 넣는다(「유물 편집판.ai」 템플릿 규격).
 /// 번호는 크게, 캡션은 그 아래 작게 — 도판이 문서로 성립하기 위한 최소 표기다.
 pub fn append_artifact_label_block(plate: &mut ComposedPlate2D, number: &str, caption: &str) {

@@ -11,9 +11,10 @@ pub use pdf_tiled_print::{
     compute_tiled_print_plan, render_plate_to_pdf_bytes, PaperSheetSize, TiledPrintPlan,
 };
 pub use plate_composer::{
-    append_artifact_label_block, compose_archaeological_plate, compose_archaeological_plate_with_mode,
-    triangulate_polygon_ear_clipping, ComposedPlate2D, PlateComposeInput, PlateLayoutMode,
-    PlatePathElement, PlateRasterKind, PlateRasterRegion, PlateTextCallout,
+    append_artifact_label_block, append_section_hatching, compose_archaeological_plate,
+    compose_archaeological_plate_with_mode, hatch_polygon_45, triangulate_polygon_ear_clipping,
+    ComposedPlate2D, PlateComposeInput, PlateLayoutMode, PlatePathElement, PlateRasterKind,
+    PlateRasterRegion, PlateTextCallout,
 };
 pub use ret_exporter::{export_ret_folder_package, RetPackageManifest};
 pub use svg_illustrator::{
@@ -233,6 +234,25 @@ mod tests {
             callouts: Vec::new(),
             raster_regions: Vec::new(),
         }
+    }
+
+    #[test]
+    fn test_hatch_polygon_45_stays_inside_square() {
+        let square = vec![[0.0, 0.0], [20.0, 0.0], [20.0, 20.0], [0.0, 20.0]];
+        let segs = hatch_polygon_45(&square, 2.0);
+        assert!(!segs.is_empty(), "정사각형 해칭이 생성되지 않음");
+        for seg in &segs {
+            for p in seg {
+                assert!(
+                    p[0] >= -1e-6 && p[0] <= 20.0 + 1e-6 && p[1] >= -1e-6 && p[1] <= 20.0 + 1e-6,
+                    "해칭이 폴리곤 밖으로 나감: {:?}",
+                    p
+                );
+            }
+        }
+        // 빈/퇴화 입력은 조용히 빈 결과.
+        assert!(hatch_polygon_45(&[], 2.0).is_empty());
+        assert!(hatch_polygon_45(&square, 0.0).is_empty());
     }
 
     #[test]

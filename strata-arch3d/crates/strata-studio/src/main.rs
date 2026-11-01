@@ -23,7 +23,7 @@ use strata_core::{
 };
 use strata_export::{
     compose_archaeological_plate, compose_archaeological_plate_with_mode, compute_tiled_print_plan,
-    export_ret_folder_package, append_artifact_label_block,
+    export_ret_folder_package, append_artifact_label_block, append_section_hatching,
     render_plate_to_illustrator_svg_with_options, render_plate_to_pdf_bytes,
     ComposedPlate2D, PaperSheetSize, PlateComposeInput, PlateLayoutMode,
 };
@@ -137,6 +137,8 @@ impl ArtifactSlotEntry {
         });
         // 「유물 편집판」 규격: 판 하단에 유물번호(파일명 기반) + 캡션 블록을 넣는다.
         let mut composed_plate = composed_plate;
+        // 「유물제도선」 규격: 단면 닫힌 폴리곤에 45° 해칭을 넣는다.
+        append_section_hatching(&mut composed_plate, 1.2);
         if let Some(stem) = source_path
             .as_ref()
             .and_then(|p| p.file_stem())
@@ -237,6 +239,7 @@ impl ArtifactSlotEntry {
             Some(mode) => compose_archaeological_plate_with_mode(&plate_input, mode),
             None => compose_archaeological_plate(&plate_input),
         };
+        append_section_hatching(&mut self.composed_plate, 1.2);
         if let Some(stem) = self
             .source_path
             .as_ref()
