@@ -51,9 +51,10 @@ jobs:
           # 프로파일(dev 의존성 opt-level=2, release LTO)이 바뀌면 캐시 키도 바뀐다.
           key: strata-rust-${{ hashFiles('strata-arch3d/Cargo.toml', 'strata-arch3d/.cargo/config.toml') }}
 
-      - name: "[V1] Cargo check + Clippy zero warnings"
+      - name: "[V1] Format + Check + Clippy zero warnings"
         working-directory: strata-arch3d
         run: |
+          cargo fmt --all -- --check
           cargo check --workspace --all-targets --locked
           cargo clippy --workspace --all-targets --locked -- -D warnings
 

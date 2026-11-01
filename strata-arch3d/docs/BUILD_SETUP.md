@@ -63,6 +63,8 @@ components = ["rustfmt", "clippy"]
 - 게이트: `cargo check --locked` → `cargo clippy -- -D warnings` → `cargo test --workspace` → `--verify-all --screenshot-tour` 캡처 검증.
 - 이전 워크플로는 존재하지 않는 패키지 이름(`arch3d-studio`)을 호출해 V8 단계가 항상 실패했다. `strata-studio` 로 고쳤다.
 
-## 6. 알려진 한계
+## 6. 포맷 정리 (2026-11-01 완료)
 
-- `cargo fmt --check` 는 현재 **실패**한다(50개 파일 219 hunks). 저장소 코드가 rustfmt 로 한 번도 정리된 적이 없기 때문이며, 설정 문제가 아니다(빈 rustfmt 설정으로 단일 파일을 검사해도 동일). 일괄 포맷은 소스 대량 변경이므로 별도 "포맷만" 커밋에서 `cargo format` 1회 실행을 권장한다.
+- `cargo fmt --all` 을 **한 번 일괄 적용**했다(43개 파일, 942+/692-). 이전에는 `cargo fmt --check` 가 50개 파일 219 hunks 로 실패했는데, 저장소 코드가 rustfmt 로 정리된 적이 없었기 때문이다.
+- 이후 `cargo fmt --all -- --check` 는 통과하며, CI 게이트에도 같은 검사를 넣었다.
+- 새 코드를 작성할 때는 `cargo format`(별칭)으로 적용하고 `cargo fmt-check` 로 확인한다.
