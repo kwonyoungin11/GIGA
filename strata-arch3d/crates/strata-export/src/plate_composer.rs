@@ -1243,12 +1243,18 @@ pub fn compose_archaeological_plate(input: &PlateComposeInput<'_>) -> ComposedPl
             // (d) 우하단(제2열 하단, Image 2: "수평횡단면도 실제 그려지는걸로 그려서 나와야하지않나"):
             // 상단 1:1 정밀 탁본 및 좌측 평·단면도와 절대 겹치지 않는 독립 영역에 배치!
             let hsec_est_r = half_d * 0.78;
-            let cx_hsec = if (cy_rub - plan_r) < (base_y + height * 0.46 + hsec_est_r + 16.0) {
-                cx_right + plan_r + hsec_est_r + 24.0
+            // 세로 겹침을 가로로 밀어 해소하면 용지 폭을 넘으므로, 아래로 내려서 해소한다.
+            let cy_hsec_default = base_y + height * 0.46;
+            let rub_bottom = cy_rub - plan_r;
+            let stacked_cy = rub_bottom - hsec_est_r - 12.0;
+            let cx_hsec = cx_right;
+            let cy_hsec = if cy_hsec_default + hsec_est_r > rub_bottom - 12.0
+                && stacked_cy - hsec_est_r >= margin
+            {
+                stacked_cy
             } else {
-                cx_right
+                cy_hsec_default
             };
-            let cy_hsec = base_y + height * 0.46;
             if let Some(hsec) = hsec_opt {
                 let cut_z_rel = (hsec.offset_mm - z_offset).clamp(1.0, height - 1.0);
                 let cut_line_y = base_y + cut_z_rel;
@@ -1638,12 +1644,18 @@ pub fn compose_archaeological_plate(input: &PlateComposeInput<'_>) -> ComposedPl
         });
 
         let hsec_est_r = half_d * 0.78;
-        let cx_hsec = if (cy_plan - plan_r) < (base_y + height * 0.46 + hsec_est_r + 16.0) {
-            cx_right + plan_r + hsec_est_r + 24.0
+        // 세로 겹침을 가로로 밀어 해소하면 용지 폭을 넘으므로, 아래로 내려서 해소한다.
+        let cy_hsec_default = base_y + height * 0.46;
+        let rub_bottom = cy_plan - plan_r;
+        let stacked_cy = rub_bottom - hsec_est_r - 12.0;
+        let cx_hsec = cx_right;
+        let cy_hsec = if cy_hsec_default + hsec_est_r > rub_bottom - 12.0
+            && stacked_cy - hsec_est_r >= margin
+        {
+            stacked_cy
         } else {
-            cx_right
+            cy_hsec_default
         };
-        let cy_hsec = base_y + height * 0.46;
         if let Some(hsec) = hsec_opt {
             let cut_z_rel = (hsec.offset_mm - z_offset).clamp(1.0, height - 1.0);
             let cut_line_y = base_y + cut_z_rel;

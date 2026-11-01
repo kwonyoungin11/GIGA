@@ -45,6 +45,111 @@ mod tests {
         TriMesh::from_positions_and_triangles("vessel_test", positions, triangles).expect("ok")
     }
 
+    /// 실제 샘플(Ø116 · 높이 64)처럼 **넓고 낮은** 완형 유물. 4판 레이아웃이 가로로 밀려나는 조건을 만든다.
+    fn wide_short_vessel_mesh() -> TriMesh {
+        const RING: usize = 16;
+        let profile = [
+            (30.0_f64, 0.0_f64),
+            (52.0, 16.0),
+            (58.0, 32.0),
+            (50.0, 48.0),
+            (40.0, 64.0),
+        ];
+        let mut positions = Vec::new();
+        for (r, z) in profile {
+            for j in 0..RING {
+                let a = (j as f64) / (RING as f64) * std::f64::consts::TAU;
+                positions.push([r * a.cos(), r * a.sin(), z]);
+            }
+        }
+        let idx = |level: usize, j: usize| (level * RING + j % RING) as u32;
+        let mut triangles = Vec::new();
+        for level in 0..profile.len() - 1 {
+            for j in 0..RING {
+                triangles.push([idx(level, j), idx(level, j + 1), idx(level + 1, j + 1)]);
+                triangles.push([idx(level, j), idx(level + 1, j + 1), idx(level + 1, j)]);
+            }
+        }
+        TriMesh::from_positions_and_triangles("넓은_완형_항아리", positions, triangles).expect("ok")
+    }
+
+    #[test]
+    fn test_complete_vessel_plate_stays_inside_canvas_and_views_do_not_overlap() {
+        let mesh = wide_short_vessel_mesh();
+        let m = compute_artifact_measurements(&mesh, ArtifactCategory::CompleteVessel);
+        let vsec = slice_mesh_with_fixed_plane(
+            &mesh,
+            None,
+            CutPlaneOrientation::VerticalLongitudinal,
+            0.0,
+            0.0,
+            0.25,
+        );
+        let hsec = slice_mesh_with_fixed_plane(
+            &mesh,
+            None,
+            CutPlaneOrientation::HorizontalTransverse,
+            32.0,
+            0.0,
+            0.25,
+        );
+        let plate = compose_archaeological_plate(&PlateComposeInput {
+            title: "넓은 완형 항아리",
+            measurements: &m,
+            vertical_section: &vsec,
+            horizontal_sections: std::slice::from_ref(&hsec),
+            occluded_spans: &[],
+            sherd_subtype: None,
+            sherd_strategy: None,
+            handle_attachment: None,
+            bead_subtype: None,
+            bead_drill_type: None,
+            wado_cut_ratio: None,
+            hemp_density_label: None,
+            flip_exterior_right: false,
+        });
+
+        // 1. 어떤 선도 도판 캔버스 폭을 넘지 않아야 한다(용지 밖으로 나가면 인쇄에서 잘린다).
+        for path in &plate.paths {
+            for p in &path.points_mm {
+                assert!(
+                    p[0] >= -0.01 && p[0] <= plate.canvas_width_mm + 0.01,
+                    "레이어 '{}' x={:.2} 가 캔버스 폭 {:.2} 를 벗어남",
+                    path.layer_id,
+                    p[0],
+                    plate.canvas_width_mm
+                );
+            }
+        }
+
+        // 2. 정밀 탁본 판과 수평 횡단면 판의 Y 구간이 겹치지 않아야 한다.
+        let rub = plate
+            .raster_regions
+            .iter()
+            .find(|r| r.kind == PlateRasterKind::BottomPlanRubbing)
+            .expect("탁본 영역");
+        let mut hsec_min_y = f64::INFINITY;
+        let mut hsec_max_y = f64::NEG_INFINITY;
+        for path in plate
+            .paths
+            .iter()
+            .filter(|p| p.layer_id.starts_with("횡단면_"))
+        {
+            for p in &path.points_mm {
+                hsec_min_y = hsec_min_y.min(p[1]);
+                hsec_max_y = hsec_max_y.max(p[1]);
+            }
+        }
+        assert!(
+            hsec_max_y <= rub.rect_mm[1] || hsec_min_y >= rub.rect_mm[3],
+            "탁본 Y[{:.1},{:.1}] 와 횡단면 Y[{:.1},{:.1}] 가 겹침",
+            rub.rect_mm[1],
+            rub.rect_mm[3],
+            hsec_min_y,
+            hsec_max_y
+        );
+    }
+
     #[test]
     fn test_all_8_plate_modes_and_svg_1mm_5px_anchors() {
         let mesh = sample_vessel_mesh();
