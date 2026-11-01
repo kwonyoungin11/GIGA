@@ -56,6 +56,51 @@ mod tests {
         TriMesh::from_positions_and_triangles("합성_중공_항아리", positions, triangles).expect("valid")
     }
 
+    /// 프리셋(`main.rs::make_preset_slot`)과 동일한 **단일 껍질** 회전체: 내벽이 없다.
+    fn single_shell_vessel_mesh(height: f64, radius: f64) -> TriMesh {
+        const NU: usize = 32;
+        const NV: usize = 12;
+        let mut positions = Vec::new();
+        for iv in 0..=NV {
+            let z = (iv as f64 / NV as f64) * height;
+            let r = radius * (0.78 + 0.22 * (z / height * std::f64::consts::PI).sin());
+            for iu in 0..=NU {
+                let theta = (iu as f64 / NU as f64) * std::f64::consts::TAU;
+                positions.push([r * theta.cos(), r * theta.sin(), z]);
+            }
+        }
+        let stride = (NU + 1) as u32;
+        let mut triangles = Vec::new();
+        for iv in 0..NV as u32 {
+            for iu in 0..NU as u32 {
+                let a = iv * stride + iu;
+                let b = a + 1;
+                let c = a + stride;
+                let d = c + 1;
+                triangles.push([a, b, d]);
+                triangles.push([a, d, c]);
+            }
+        }
+        TriMesh::from_positions_and_triangles("단일_껍질", positions, triangles).expect("valid")
+    }
+
+    #[test]
+    fn test_single_shell_mesh_does_not_report_curvature_as_wall_thickness() {
+        // 내벽이 스캔되지 않은 단일 껍질에서 곡면 반경 변화(0.6mm)를 기벽으로 오인하면 안 된다.
+        let mesh = single_shell_vessel_mesh(64.0, 58.0);
+        let report = compute_artifact_measurements(&mesh, ArtifactCategory::CompleteVessel);
+        assert!(
+            report.mean_wall_thickness_mm >= 2.0,
+            "단일 껍질인데 기벽이 {:.1}mm 로 오측정됨",
+            report.mean_wall_thickness_mm
+        );
+        assert!(
+            (report.rim_or_outer_diameter_mm - 90.5).abs() < 0.6,
+            "구연 실측값 오류: {}",
+            report.rim_or_outer_diameter_mm
+        );
+    }
+
     #[test]
     fn test_complete_vessel_rim_separated_from_max_belly_and_wall_measured() {
         // 바닥 반경 30, 최대복경 반경 58(Ø116), 구연 반경 40(Ø80), 기벽 6mm 인 완형 항아리.

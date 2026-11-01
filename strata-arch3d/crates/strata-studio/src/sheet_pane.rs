@@ -1603,7 +1603,7 @@ fn draw_individual_view_flip_controls(
 pub fn render_sheet_pane_egui(
     ui: &mut egui::Ui,
     plate: &ComposedPlate2D,
-    _report: &ArtifactMeasurementReport,
+    report: &ArtifactMeasurementReport,
     mesh: &TriMesh,
     psi_deg: f64,
     ink_density_pct: f64,
@@ -2522,21 +2522,40 @@ pub fn render_sheet_pane_egui(
 
                 let dim_w_px = (state.line_style.dim_width_mm * scale).clamp(0.9, 3.0);
 
-                // (a) 상단 수평 구경 화살표 치수선 — 유물 구연부 바로 위 9px 위치에 밀착!
+                // (a) 상단 수평 구경 화살표 치수선 — 구연부 **실측 구경**에 맞춰 표시한다.
+                let span_px = (rx1 - rx0).abs();
+                let span_mm = if scale > 0.0 { span_px / scale } else { 0.0 };
+                let rim_mm = if report.rim_or_outer_diameter_mm > 1.0
+                    && span_mm > 1.0
+                    && report.rim_or_outer_diameter_mm <= (span_mm as f64) * 1.02
+                {
+                    report.rim_or_outer_diameter_mm
+                } else {
+                    span_mm as f64
+                };
+                let cx_v = (rx0 + rx1) * 0.5;
+                let half_rim_px = if span_mm > 0.0 {
+                    span_px * 0.5 * (rim_mm / span_mm as f64) as f32
+                } else {
+                    span_px * 0.5
+                };
+                let dim_x0 = cx_v - half_rim_px;
+                let dim_x1 = cx_v + half_rim_px;
+
                 let dim_y = (ry_top - 9.0).max(sheet_rect.top() + 48.0);
                 paper_painter.line_segment(
-                    [egui::pos2(rx0, ry_top - 1.5), egui::pos2(rx0, dim_y - 3.0)],
+                    [egui::pos2(dim_x0, ry_top - 1.5), egui::pos2(dim_x0, dim_y - 3.0)],
                     egui::Stroke::new(dim_w_px * 0.85, dim_col),
                 );
                 paper_painter.line_segment(
-                    [egui::pos2(rx1, ry_top - 1.5), egui::pos2(rx1, dim_y - 3.0)],
+                    [egui::pos2(dim_x1, ry_top - 1.5), egui::pos2(dim_x1, dim_y - 3.0)],
                     egui::Stroke::new(dim_w_px * 0.85, dim_col),
                 );
                 paper_painter.line_segment(
-                    [egui::pos2(rx0, dim_y), egui::pos2(rx1, dim_y)],
+                    [egui::pos2(dim_x0, dim_y), egui::pos2(dim_x1, dim_y)],
                     egui::Stroke::new(dim_w_px, dim_col),
                 );
-                for &(ax, dir_s) in &[(rx0, 1.0_f32), (rx1, -1.0_f32)] {
+                for &(ax, dir_s) in &[(dim_x0, 1.0_f32), (dim_x1, -1.0_f32)] {
                     paper_painter.add(egui::Shape::convex_polygon(
                         vec![
                             egui::pos2(ax, dim_y),
@@ -2547,9 +2566,8 @@ pub fn render_sheet_pane_egui(
                         egui::Stroke::NONE,
                     ));
                 }
-                let rim_mm = (first_reg.rect_mm[2] - first_reg.rect_mm[0]).abs();
                 paper_painter.text(
-                    egui::pos2((rx0 + rx1) * 0.5, dim_y - 6.5),
+                    egui::pos2((dim_x0 + dim_x1) * 0.5, dim_y - 6.5),
                     egui::Align2::CENTER_CENTER,
                     format!("구경 {:.1}mm", rim_mm),
                     egui::FontId::proportional(9.5),

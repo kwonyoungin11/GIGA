@@ -303,8 +303,8 @@ fn measure_radial_wall_thickness(
     if height_z <= 0.0 || mesh.positions.len() < BINS * 2 {
         return None;
     }
-    let z_lo = mesh.bbox.min[2] + height_z * 0.40;
-    let z_hi = mesh.bbox.min[2] + height_z * 0.60;
+    let z_lo = mesh.bbox.min[2] + height_z * 0.49;
+    let z_hi = mesh.bbox.min[2] + height_z * 0.51;
 
     let mut r_min = [f64::INFINITY; BINS];
     let mut r_max = [0.0f64; BINS];
@@ -340,13 +340,13 @@ fn measure_radial_wall_thickness(
     }
 
     let mut diffs: Vec<f64> = (0..BINS)
-        .filter(|&b| counts[b] >= 2 && (r_max[b] - r_min[b]) > 0.3)
+        .filter(|&b| counts[b] >= 2 && (r_max[b] - r_min[b]) > 1.5)
         .map(|b| r_max[b] - r_min[b])
         .collect();
-    if diffs.len() < filled / 3 {
+    if diffs.len() < filled / 2 {
         return None;
     }
     diffs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let median = diffs[diffs.len() / 2];
-    Some(((median * 10.0).round() / 10.0).clamp(0.5, 40.0))
+    Some(((median * 10.0).round() / 10.0).clamp(1.0, 40.0))
 }
