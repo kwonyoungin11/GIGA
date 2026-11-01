@@ -2,7 +2,23 @@
 # Fast parallel incremental compilation for STRATA DongSTRATA workspace
 jobs = 8
 
+[net]
+# 현장 PC·불안정 회선 대비: 다운로드 실패 시 재시도 횟수
+retry = 5
+
+# 자주 쓰는 검증 명령 단축키 (cargo <alias>)
 [alias]
+# clippy 로 경고까지 막는 엄격 모드 (기존 유지)
 verify-v1 = "clippy --workspace --all-targets -- -D warnings"
+# 전체 테스트 실행 (stdout 표시, 기존 유지)
 verify-all = "test --workspace -- --nocapture"
+# rustfmt 로 전체 포맷 적용.
+# 주의: cargo 는 별칭 확장 결과의 첫 토큰이 다시 별칭이면 재귀 확장이라
+# `fmt = "fmt --all"` 은 "alias fmt has unresolvable recursive definition" 으로 실패한다
+# (cargo 1.91.1 확인). 또한 `fmt` 는 외부 서브커맨드 cargo-fmt 와 이름이 겹쳐 경고 대상이라
+# 별칭 이름은 `format` 으로 둔다. (적용: cargo format / 검사: cargo fmt-check)
+format = "fmt --all"
+# 포맷 검사만 (CI·리뷰 전 확인용)
+fmt-check = "fmt --all -- --check"
+# 데스크톱 앱 실행 (release)
 studio = "run --release -p strata-studio --"

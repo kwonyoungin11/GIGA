@@ -1,0 +1,7 @@
+# 저장소 표준 툴체인 고정.
+# rustc 1.91.1 / cargo 1.91.1 환경에서 검증되었다.
+# components: 포맷(rustfmt)·정적분석(clippy)까지 표준 도구로 맞춘다.
+[toolchain]
+channel = "1.91.1"
+profile = "minimal"
+components = ["rustfmt", "clippy"]

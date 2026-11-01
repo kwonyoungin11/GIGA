@@ -89,3 +89,6 @@ factory/jobs/*/artifacts/
 strata-arch3d/target/
 .superpowers/
 
+
+# 로컬 검증 산출물 (창 캡처·로그)
+/artifacts/

@@ -43,3 +43,35 @@ strata-measure = { path = "crates/strata-measure" }
 strata-section = { path = "crates/strata-section" }
 strata-shade = { path = "crates/strata-shade" }
 strata-export = { path = "crates/strata-export" }
+
+# ──────────────────────────────────────────────────────────────────────────
+# 빌드 프로파일 (2026-11-01)
+#   원칙: 런타임 동작·의존성 버전은 바꾸지 않고, 컴파일 최적화 수준만 조정한다.
+#   머신 종속 플래그(-C target-cpu=native 등)는 이 파일에 넣지 않는다(다른 PC에서
+#   빌드가 깨지거나 CPU 별로 산출물이 달라짐). 필요하면 그 PC에서만 환경변수로:
+#     $env:RUSTFLAGS = "-C target-cpu=native"
+# ──────────────────────────────────────────────────────────────────────────
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+# 워크스페이스 전체에 catch_unwind / panic::* 사용처가 없음을 확인(grep, 2026-11-01).
+# 따라서 panic=abort 로 코드 크기·바이너리 크기를 줄인다.
+# 주의: 이 설정 때문에 `cargo test --release` 는 실행할 수 없다(테스트 하네스는 unwind 필수).
+#       테스트는 dev 프로파일(기본)로 돌린다.
+panic = "abort"
+strip = "symbols"
+
+[profile.dev]
+opt-level = 1
+debug = 1
+incremental = true
+
+# 외부 의존성만 opt-level=2 로 올려 dev 실행 속도를 확보한다.
+# 워크스페이스 크레이트 자체는 opt-level=1 로 유지해 증분 빌드 속도를 지킨다.
+[profile.dev.package."*"]
+opt-level = 2
+
+# [profile.test] 는 [profile.dev] 를 상속한다(별도 설정 없음).
+# 테스트 실패 메시지·백트레이스를 그대로 보기 위해 test 전용 최적화는 두지 않는다.

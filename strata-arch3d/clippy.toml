@@ -1,0 +1,4 @@
+# clippy MSRV: rust-toolchain.toml 의 channel = "1.91.1" 과 맞춘다.
+# MSRV 를 알려주면 clippy 가 그보다 새로운 API 를 쓰는 제안(예: let-else, newer
+# Option methods)을 하지 않아 컴파일러 버전을 올리지 않고도 클린 상태를 유지한다.
+msrv = "1.91"

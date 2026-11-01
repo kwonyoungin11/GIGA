@@ -1,0 +1,5 @@
+# cargo fmt 기준 설정 (cargo fmt --all / cargo fmt --all -- --check)
+# window style: 줄바꿈을 LF 로 통일해 Windows·Linux 체크아웃 간 diff 노이즈를 없앤다.
+edition = "2021"
+max_width = 100
+newline_style = "Unix"
