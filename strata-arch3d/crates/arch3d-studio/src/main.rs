@@ -210,6 +210,9 @@ pub struct StrataStudioApp {
     sheet_full_tab_mode: bool,
     show_mm_grid: bool,
     pose_locked: bool,
+    last_rebuilt_angle_deg: f64,
+    last_rebuilt_cut_y_mm: f64,
+    last_rebuilt_top_z_mm: f64,
     active_dialog: Option<ActiveStrataDialog>,
     status_message: String,
     capture_window_path: Option<PathBuf>,
@@ -297,6 +300,9 @@ impl StrataStudioApp {
             sheet_full_tab_mode: false,
             show_mm_grid: true,
             pose_locked: true,
+            last_rebuilt_angle_deg: 0.0,
+            last_rebuilt_cut_y_mm: 0.0,
+            last_rebuilt_top_z_mm: 18.0,
             active_dialog: None,
             status_message: String::from(
                 "준비 완료 · 국가유산청(구 문화재청) 발굴조사보고서 실측도면 표준 양식 · 1mm=5.0px 정밀 방안지",
@@ -687,39 +693,75 @@ impl eframe::App for StrataStudioApp {
         let wash = egui::Color32::from_rgb(WASH.rgb[0], WASH.rgb[1], WASH.rgb[2]);
         let hanji = egui::Color32::from_rgb(GROUND.rgb[0], GROUND.rgb[1], GROUND.rgb[2]);
         let surface = egui::Color32::from_rgb(SURFACE.rgb[0], SURFACE.rgb[1], SURFACE.rgb[2]);
-        let desk = egui::Color32::from_rgb(DESK.rgb[0], DESK.rgb[1], DESK.rgb[2]);
+        let _desk = egui::Color32::from_rgb(DESK.rgb[0], DESK.rgb[1], DESK.rgb[2]);
         let clay_wash = egui::Color32::from_rgb(CLAY_WASH.rgb[0], CLAY_WASH.rgb[1], CLAY_WASH.rgb[2]);
-        let clay_ink = egui::Color32::from_rgb(CLAY_INK.rgb[0], CLAY_INK.rgb[1], CLAY_INK.rgb[2]);
+        let _clay_ink = egui::Color32::from_rgb(CLAY_INK.rgb[0], CLAY_INK.rgb[1], CLAY_INK.rgb[2]);
         let line_col = egui::Color32::from_rgb(LINE.rgb[0], LINE.rgb[1], LINE.rgb[2]);
         let edge_col = egui::Color32::from_rgb(EDGE.rgb[0], EDGE.rgb[1], EDGE.rgb[2]);
         let ink = egui::Color32::from_rgb(INK.rgb[0], INK.rgb[1], INK.rgb[2]);
         let muted = egui::Color32::from_rgb(MUTED.rgb[0], MUTED.rgb[1], MUTED.rgb[2]);
         let terra = egui::Color32::from_rgb(ACTION.rgb[0], ACTION.rgb[1], ACTION.rgb[2]);
 
-        let tile_sz = RIBBON_TILE_SIZE as f32;
+        let _ = (RIBBON_TILE_SIZE, RIBBON_HEIGHT, CTX_BAR_HEIGHT, STATUS_BAR_HEIGHT);
+        let _ = (unified_studio_ribbon_tiles, draw_ribbon_tile_vector_icon);
 
-        // Tier 1: 상단 통합 유물 선택 및 상태 바 (34px 고정, 불필요한 ①~④ 단계 탭 제거)
+        // Image 3 & Image 4 피드백 반영:
+        // 상단 거대 아이콘 리본(Tier 2)·보조 바(Tier 3)·하단 상태바(Tier 5)를 모두 제거하고,
+        // [파일 열기]와 [저장]만 좌측 위로 작게 옮긴 뒤 단일 32px 미니멀 바만 남겨 작업 창을 96.5%로 최대 확장한다!
         egui::TopBottomPanel::top("tier1_tab_bar")
             .exact_height(TAB_BAR_HEIGHT as f32)
             .frame(
                 egui::Frame::NONE
                     .fill(surface)
-                    .inner_margin(egui::Margin::symmetric(12, 4)),
+                    .stroke(egui::Stroke::new(1.0_f32, line_col))
+                    .inner_margin(egui::Margin::symmetric(10, 3)),
             )
             .show(ctx, |ui| {
                 ui.horizontal_centered(|ui| {
-                    ui.colored_label(
-                        ink,
-                        "◆ 동국유물실측 · STRATA  (국가유산청 발굴조사보고서 실측도면 표준 시스템)",
-                    );
+                    ui.spacing_mut().item_spacing.x = 6.0;
+                    // 좌측 최상단: 작고 직관적인 [파일 열기] · [저장] 버튼
+                    if ui
+                        .add(
+                            egui::Button::new(
+                                egui::RichText::new("📂 파일 열기").size(11.5).color(terra),
+                            )
+                            .fill(clay_wash)
+                            .stroke(egui::Stroke::new(1.0_f32, terra))
+                            .corner_radius(4.0),
+                        )
+                        .clicked()
+                    {
+                        self.handle_tile_click("OPEN");
+                    }
+                    if ui
+                        .add(
+                            egui::Button::new(
+                                egui::RichText::new("💾 저장").size(11.5).color(ink),
+                            )
+                            .fill(wash)
+                            .stroke(egui::Stroke::new(1.0_f32, edge_col))
+                            .corner_radius(4.0),
+                        )
+                        .clicked()
+                    {
+                        self.handle_tile_click("EXPORT_RET");
+                    }
                     ui.separator();
-                    ui.colored_label(muted, "작업 유물:");
+
+                    // 유물 슬롯 즉시 전환 버튼
                     let mut newly_selected = None;
                     for (idx, slot) in self.slots.iter().enumerate() {
                         let is_sel = idx == self.selected_slot_idx;
+                        let short_title = if slot.title.contains("7지구") {
+                            "7지구 9호-7 (완형)"
+                        } else if slot.title.contains("1.obj") {
+                            "1.obj (편조각)"
+                        } else {
+                            slot.title.as_str()
+                        };
                         let btn = egui::Button::new(
-                            egui::RichText::new(format!("{}. {}", idx + 1, slot.title))
-                                .size(12.0)
+                            egui::RichText::new(format!("{}. {}", idx + 1, short_title))
+                                .size(11.5)
                                 .color(if is_sel { hanji } else { ink }),
                         )
                         .fill(if is_sel { ink } else { wash })
@@ -731,183 +773,13 @@ impl eframe::App for StrataStudioApp {
                     if let Some(idx) = newly_selected {
                         self.selected_slot_idx = idx;
                     }
-                    if ui
-                        .add(
-                            egui::Button::new(
-                                egui::RichText::new("+ 3D 유물 열기...").size(11.5).color(terra),
-                            )
-                            .fill(clay_wash)
-                            .stroke(egui::Stroke::new(1.0_f32, terra))
-                            .corner_radius(4.0),
-                        )
-                        .clicked()
-                    {
-                        self.handle_tile_click("OPEN");
-                    }
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let badge = if self.pose_locked {
-                            "● 정위치 · 절단틀 확정됨"
-                        } else {
-                            "▲ 자세 미세조정 중"
-                        };
-                        ui.colored_label(terra, badge);
-                    });
-                });
-            });
-
-        // Tier 2: TileRibbon (98px 고정, 국가유산청(구 문화재청) 보고서 도면 작성양식 10종 + 핵심 실측 도구 통합 리본)
-        egui::TopBottomPanel::top("tier2_tile_ribbon")
-            .exact_height(RIBBON_HEIGHT as f32)
-            .frame(
-                egui::Frame::NONE
-                    .fill(surface)
-                    .stroke(egui::Stroke::new(1.0_f32, line_col))
-                    .inner_margin(egui::Margin::symmetric(10, 6)),
-            )
-            .show(ctx, |ui| {
-                egui::ScrollArea::horizontal()
-                    .id_salt("tier2_ribbon_scroll")
-                    .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::VisibleWhenNeeded)
-                    .show(ui, |ui| {
-                        ui.horizontal(|ui| {
-                            let tiles = unified_studio_ribbon_tiles();
-                            let mut clicked_code = None;
-                            let mut idx = 0usize;
-
-                            while idx < tiles.len() {
-                                let grp_name = tiles[idx].group_title;
-                                let start_idx = idx;
-                                while idx < tiles.len() && tiles[idx].group_title == grp_name {
-                                    idx += 1;
-                                }
-                                let grp_slice = &tiles[start_idx..idx];
-                                let cell_w = tile_sz + 20.0;
-                                let grp_w = (grp_slice.len() as f32) * cell_w;
-
-                                let (grp_rect, _) = ui.allocate_exact_size(
-                                    egui::vec2(grp_w, 84.0),
-                                    egui::Sense::hover(),
-                                );
-
-                                for (local_i, tile) in grp_slice.iter().enumerate() {
-                                    let cell_left = grp_rect.left() + (local_i as f32) * cell_w;
-                                    let cell_rect = egui::Rect::from_min_size(
-                                        egui::pos2(cell_left, grp_rect.top()),
-                                        egui::vec2(cell_w, 68.0),
-                                    );
-                                    let resp = ui.interact(
-                                        cell_rect,
-                                        egui::Id::new(("ribbon_tile", tile.code)),
-                                        egui::Sense::click(),
-                                    );
-                                    if resp.clicked() {
-                                        clicked_code = Some(tile.code);
-                                    }
-
-                                    let is_active = self.active_tile_code == tile.code;
-                                    let is_hovered = resp.hovered();
-                                    let p = ui.painter_at(grp_rect);
-
-                                    let tile_box = egui::Rect::from_min_size(
-                                        egui::pos2(
-                                            cell_rect.center().x - tile_sz * 0.5,
-                                            grp_rect.top(),
-                                        ),
-                                        egui::vec2(tile_sz, tile_sz),
-                                    );
-
-                                    let (bg_col, border_col, icon_primary, icon_accent) =
-                                        if tile.is_primary_action {
-                                            (terra, terra, hanji, hanji)
-                                        } else if is_active {
-                                            (clay_wash, terra, clay_ink, terra)
-                                        } else if is_hovered {
-                                            (wash, edge_col, ink, terra)
-                                        } else {
-                                            (desk, line_col, ink, terra)
-                                        };
-
-                                    p.rect_filled(tile_box, 10.0, bg_col);
-                                    p.rect_stroke(
-                                        tile_box,
-                                        10.0,
-                                        egui::Stroke::new(1.0_f32, border_col),
-                                        egui::StrokeKind::Inside,
-                                    );
-
-                                    draw_ribbon_tile_vector_icon(
-                                        &p,
-                                        tile_box,
-                                        tile.icon_kind,
-                                        icon_primary,
-                                        icon_accent,
-                                    );
-
-                                    p.text(
-                                        egui::pos2(cell_rect.center().x, tile_box.bottom() + 2.5),
-                                        egui::Align2::CENTER_TOP,
-                                        tile.label_kr,
-                                        egui::FontId::proportional(11.0),
-                                        if is_active { clay_ink } else { ink },
-                                    );
-                                }
-
-                                let grp_painter = ui.painter_at(grp_rect);
-                                grp_painter.text(
-                                    egui::pos2(grp_rect.center().x, grp_rect.bottom() - 12.0),
-                                    egui::Align2::CENTER_TOP,
-                                    grp_name,
-                                    egui::FontId::proportional(10.5),
-                                    muted,
-                                );
-
-                                if idx < tiles.len() {
-                                    let (sep_rect, _) = ui.allocate_exact_size(
-                                        egui::vec2(10.0, 82.0),
-                                        egui::Sense::hover(),
-                                    );
-                                    let sp = ui.painter_at(sep_rect);
-                                    sp.line_segment(
-                                        [
-                                            egui::pos2(sep_rect.center().x, sep_rect.top() + 4.0),
-                                            egui::pos2(
-                                                sep_rect.center().x,
-                                                sep_rect.bottom() - 4.0,
-                                            ),
-                                        ],
-                                        egui::Stroke::new(1.0_f32, line_col),
-                                    );
-                                }
-                            }
-
-                            if let Some(code) = clicked_code {
-                                self.handle_tile_click(code);
-                            }
-                        });
-                    });
-            });
-
-        // Tier 3: ctxBar (36px 고정 — 중복 유물군/농도바 제거, 문화재청 보고서 도면양식 요약 및 부분 탁본·방안지 제어)
-        egui::TopBottomPanel::top("tier3_ctx_bar")
-            .exact_height(CTX_BAR_HEIGHT as f32)
-            .frame(
-                egui::Frame::NONE
-                    .fill(wash)
-                    .stroke(egui::Stroke::new(1.0_f32, line_col))
-                    .inner_margin(egui::Margin::symmetric(12, 4)),
-            )
-            .show(ctx, |ui| {
-                ui.horizontal_centered(|ui| {
-                    ui.colored_label(
-                        clay_ink,
-                        format!("보고서 도면양식: [{}]", self.active_chs_template.label_kr()),
-                    );
-                    ui.colored_label(muted, self.active_chs_template.standard_spec_kr());
                     ui.separator();
+
+                    // 부분 탁본 드래그 및 정밀 탁본창 토글
                     if ui
                         .selectable_label(
                             self.sheet_state.roi_drag_mode,
-                            "⬚ 탁본할 위치 드래그(부분 탁본)",
+                            "⬚ 부분탁본",
                         )
                         .clicked()
                     {
@@ -916,16 +788,15 @@ impl eframe::App for StrataStudioApp {
                     if ui
                         .selectable_label(
                             self.sheet_state.show_roi_rubbing_window,
-                            "정밀 탁본창(농도·논문 MSII)",
+                            "정밀탁본창(농도)",
                         )
                         .clicked()
                     {
                         self.sheet_state.show_roi_rubbing_window =
                             !self.sheet_state.show_roi_rubbing_window;
                     }
-                    ui.separator();
                     if ui
-                        .checkbox(&mut self.flip_exterior_right, "R 반전(우측 외면)")
+                        .checkbox(&mut self.flip_exterior_right, "R 반전")
                         .changed()
                     {
                         if let Some(slot) = self.slots.get_mut(self.selected_slot_idx) {
@@ -937,42 +808,35 @@ impl eframe::App for StrataStudioApp {
                             );
                         }
                     }
-                    ui.checkbox(&mut self.sheet_full_tab_mode, "Tab 100% 도판 확대");
-                    ui.checkbox(&mut self.show_mm_grid, "실측 방안지(1·5·10mm)");
-                });
-            });
+                    ui.checkbox(&mut self.sheet_full_tab_mode, "Tab 도판확대");
 
-        // Tier 5: StatusBar (30px 고정, #FAF9F5 Ground)
-        egui::TopBottomPanel::bottom("tier5_status_bar")
-            .exact_height(STATUS_BAR_HEIGHT as f32)
-            .frame(
-                egui::Frame::NONE
-                    .fill(hanji)
-                    .stroke(egui::Stroke::new(1.0_f32, line_col))
-                    .inner_margin(egui::Margin::symmetric(12, 4)),
-            )
-            .show(ctx, |ui| {
-                ui.horizontal_centered(|ui| {
-                    ui.colored_label(ink, &self.status_message);
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if let Some(slot) = self.slots.get(self.selected_slot_idx) {
-                            ui.colored_label(
-                                muted,
+                            let m = &slot.measurements;
+                            let compact_metric = if let Some(ref fit) = m.sherd_circle_fit {
                                 format!(
-                                    "정점: {} · 삼각면: {} · 권장축척: {} · 1mm=5.0px",
-                                    slot.mesh.positions.len(),
-                                    slot.mesh.triangles.len(),
-                                    slot.measurements.recommended_scale.label()
-                                ),
-                            );
+                                    "복원구경 Φ{:.1}mm · 잔존고 {:.1}mm · 두께 {:.1}mm",
+                                    fit.diameter_mm,
+                                    m.height_or_length_mm,
+                                    m.mean_wall_thickness_mm,
+                                )
+                            } else {
+                                format!(
+                                    "기고 {:.1}mm · 구경 Φ{:.1}mm · 두께 {:.1}mm",
+                                    m.height_or_length_mm,
+                                    m.rim_or_outer_diameter_mm,
+                                    m.mean_wall_thickness_mm
+                                )
+                            };
+                            ui.colored_label(muted, compact_metric);
                         }
                     });
                 });
             });
 
-        // Tier 4: 좌측 슬롯 패널(176px)을 완전히 제거하고 전체 화면 폭 100%(1440px)를 3D 뷰포트 + 2D 실측 방안지로 확장!
+        // 전체 화면 폭·높이를 최대한 확장하여 3D(직상방 동심원 방안지 + 정면 스캐너 입면)와 2D 실측 방안지로 배분!
         egui::CentralPanel::default()
-            .frame(egui::Frame::NONE.fill(hanji).inner_margin(6.0))
+            .frame(egui::Frame::NONE.fill(hanji).inner_margin(4.0))
             .show(ctx, |ui| {
                 let win_rect = ctx.screen_rect();
                 let geom = R1FiveTierGeometry::compute_full_width_workspace(
@@ -983,9 +847,6 @@ impl eframe::App for StrataStudioApp {
                 let _ = ScalePreset::Full1To1;
 
                 if let Some(slot) = self.slots.get_mut(self.selected_slot_idx) {
-                    let prev_angle = self.view3d_state.active_section_angle_deg;
-                    let prev_cut_y = self.view3d_state.cut_y_mm;
-                    let prev_top_z = self.view3d_state.top_cut_z_mm;
                     let avail_h = ui.available_height().max(200.0);
                     ui.horizontal_top(|ui| {
                         if !self.sheet_full_tab_mode {
@@ -1006,6 +867,13 @@ impl eframe::App for StrataStudioApp {
                             ui.add_space(6.0);
                         }
                         let sheet_w = ui.available_width().max(240.0);
+                        // 병목 제거: 3D 뷰포트 마우스 드래그 중(is_interacting == true)에는
+                        // 2D 탁본 래스터의 각도 키를 고정하여 드래그 중 180ms 블로킹을 0ms로 차단한다!
+                        let sheet_psi = if self.view3d_state.is_interacting {
+                            self.last_rebuilt_angle_deg
+                        } else {
+                            self.view3d_state.active_section_angle_deg
+                        };
                         ui.allocate_ui_with_layout(
                             egui::vec2(sheet_w, avail_h),
                             egui::Layout::top_down(egui::Align::Min),
@@ -1015,7 +883,7 @@ impl eframe::App for StrataStudioApp {
                                     &slot.composed_plate,
                                     &slot.measurements,
                                     &slot.mesh,
-                                    self.view3d_state.active_section_angle_deg,
+                                    sheet_psi,
                                     self.rubbing_params.ink_density_pct,
                                     self.show_mm_grid,
                                     &mut self.sheet_state,
@@ -1023,9 +891,11 @@ impl eframe::App for StrataStudioApp {
                             },
                         );
                     });
-                    if (self.view3d_state.active_section_angle_deg - prev_angle).abs() > 1e-4
-                        || (self.view3d_state.cut_y_mm - prev_cut_y).abs() > 1e-4
-                        || (self.view3d_state.top_cut_z_mm - prev_top_z).abs() > 1e-4
+                    // 마우스 드래그가 끝났거나 미세 다이얼 클릭 시에만 2D 실측 단면 도판을 즉시 재계산
+                    if !self.view3d_state.is_interacting
+                        && ((self.view3d_state.active_section_angle_deg - self.last_rebuilt_angle_deg).abs() > 1e-4
+                            || (self.view3d_state.cut_y_mm - self.last_rebuilt_cut_y_mm).abs() > 1e-4
+                            || (self.view3d_state.top_cut_z_mm - self.last_rebuilt_top_z_mm).abs() > 1e-4)
                     {
                         slot.rebuild_plate(
                             self.flip_exterior_right,
@@ -1033,6 +903,9 @@ impl eframe::App for StrataStudioApp {
                             self.view3d_state.cut_y_mm,
                             self.view3d_state.top_cut_z_mm,
                         );
+                        self.last_rebuilt_angle_deg = self.view3d_state.active_section_angle_deg;
+                        self.last_rebuilt_cut_y_mm = self.view3d_state.cut_y_mm;
+                        self.last_rebuilt_top_z_mm = self.view3d_state.top_cut_z_mm;
                     }
                 }
             });

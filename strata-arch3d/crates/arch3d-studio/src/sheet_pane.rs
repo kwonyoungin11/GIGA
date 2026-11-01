@@ -341,8 +341,10 @@ pub fn render_orthographic_rubbing_rgba_with_params(
 
     let has_uv_tex =
         mesh.texture_image.is_some() && mesh.triangle_uvs.len() == mesh.triangles.len();
+    let tri_stride = (mesh.triangles.len() / 170_000).max(1);
+    let edge_pad = if tri_stride > 1 { -0.32_f32 } else { -1e-4_f32 };
 
-    for (ti, tri) in mesh.triangles.iter().enumerate() {
+    for (ti, tri) in mesh.triangles.iter().enumerate().step_by(tri_stride) {
         let i0 = tri[0] as usize;
         let i1 = tri[1] as usize;
         let i2 = tri[2] as usize;
@@ -382,7 +384,7 @@ pub fn render_orthographic_rubbing_rgba_with_params(
                 let w0 = ((y1 - y2) * (fx - x2) + (x2 - x1) * (fy - y2)) * inv_denom;
                 let w1 = ((y2 - y0) * (fx - x2) + (x0 - x2) * (fy - y2)) * inv_denom;
                 let w2 = 1.0 - w0 - w1;
-                if w0 < -1e-4 || w1 < -1e-4 || w2 < -1e-4 {
+                if w0 < edge_pad || w1 < edge_pad || w2 < edge_pad {
                     continue;
                 }
                 let z = (w0 as f64 * p0[2] + w1 as f64 * p1[2] + w2 as f64 * p2[2]) as f32;
@@ -596,7 +598,7 @@ pub fn rgba_to_color_image_clipped_with_roi(
 pub fn render_sheet_pane_egui(
     ui: &mut egui::Ui,
     plate: &ComposedPlate2D,
-    report: &ArtifactMeasurementReport,
+    _report: &ArtifactMeasurementReport,
     mesh: &TriMesh,
     psi_deg: f64,
     ink_density_pct: f64,
@@ -604,15 +606,13 @@ pub fn render_sheet_pane_egui(
     state: &mut SheetPaneState,
 ) -> (egui::Rect, egui::Rect, egui::Rect) {
     let avail = ui.available_size();
-    let header_h = 32.0;
-    let strip_h = 28.0;
-    let canvas_h = (avail.y - header_h - strip_h - 8.0).max(160.0);
+    let canvas_h = avail.y.max(160.0);
 
-    let ground = egui::Color32::from_rgb(GROUND.rgb[0], GROUND.rgb[1], GROUND.rgb[2]);
-    let wash = egui::Color32::from_rgb(WASH.rgb[0], WASH.rgb[1], WASH.rgb[2]);
+    let _ground = egui::Color32::from_rgb(GROUND.rgb[0], GROUND.rgb[1], GROUND.rgb[2]);
+    let _wash = egui::Color32::from_rgb(WASH.rgb[0], WASH.rgb[1], WASH.rgb[2]);
     let paper = egui::Color32::from_rgb(SURFACE.rgb[0], SURFACE.rgb[1], SURFACE.rgb[2]);
     let border = egui::Color32::from_rgb(EDGE.rgb[0], EDGE.rgb[1], EDGE.rgb[2]);
-    let line_col = egui::Color32::from_rgb(LINE.rgb[0], LINE.rgb[1], LINE.rgb[2]);
+    let _line_col = egui::Color32::from_rgb(LINE.rgb[0], LINE.rgb[1], LINE.rgb[2]);
     let grid_10 = egui::Color32::from_rgb(198, 192, 174);
     let grid_5 = egui::Color32::from_rgb(220, 215, 200);
     let grid_1 = egui::Color32::from_rgb(GRID_1MM.rgb[0], GRID_1MM.rgb[1], GRID_1MM.rgb[2]);
@@ -629,8 +629,8 @@ pub fn render_sheet_pane_egui(
         SELECT_BLUE.rgb[1],
         SELECT_BLUE.rgb[2],
     );
-    let done_bg = egui::Color32::from_rgb(DONE_BG.rgb[0], DONE_BG.rgb[1], DONE_BG.rgb[2]);
-    let done_fg = egui::Color32::from_rgb(DONE_INK.rgb[0], DONE_INK.rgb[1], DONE_INK.rgb[2]);
+    let _done_bg = egui::Color32::from_rgb(DONE_BG.rgb[0], DONE_BG.rgb[1], DONE_BG.rgb[2]);
+    let _done_fg = egui::Color32::from_rgb(DONE_INK.rgb[0], DONE_INK.rgb[1], DONE_INK.rgb[2]);
 
     // 외부 ink_density_pct와 동기화하되, 부분 탁본창에서 조정한 값을 우선 반영
     if (state.rubbing_params.ink_density_pct - ink_density_pct).abs() > 0.5
@@ -696,146 +696,16 @@ pub fn render_sheet_pane_egui(
     let mut out_sheet_rect = egui::Rect::NOTHING;
 
     ui.vertical(|ui| {
-        ui.spacing_mut().item_spacing.y = 4.0;
+        ui.spacing_mut().item_spacing.y = 0.0;
 
-        // 1. 도판 머리줄 (32px): 도판 제목 + [영역 드래그 탁본] + [부분 탁본창] + 축척 배지
-        let (header_rect, _) =
-            ui.allocate_exact_size(egui::vec2(avail.x, header_h), egui::Sense::hover());
-        out_header_rect = header_rect;
-        let hp = ui.painter_at(header_rect);
-        hp.rect_filled(header_rect, 3.0, ground);
-        hp.rect_stroke(
-            header_rect,
-            3.0,
-            egui::Stroke::new(1.0_f32, line_col),
-            egui::StrokeKind::Inside,
-        );
-        hp.text(
-            egui::pos2(header_rect.left() + 12.0, header_rect.center().y),
-            egui::Align2::LEFT_CENTER,
-            format!("{}  ·  {}", plate.title, plate.mode.label_kr()),
-            egui::FontId::proportional(13.0),
-            ink,
-        );
-
-        // 우측 컨트롤 버튼들: [영역 드래그 탁본] · [탁본 농도·학술창] · [전체 탁본] · 상태 배지
-        let badge_w = 196.0;
-        let badge_rect = egui::Rect::from_min_size(
-            egui::pos2(
-                header_rect.right() - badge_w - 8.0,
-                header_rect.center().y - 11.0,
-            ),
-            egui::vec2(badge_w, 22.0),
-        );
-        hp.rect_filled(badge_rect, 4.0, done_bg);
-        hp.text(
-            badge_rect.center(),
-            egui::Align2::CENTER_CENTER,
-            format!(
-                "● 축척 {} · 방안지 {:.0}%",
-                report.recommended_scale.label(),
-                state.zoom * 100.0
-            ),
-            egui::FontId::proportional(11.0),
-            done_fg,
-        );
-
-        // [영역 드래그 탁본] 버튼 및 [탁본창 열기] 버튼을 헤더 우측 배지 왼쪽에 배치
-        let btn_drag_rect = egui::Rect::from_min_size(
-            egui::pos2(badge_rect.left() - 252.0, header_rect.center().y - 11.0),
-            egui::vec2(124.0, 22.0),
-        );
-        let drag_btn_resp = ui.interact(
-            btn_drag_rect,
-            egui::Id::new("sheet_roi_drag_mode_btn"),
-            egui::Sense::click(),
-        );
-        if drag_btn_resp.clicked() {
-            state.roi_drag_mode = !state.roi_drag_mode;
-        }
-        hp.rect_filled(
-            btn_drag_rect,
-            4.0,
-            if state.roi_drag_mode { terra } else { wash },
-        );
-        hp.rect_stroke(
-            btn_drag_rect,
-            4.0,
-            egui::Stroke::new(1.0_f32, if state.roi_drag_mode { terra } else { border }),
-            egui::StrokeKind::Inside,
-        );
-        hp.text(
-            btn_drag_rect.center(),
-            egui::Align2::CENTER_CENTER,
-            if state.roi_drag_mode {
-                "● 탁본영역 드래그중"
-            } else {
-                "⬚ 탁본영역 드래그"
-            },
-            egui::FontId::proportional(11.0),
-            if state.roi_drag_mode { paper } else { ink },
-        );
-
-        let btn_win_rect = egui::Rect::from_min_size(
-            egui::pos2(badge_rect.left() - 122.0, header_rect.center().y - 11.0),
-            egui::vec2(114.0, 22.0),
-        );
-        let win_btn_resp = ui.interact(
-            btn_win_rect,
-            egui::Id::new("sheet_roi_window_btn"),
-            egui::Sense::click(),
-        );
-        if win_btn_resp.clicked() {
-            state.show_roi_rubbing_window = !state.show_roi_rubbing_window;
-        }
-        hp.rect_filled(
-            btn_win_rect,
-            4.0,
-            if state.show_roi_rubbing_window { ink } else { wash },
-        );
-        hp.rect_stroke(
-            btn_win_rect,
-            4.0,
-            egui::Stroke::new(1.0_f32, border),
-            egui::StrokeKind::Inside,
-        );
-        hp.text(
-            btn_win_rect.center(),
-            egui::Align2::CENTER_CENTER,
-            "정밀 탁본창(농도)",
-            egui::FontId::proportional(11.0),
-            if state.show_roi_rubbing_window {
-                paper
-            } else {
-                ink
-            },
-        );
-
-        // 2. 상단 28px 정밀 치수 대장 띠 (Metric Ledger Strip, #F5F4ED Wash)
-        let (strip_rect, _) =
-            ui.allocate_exact_size(egui::vec2(avail.x, strip_h), egui::Sense::hover());
-        out_strip_rect = strip_rect;
-        let strip_painter = ui.painter_at(strip_rect);
-        strip_painter.rect_filled(strip_rect, 2.0, wash);
-        strip_painter.rect_stroke(
-            strip_rect,
-            2.0,
-            egui::Stroke::new(1.0_f32, border),
-            egui::StrokeKind::Inside,
-        );
-        strip_painter.text(
-            egui::pos2(strip_rect.left() + 12.0, strip_rect.center().y),
-            egui::Align2::LEFT_CENTER,
-            &report.metric_strip_summary,
-            egui::FontId::monospace(12.0),
-            ink,
-        );
-
-        // 3. 화면 전체(`sheet_rect` 100% Full-Bleed) 실제 고고학 실측 방안지 (1mm·5mm·10mm + 상/좌 cm 눈금자)
+        // Image 4 피드백 반영: 상단 도판 중복 머리줄(header_rect)·치수 띠(strip_rect)·표제란(tb_rect)을 모두 제거하고
+        // 화면 높이 100%(avail.y) 전체를 여백 없는 1mm·5mm·10mm 실측 방안지로 확장한다!
         let (sheet_rect, sheet_resp) = ui.allocate_exact_size(
             egui::vec2(avail.x, canvas_h),
             egui::Sense::click_and_drag(),
         );
+        out_header_rect = egui::Rect::from_min_size(sheet_rect.min, egui::vec2(sheet_rect.width(), 0.0));
+        out_strip_rect = egui::Rect::from_min_size(sheet_rect.min, egui::vec2(sheet_rect.width(), 0.0));
         out_sheet_rect = sheet_rect;
 
         let spec = compute_full_bleed_graph_paper_spec(
@@ -1209,83 +1079,7 @@ pub fn render_sheet_pane_egui(
             );
         }
 
-        // 3-E. 문화재청 발굴조사보고서 도판 상단 표제란(Title Block) & 정밀 치수 화살표 보조선 (`media_1793488638383_24317f2d.jpg` 1:1 구현)
-        let (left_cell, center_title, center_sub, right_cell) =
-            build_chs_plate_title_block(&plate.title, plate.mode.label_kr(), report);
-        let tb_rect = egui::Rect::from_min_max(
-            egui::pos2(sheet_rect.left() + 26.0, sheet_rect.top() + 20.0),
-            egui::pos2(sheet_rect.right() - 4.0, sheet_rect.top() + 54.0),
-        );
-        paper_painter.rect_filled(
-            tb_rect,
-            0.0,
-            egui::Color32::from_rgba_unmultiplied(250, 249, 245, 236),
-        );
-        paper_painter.rect_stroke(
-            tb_rect,
-            0.0,
-            egui::Stroke::new(1.2_f32, ink),
-            egui::StrokeKind::Inside,
-        );
-        let col1_x = tb_rect.left() + tb_rect.width() * 0.25;
-        let col2_x = tb_rect.left() + tb_rect.width() * 0.72;
-        paper_painter.line_segment(
-            [
-                egui::pos2(col1_x, tb_rect.top()),
-                egui::pos2(col1_x, tb_rect.bottom()),
-            ],
-            egui::Stroke::new(1.0_f32, ink),
-        );
-        paper_painter.line_segment(
-            [
-                egui::pos2(col2_x, tb_rect.top()),
-                egui::pos2(col2_x, tb_rect.bottom()),
-            ],
-            egui::Stroke::new(1.0_f32, ink),
-        );
-        paper_painter.line_segment(
-            [
-                egui::pos2(col2_x, tb_rect.center().y),
-                egui::pos2(tb_rect.right(), tb_rect.center().y),
-            ],
-            egui::Stroke::new(0.8_f32, border),
-        );
-        paper_painter.text(
-            egui::pos2(tb_rect.left() + 8.0, tb_rect.center().y),
-            egui::Align2::LEFT_CENTER,
-            &left_cell,
-            egui::FontId::proportional(10.5),
-            ink,
-        );
-        paper_painter.text(
-            egui::pos2((col1_x + col2_x) * 0.5, tb_rect.top() + 10.0),
-            egui::Align2::CENTER_CENTER,
-            &center_title,
-            egui::FontId::proportional(11.5),
-            ink,
-        );
-        paper_painter.text(
-            egui::pos2((col1_x + col2_x) * 0.5, tb_rect.bottom() - 9.0),
-            egui::Align2::CENTER_CENTER,
-            &center_sub,
-            egui::FontId::proportional(9.5),
-            muted,
-        );
-        paper_painter.text(
-            egui::pos2(col2_x + 8.0, tb_rect.top() + 8.5),
-            egui::Align2::LEFT_CENTER,
-            format!("유구·유물 : {}", plate.title),
-            egui::FontId::proportional(9.5),
-            ink,
-        );
-        paper_painter.text(
-            egui::pos2(col2_x + 8.0, tb_rect.bottom() - 8.5),
-            egui::Align2::LEFT_CENTER,
-            &right_cell,
-            egui::FontId::proportional(9.5),
-            ink,
-        );
-
+        // 3-E. Image 4 피드백 반영: 상단 도판 표제란(tb_rect) 테이블 제거
         // 유물 외곽 구경/복원 구역 수평 치수선(◀─── 복원 구역 / 구경 ───▶) 및 기고/높이 수직 치수선(▲ │ 높이 │ ▼)
         if let Some(first_reg) = plate.raster_regions.first() {
             let rx0 = origin_x + (first_reg.rect_mm[0].min(first_reg.rect_mm[2]) as f32) * scale;
@@ -1294,7 +1088,7 @@ pub fn render_sheet_pane_egui(
             let ry_bot = origin_y - (first_reg.rect_mm[1].min(first_reg.rect_mm[3]) as f32) * scale;
 
             // (a) 상단 수평 복원 구역·구경 화살표 치수선
-            let dim_y = (ry_top - 16.0).max(tb_rect.bottom() + 12.0);
+            let dim_y = (ry_top - 16.0).max(sheet_rect.top() + 26.0);
             paper_painter.line_segment(
                 [egui::pos2(rx0, ry_top - 2.0), egui::pos2(rx0, dim_y - 4.0)],
                 egui::Stroke::new(0.8_f32, muted),
