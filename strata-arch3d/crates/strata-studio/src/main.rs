@@ -230,6 +230,8 @@ pub struct StrataStudioApp {
     rubbing_params: RubbingRenderParams,
     flip_exterior_right: bool,
     sheet_full_tab_mode: bool,
+    /// Image 5 ("중간선은 사용자가 칸을 좌우로 늘일수있게하라"): 좌측 3D 뷰와 우측 2D 도판의 폭 비율 (`0.18 ..= 0.62`, 기본 `0.30`)
+    split_left_ratio: f32,
     show_mm_grid: bool,
     pose_locked: bool,
     detected_gpus: Vec<HardwareGpuAdapterInfo>,
@@ -333,6 +335,7 @@ impl StrataStudioApp {
             rubbing_params: RubbingRenderParams::default(),
             flip_exterior_right: false,
             sheet_full_tab_mode: false,
+            split_left_ratio: 0.30,
             show_mm_grid: true,
             pose_locked: true,
             detected_gpus,
@@ -910,10 +913,14 @@ impl eframe::App for StrataStudioApp {
 
                 if let Some(slot) = self.slots.get_mut(self.selected_slot_idx) {
                     let avail_h = ui.available_height().max(200.0);
+                    let total_w = ui.available_width().max(560.0);
+                    let _ = geom.view3d_w;
+                    let view3d_w = (total_w * self.split_left_ratio).clamp(240.0, total_w - 320.0);
                     ui.horizontal_top(|ui| {
+                        ui.spacing_mut().item_spacing.x = 0.0;
                         if !self.sheet_full_tab_mode {
                             ui.allocate_ui_with_layout(
-                                egui::vec2(geom.view3d_w, avail_h),
+                                egui::vec2(view3d_w, avail_h),
                                 egui::Layout::top_down(egui::Align::Min),
                                 |ui| {
                                     render_view3d_pane_egui(
@@ -926,7 +933,50 @@ impl eframe::App for StrataStudioApp {
                                     );
                                 },
                             );
-                            ui.add_space(6.0);
+
+                            // Image 5 ("중간선은 사용자가 칸을 좌우로 늘일수있게하라"):
+                            // 좌측 3D 뷰와 우측 2D 도판 사이의 중간 분할선(Splitter)을 드래그하여 좌우 폭을 자유롭게 조절!
+                            let (splitter_rect, splitter_resp) = ui.allocate_exact_size(
+                                egui::vec2(8.0, avail_h),
+                                egui::Sense::click_and_drag(),
+                            );
+                            if splitter_resp.hovered() || splitter_resp.dragged() {
+                                ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+                            }
+                            if splitter_resp.dragged() {
+                                let next_w = view3d_w + splitter_resp.drag_delta().x;
+                                self.split_left_ratio = (next_w / total_w).clamp(0.18, 0.62);
+                            }
+                            if splitter_resp.double_clicked() {
+                                self.split_left_ratio = 0.30;
+                            }
+                            let sp = ui.painter_at(splitter_rect);
+                            let sp_active = splitter_resp.hovered() || splitter_resp.dragged();
+                            sp.rect_filled(
+                                splitter_rect,
+                                2.0,
+                                if sp_active { clay_wash } else { wash },
+                            );
+                            sp.line_segment(
+                                [
+                                    egui::pos2(splitter_rect.center().x, splitter_rect.top() + 4.0),
+                                    egui::pos2(splitter_rect.center().x, splitter_rect.bottom() - 4.0),
+                                ],
+                                egui::Stroke::new(
+                                    if sp_active { 2.0_f32 } else { 1.2_f32 },
+                                    if sp_active { terra } else { edge_col },
+                                ),
+                            );
+                            // 중앙 그립 핸들 표시
+                            let grip_rect = egui::Rect::from_center_size(
+                                splitter_rect.center(),
+                                egui::vec2(6.0, 44.0),
+                            );
+                            sp.rect_filled(
+                                grip_rect,
+                                3.0,
+                                if sp_active { terra } else { edge_col },
+                            );
                         }
                         let sheet_w = ui.available_width().max(240.0);
                         // 병목 제거: 3D 뷰포트 마우스 드래그 중(is_interacting == true)에는
@@ -953,17 +1003,18 @@ impl eframe::App for StrataStudioApp {
                             },
                         );
                     });
-                    // 마우스 드래그가 끝났거나 5대 휠(회전·앞뒤·좌우기울기·상하회전·내부수평) 및 추가단면 조작 시 2D 실측 단면 도판을 즉시 100% 동기화 재계산
-                    if !self.view3d_state.is_interacting
-                        && ((self.view3d_state.active_section_angle_deg - self.last_rebuilt_angle_deg).abs() > 1e-4
+                    // Image 2: 수평횡단면 그리기 휠(top_cut_z_mm) 및 5대 휠/뒤집기 조작 시 드래그 중에도 즉시 2D 실측 단면·수평횡단면 도판을 실시간 갱신!
+                    let top_z_changed =
+                        (self.view3d_state.top_cut_z_mm - self.last_rebuilt_top_z_mm).abs() > 1e-4;
+                    let pose_changed =
+                        (self.view3d_state.active_section_angle_deg - self.last_rebuilt_angle_deg).abs() > 1e-4
                             || (self.view3d_state.cut_y_mm - self.last_rebuilt_cut_y_mm).abs() > 1e-4
-                            || (self.view3d_state.top_cut_z_mm - self.last_rebuilt_top_z_mm).abs() > 1e-4
                             || (self.view3d_state.tilt_deg - self.last_rebuilt_tilt_deg).abs() > 1e-4
                             || (self.view3d_state.roll_deg - self.last_rebuilt_roll_deg).abs() > 1e-4
                             || (self.view3d_state.inner_level_deg - self.last_rebuilt_inner_level_deg).abs() > 1e-4
                             || (self.view3d_state.artifact_offset_x_mm - self.last_rebuilt_offset_x_mm).abs() > 1e-4
-                            || self.view3d_state.custom_section_line_mm != self.last_rebuilt_custom_line)
-                    {
+                            || self.view3d_state.custom_section_line_mm != self.last_rebuilt_custom_line;
+                    if top_z_changed || (!self.view3d_state.is_interacting && pose_changed) {
                         slot.rebuild_plate(
                             self.flip_exterior_right,
                             &self.view3d_state,

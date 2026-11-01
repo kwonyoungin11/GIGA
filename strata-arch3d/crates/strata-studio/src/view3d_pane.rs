@@ -407,14 +407,16 @@ impl View3DPaneState {
                 self.cut_y_mm = ((hundredths as f64) / 100.0).clamp(-150.0, 150.0);
             }
             PrecisionWheelKind::RightTiltLeftRight => {
-                // Image 3: 유물 좌우 기울기 미세조정 휠 (roll_deg, 0.1° 단위)
+                // Image 3: 유물 좌우 기울기 미세조정 휠 (roll_deg, 0.1° 단위, 90°/180° 뒤집기 호환 전방향 지원)
                 let tenths = (self.roll_deg * 10.0).round() as i64 + i64::from(steps);
-                self.roll_deg = ((tenths as f64) / 10.0).clamp(-30.0, 30.0);
+                let deg = (tenths as f64) / 10.0;
+                self.roll_deg = ((deg + 180.0).rem_euclid(360.0)) - 180.0;
             }
             PrecisionWheelKind::LeftPitchUpDown => {
                 // Image 4: 유물의 아래위를 회전하는 휠 — 올리면(+steps) 위로 회전(+tilt_deg), 내리면(-steps) 아래로 회전(-tilt_deg)
                 let tenths = (self.tilt_deg * 10.0).round() as i64 + i64::from(steps);
-                self.tilt_deg = ((tenths as f64) / 10.0).clamp(-30.0, 30.0);
+                let deg = (tenths as f64) / 10.0;
+                self.tilt_deg = ((deg + 180.0).rem_euclid(360.0)) - 180.0;
             }
             PrecisionWheelKind::InnerHorizontalLevel => {
                 // <USER_REQUEST>: 상하좌우 안쪽 제5휠 — 수평이 안 맞을 때 단면선과 잘린 면을 일치시키는 미세 수평정합 휠 (0.05° 단위)
@@ -528,6 +530,30 @@ impl View3DPaneState {
         self.inner_level_deg = 0.0;
         self.yaw_deg = 0.0;
         self.pitch_deg = 0.0;
+    }
+
+    /// Image 6: 뒤집힌 유물을 앞으로 90° 연속 뒤집기 (`0° -> 90° -> 180° -> -90° -> 0°`)
+    pub fn flip_artifact_forward_90(&mut self) {
+        let next = self.tilt_deg + 90.0;
+        self.tilt_deg = (((next + 180.0).rem_euclid(360.0) - 180.0) * 10.0).round() / 10.0;
+    }
+
+    /// Image 6: 거꾸로 스캔된 유물을 상하 180° 즉시 뒤집기 (`tilt_deg += 180°`)
+    pub fn flip_artifact_upside_down_180(&mut self) {
+        let next = self.tilt_deg + 180.0;
+        self.tilt_deg = (((next + 180.0).rem_euclid(360.0) - 180.0) * 10.0).round() / 10.0;
+    }
+
+    /// Image 6: 유물을 시계방향으로 90° 회전 (`ψ += 90°`)
+    pub fn rotate_artifact_yaw_90(&mut self) {
+        self.active_section_angle_deg =
+            (((self.active_section_angle_deg + 90.0) * 10.0).round() / 10.0).rem_euclid(360.0);
+    }
+
+    /// Image 6: 유물을 측면으로 90° 뒤집기 (`roll_deg += 90°`)
+    pub fn flip_artifact_roll_90(&mut self) {
+        let next = self.roll_deg + 90.0;
+        self.roll_deg = (((next + 180.0).rem_euclid(360.0) - 180.0) * 10.0).round() / 10.0;
     }
 }
 
@@ -1968,8 +1994,9 @@ pub fn render_view3d_pane_egui(
         let dial_horiz_w = (rect.width() * 0.44).clamp(148.0, 196.0);
         let dial_horiz_h = 20.0_f32;
         // Image 1: 상단 가로 휠 (유물이 시계방향·반시계방향으로 회전하는 휠, 휠 아래 설명)
+        // Image 6 유물 뒤집기(90°/180°) 버튼 행 아래쪽에 여유 있게 배치!
         let top_dial_rect = egui::Rect::from_center_size(
-            egui::pos2(rect.center().x, rect.top() + 62.0),
+            egui::pos2(rect.center().x, rect.top() + 82.0),
             egui::vec2(dial_horiz_w, dial_horiz_h),
         );
         // <USER_REQUEST>: 상하좌우 휠 안쪽에 수평·단면 미세정합 제5휠 추가!
@@ -2022,49 +2049,49 @@ pub fn render_view3d_pane_egui(
             egui::Sense::click_and_drag(),
         );
 
-        // Image 1: 상단 가로 휠 -> 유물 시계(+)/반시계(-) 회전 (0.1°)
+        // Image 1: 상단 가로 휠 -> 유물 시계(+)/반시계(-) 회전 (0.1°, Image 3 감도 +30% 향상: * 0.65)
         if top_dial_resp.clicked() {
             state.apply_precision_wheel(PrecisionWheelKind::TopTurnCwCcw, 1);
         } else if top_dial_resp.dragged() {
-            let steps = (top_dial_resp.drag_delta().x / 2.0).round() as i32;
+            let steps = (top_dial_resp.drag_delta().x * 0.65).round() as i32;
             if steps != 0 {
                 state.apply_precision_wheel(PrecisionWheelKind::TopTurnCwCcw, steps);
             }
         }
-        // Image 2: 하단 가로 휠 -> 유물·단면선 앞뒤 미세조정 (0.01mm)
+        // Image 2: 하단 가로 휠 -> 유물·단면선 앞뒤 미세조정 (0.01mm, Image 3 감도 +30% 향상: * 0.65)
         if bot_dial_resp.clicked() {
             state.apply_precision_wheel(PrecisionWheelKind::BottomSectionFrontBack, 1);
         } else if bot_dial_resp.dragged() {
-            let steps = (bot_dial_resp.drag_delta().x / 2.0).round() as i32;
+            let steps = (bot_dial_resp.drag_delta().x * 0.65).round() as i32;
             if steps != 0 {
                 state.apply_precision_wheel(PrecisionWheelKind::BottomSectionFrontBack, steps);
             }
         }
-        // Image 4: 좌측 세로 휠 -> 올리면(drag_delta.y < 0) 위로 회전(+steps), 내리면(drag_delta.y > 0) 아래로 회전(-steps)
+        // Image 4: 좌측 세로 휠 -> 올리면(drag_delta.y < 0) 위로 회전(+steps), 내리면(drag_delta.y > 0) 아래로 회전(-steps) (+30% 감도)
         if left_dial_resp.clicked() {
             state.apply_precision_wheel(PrecisionWheelKind::LeftPitchUpDown, 1);
         } else if left_dial_resp.dragged() {
-            let steps = (-left_dial_resp.drag_delta().y / 2.0).round() as i32;
+            let steps = (-left_dial_resp.drag_delta().y * 0.65).round() as i32;
             if steps != 0 {
                 state.apply_precision_wheel(PrecisionWheelKind::LeftPitchUpDown, steps);
             }
         }
-        // Image 3: 우측 세로 휠 -> 유물 좌우 기울기 미세조정 (0.1°)
+        // Image 3: 우측 세로 휠 -> 유물 좌우 기울기 미세조정 (0.1°, +30% 감도)
         if right_dial_resp.clicked() {
             state.apply_precision_wheel(PrecisionWheelKind::RightTiltLeftRight, 1);
         } else if right_dial_resp.dragged() {
-            let steps = (-right_dial_resp.drag_delta().y / 2.0).round() as i32;
+            let steps = (-right_dial_resp.drag_delta().y * 0.65).round() as i32;
             if steps != 0 {
                 state.apply_precision_wheel(PrecisionWheelKind::RightTiltLeftRight, steps);
             }
         }
-        // Image 0: 안쪽 제5휠 -> 수평횡단면을 그리는 휠 (선만 상하이동, 0.1mm 단위)
+        // Image 0: 안쪽 제5휠 -> 수평횡단면을 그리는 휠 (선만 상하이동, 0.1mm 단위, +30% 감도)
         if inner_dial_resp.clicked() {
             state.apply_precision_wheel(PrecisionWheelKind::InnerHorizSectionZ, 5);
         } else if inner_dial_resp.dragged() {
             let d = inner_dial_resp.drag_delta();
             let raw = if d.x.abs() >= d.y.abs() { d.x } else { -d.y };
-            let steps = (raw / 2.0).round() as i32;
+            let steps = (raw * 0.65).round() as i32;
             if steps != 0 {
                 state.apply_precision_wheel(PrecisionWheelKind::InnerHorizSectionZ, steps);
                 state.top_cut_z_mm = state
@@ -2370,7 +2397,7 @@ pub fn render_view3d_pane_egui(
             inner_lbl_rect.center(),
             egui::Align2::CENTER_CENTER,
             format!(
-                "⇕ 수평횡단면 그리기 휠 (Z={:.1}mm · 선만 상하이동)",
+                "↕ 수평횡단면 그리기 휠 (Z={:.1}mm · 선만 상하이동)",
                 state.top_cut_z_mm
             ),
             egui::FontId::proportional(9.0),
@@ -2636,6 +2663,70 @@ pub fn render_view3d_pane_egui(
                 if is_accent { clay_ink } else { ink },
             );
             chip_x += cw + 3.0;
+        }
+
+        // =========================================================================================
+        // Image 6 ("여기 이자리에 유물 뒤집기 90도 180도 회전을 할수있는 버튼을 만들라 뒤집횐 유물이있을수있다.")
+        // 직상방 동심원 뷰 바로 아래 / 수평 정면 입면 상단 자리에 유물 90° 앞으로뒤집기 · 180° 상하뒤집기 · 90° 수평회전 · 측면뒤집기 버튼 배치!
+        // =========================================================================================
+        let flip_row_y = rect.top() + 48.0;
+        let mut flip_x = rect.left() + 6.0;
+        let flip_buttons = [
+            ("v3d_flip_fwd_90", "↻ 유물 90° 앞으로뒤집기", 116.0_f32, 0u8),
+            ("v3d_flip_ud_180", "↕ 유물 180° 상하뒤집기", 114.0_f32, 1u8),
+            ("v3d_rot_yaw_90", "↻ 90° 수평회전", 82.0_f32, 2u8),
+            ("v3d_flip_roll_90", "↔ 90° 측면뒤집기", 92.0_f32, 3u8),
+        ];
+        for (fid, flabel, fw, fkind) in flip_buttons {
+            let f_rect =
+                egui::Rect::from_min_size(egui::pos2(flip_x, flip_row_y), egui::vec2(fw, 20.0));
+            let f_resp = ui.interact(f_rect, egui::Id::new(fid), egui::Sense::click());
+            if f_resp.clicked() {
+                match fkind {
+                    0 => state.flip_artifact_forward_90(),
+                    1 => state.flip_artifact_upside_down_180(),
+                    2 => state.rotate_artifact_yaw_90(),
+                    _ => state.flip_artifact_roll_90(),
+                }
+            }
+            let is_flipped_active = (fkind == 0 || fkind == 1) && state.tilt_deg.abs() >= 45.0
+                || (fkind == 3 && state.roll_deg.abs() >= 45.0);
+            painter.rect_filled(
+                f_rect,
+                3.5,
+                if is_flipped_active {
+                    profile_red
+                } else if f_resp.hovered() {
+                    clay_wash
+                } else {
+                    egui::Color32::from_rgb(244, 238, 228)
+                },
+            );
+            painter.rect_stroke(
+                f_rect,
+                3.5,
+                egui::Stroke::new(
+                    1.1_f32,
+                    if is_flipped_active || f_resp.hovered() {
+                        profile_red
+                    } else {
+                        terra
+                    },
+                ),
+                egui::StrokeKind::Inside,
+            );
+            painter.text(
+                f_rect.center(),
+                egui::Align2::CENTER_CENTER,
+                flabel,
+                egui::FontId::proportional(8.8),
+                if is_flipped_active {
+                    egui::Color32::WHITE
+                } else {
+                    clay_ink
+                },
+            );
+            flip_x += fw + 3.0;
         }
 
         let _ = muted;

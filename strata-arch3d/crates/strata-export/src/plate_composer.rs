@@ -308,6 +308,138 @@ fn clip_polygon_half_plane_x(poly: &[[f64; 2]], keep_positive_x: bool) -> Vec<[f
     out
 }
 
+type MeasuredHorizSectionContours = (Vec<[f64; 2]>, Vec<[f64; 2]>, Vec<[f64; 2]>, f64);
+
+/// 수평 절단면(`PlaneSliceResult`)의 실제 3D 메쉬 교차 점군(`polylines_2d` + `segments_2d`)으로부터
+/// 72방위각(5° 간격) 실제 외벽 윤곽선(`outer_contour`), 실제 내벽 윤곽선(`inner_contour`),
+/// 우측 반단면 폐합 폴리곤(`right_half_poly`), 그리고 최대 반경(`max_r`)을 추출한다 (`Image 2`).
+fn extract_measured_horizontal_section_contours(
+    hsec: &PlaneSliceResult,
+    wall_t: f64,
+    fallback_r: f64,
+) -> MeasuredHorizSectionContours {
+    const N_BINS: usize = 72;
+    let mut all_pts: Vec<[f64; 2]> = hsec.polylines_2d.iter().flatten().copied().collect();
+    for seg in &hsec.segments_2d {
+        all_pts.push(seg[0]);
+        all_pts.push(seg[1]);
+    }
+
+    if all_pts.len() < 6 {
+        let ro = fallback_r.max(10.0);
+        let ri = (ro - wall_t).max(6.0);
+        let mut outer = Vec::with_capacity(N_BINS);
+        let mut inner = Vec::with_capacity(N_BINS);
+        for k in 0..N_BINS {
+            let a = -std::f64::consts::PI + (k as f64) * std::f64::consts::TAU / (N_BINS as f64);
+            outer.push([ro * a.cos(), ro * a.sin()]);
+            inner.push([ri * a.cos(), ri * a.sin()]);
+        }
+        let mut rpoly = Vec::with_capacity(38);
+        for step in 0..=18 {
+            let a = -std::f64::consts::FRAC_PI_2 + (step as f64) * std::f64::consts::PI / 18.0;
+            rpoly.push([ro * a.cos(), ro * a.sin()]);
+        }
+        for step in (0..=18).rev() {
+            let a = -std::f64::consts::FRAC_PI_2 + (step as f64) * std::f64::consts::PI / 18.0;
+            rpoly.push([ri * a.cos(), ri * a.sin()]);
+        }
+        return (outer, inner, rpoly, ro);
+    }
+
+    let mut bin_max_r = [0.0_f64; N_BINS];
+    let mut bin_min_r = [f64::INFINITY; N_BINS];
+    let mut bin_has = [false; N_BINS];
+
+    for p in &all_pts {
+        let r = p[0].hypot(p[1]);
+        if r < 1.0 || !r.is_finite() {
+            continue;
+        }
+        let ang = p[1].atan2(p[0]); // [-pi, pi]
+        let norm = ((ang + std::f64::consts::PI) / std::f64::consts::TAU).clamp(0.0, 0.999_999);
+        let bi = (norm * (N_BINS as f64)) as usize;
+        bin_has[bi] = true;
+        if r > bin_max_r[bi] {
+            bin_max_r[bi] = r;
+        }
+        if r < bin_min_r[bi] {
+            bin_min_r[bi] = r;
+        }
+    }
+
+    // 인접 빈(±3 섹터) 보간으로 미세 삼각형 틈새 연결 및 실제 비대칭·타원 형상 100% 보존
+    let mut smooth_out_r = [0.0_f64; N_BINS];
+    let mut smooth_in_r = [0.0_f64; N_BINS];
+    let mut smooth_valid = [false; N_BINS];
+    let mut global_max_r = 10.0_f64;
+
+    for k in 0..N_BINS {
+        let mut sum_o = 0.0;
+        let mut sum_i = 0.0;
+        let mut w_sum = 0.0;
+        for d in -2isize..=2isize {
+            let nk = ((k as isize + d).rem_euclid(N_BINS as isize)) as usize;
+            if bin_has[nk] {
+                let w = match d.abs() {
+                    0 => 1.0,
+                    1 => 0.65,
+                    _ => 0.35,
+                };
+                let ro = bin_max_r[nk];
+                let ri = if (ro - bin_min_r[nk]) >= 1.2 {
+                    bin_min_r[nk].max((ro - wall_t * 1.8).max(2.0))
+                } else {
+                    (ro - wall_t).max(2.0)
+                };
+                sum_o += ro * w;
+                sum_i += ri * w;
+                w_sum += w;
+            }
+        }
+        if w_sum > 0.0 {
+            let ro = sum_o / w_sum;
+            let ri = (sum_i / w_sum).clamp(1.5, (ro - 1.2).max(1.5));
+            smooth_out_r[k] = ro;
+            smooth_in_r[k] = ri;
+            smooth_valid[k] = true;
+            if ro > global_max_r {
+                global_max_r = ro;
+            }
+        }
+    }
+
+    let mut outer_pts = Vec::with_capacity(N_BINS);
+    let mut inner_pts = Vec::with_capacity(N_BINS);
+    let mut right_outer = Vec::new();
+    let mut right_inner = Vec::new();
+
+    for k in 0..N_BINS {
+        if !smooth_valid[k] {
+            continue;
+        }
+        let a = -std::f64::consts::PI
+            + ((k as f64) + 0.5) * std::f64::consts::TAU / (N_BINS as f64);
+        let (sin_a, cos_a) = a.sin_cos();
+        let po = [ smooth_out_r[k] * cos_a, smooth_out_r[k] * sin_a ];
+        let pi = [ smooth_in_r[k] * cos_a, smooth_in_r[k] * sin_a ];
+        outer_pts.push(po);
+        inner_pts.push(pi);
+        if cos_a >= -0.02 {
+            right_outer.push(po);
+            right_inner.push(pi);
+        }
+    }
+
+    let mut right_half_poly = Vec::with_capacity(right_outer.len() + right_inner.len());
+    right_half_poly.extend_from_slice(&right_outer);
+    for pt in right_inner.into_iter().rev() {
+        right_half_poly.push(pt);
+    }
+
+    (outer_pts, inner_pts, right_half_poly, global_max_r)
+}
+
 /// 실측치(`ArtifactMeasurementReport`)와 단면 윤곽(`PlaneSliceResult`)으로부터 8대 유물군 맞춤형 2D 도판을 합성한다.
 pub fn compose_archaeological_plate(input: &PlateComposeInput<'_>) -> ComposedPlate2D {
     let m = input.measurements;
@@ -326,7 +458,8 @@ pub fn compose_archaeological_plate(input: &PlateComposeInput<'_>) -> ComposedPl
     let margin = 22.0;
 
     let (canvas_width_mm, canvas_height_mm) = match mode {
-        PlateLayoutMode::CompleteVesselStandard => (
+        PlateLayoutMode::CompleteVesselStandard
+        | PlateLayoutMode::RimOrBaseSherdReconstructed => (
             (max_d * 2.45 + margin * 2.0).max(210.0),
             (height + max_d + margin * 3.1).max(236.0),
         ),
@@ -348,9 +481,10 @@ pub fn compose_archaeological_plate(input: &PlateComposeInput<'_>) -> ComposedPl
     let mut callouts = Vec::new();
     let mut raster_regions = Vec::new();
 
-    // 완형 토기 도판은 좌중간에 정면(좌 외면·우 단면)을 두고 위쪽에 수평 횡단면(Top Cut Z), 우측에 외저면·1:1 부분 탁본을 배치
+    // 완형 토기 및 구연·저부 복원 도판은 좌측 열에 평·단면도를 두고 우측 열에 1:1 정밀 탁본 및 수평 횡단면을 배치하여 용지 내부에 100% 수납
     let cx = match mode {
-        PlateLayoutMode::CompleteVesselStandard => margin + max_d * 0.56,
+        PlateLayoutMode::CompleteVesselStandard
+        | PlateLayoutMode::RimOrBaseSherdReconstructed => margin + max_d * 0.56,
         _ => canvas_width_mm * 0.5,
     };
     let base_y = margin + 15.0;
@@ -513,11 +647,12 @@ pub fn compose_archaeological_plate(input: &PlateComposeInput<'_>) -> ComposedPl
                 });
             }
 
-            // (b) 외면 쪽 반평면(`x * section_sign <= 0`)으로 클리핑하여 외면 입면 윤곽선 생성 (채움 없음, 내부에 정밀 탁본 래스터 합성)
+            // (b) 외면 쪽 반평면(`x * section_sign <= 0`)으로 클리핑하여 외면 입면 윤곽선 및 입면 구조선 생성 (Image 0: 일러스트 편집용 순수 벡터 평·단면 선화)
             let ext_half = clip_polygon_half_plane_x(&norm_poly, !keep_positive_x);
             if ext_half.len() >= 2 {
+                // 외면 최외곽 프로필만 추출하여 내부 단면선이 입면 쪽에 중복되지 않게 정렬
                 let mapped_ext: Vec<[f64; 2]> = ext_half
-                    .into_iter()
+                    .iter()
                     .map(|pt| [cx + pt[0], base_y + pt[1]])
                     .collect();
                 paths.push(PlatePathElement {
@@ -529,6 +664,36 @@ pub fn compose_archaeological_plate(input: &PlateComposeInput<'_>) -> ComposedPl
                     dash_pattern_mm: None,
                     fill_hex: None,
                 });
+
+                // 일러스트레이터 표준 입면 구조선 (구연단선·동체 굴곡선·굽 접합선: 좌측 외곽선에서 중심축 cx까지 수평 실선 연결)
+                for z_frac in [0.93_f64, 0.32_f64, 0.09_f64] {
+                    let target_z = height * z_frac;
+                    if let Some(best_pt) = ext_half
+                        .iter()
+                        .filter(|p| p[0].abs() > 3.0)
+                        .min_by(|a, b| {
+                            (a[1] - target_z)
+                                .abs()
+                                .partial_cmp(&(b[1] - target_z).abs())
+                                .unwrap_or(std::cmp::Ordering::Equal)
+                        })
+                    {
+                        if (best_pt[1] - target_z).abs() < height * 0.12 {
+                            paths.push(PlatePathElement {
+                                layer_id: String::from("외곽선_입면구조선"),
+                                points_mm: vec![
+                                    [cx + best_pt[0], base_y + best_pt[1]],
+                                    [cx, base_y + best_pt[1]],
+                                ],
+                                closed: false,
+                                stroke_hex: String::from("#141413"),
+                                stroke_width_mm: 0.24,
+                                dash_pattern_mm: None,
+                                fill_hex: None,
+                            });
+                        }
+                    }
+                }
             }
         } else {
             // 단일 벽면 또는 반쪽 폴리라인인 경우: 두께(`wall_t`)를 부여하여 폐합 `#141413` 단면 폴리곤 생성
@@ -579,7 +744,7 @@ pub fn compose_archaeological_plate(input: &PlateComposeInput<'_>) -> ComposedPl
     let half_d = max_d * 0.5;
     match mode {
         PlateLayoutMode::CompleteVesselStandard => {
-            // (a) 1:1 정면 외면 반쪽 정밀 탁본 래스터
+            // (a) 좌하단: 1:1 정면 입·단면도 기준 영역 (Image 0: 일러스트 편집용 평·단면 벡터 선화 영역)
             let ext_sign = if input.flip_exterior_right { 1i8 } else { -1i8 };
             raster_regions.push(PlateRasterRegion {
                 kind: PlateRasterKind::FrontExteriorRubbing,
@@ -588,22 +753,12 @@ pub fn compose_archaeological_plate(input: &PlateComposeInput<'_>) -> ComposedPl
                 caption: String::from("1:1 정면 단면·입면도"),
             });
 
-            // (b) 1:1 평면도 (단면도 바로 위 동일 중심축 cx에 100% 1:1 반지름 half_d로 배치, 구경 치수선과 절대 겹치지 않도록 24mm 이격!)
+            // (b) 좌상단 (Image 0): 1:1 평면도 (일러스트 편집용 순수 벡터 평면 실측 선화: 구연 외경·내경, 내저원각, 굽 외경·접지경 동심 실선)
             let plan_r = half_d;
             let cx_plan = cx;
             let cy_plan = top_y + plan_r + 24.0;
+            let cx_right = cx + half_d + half_d * 0.94 + 22.0;
 
-            raster_regions.push(PlateRasterRegion {
-                kind: PlateRasterKind::BottomPlanRubbing,
-                rect_mm: [
-                    cx_plan - plan_r,
-                    cy_plan - plan_r,
-                    cx_plan + plan_r,
-                    cy_plan + plan_r,
-                ],
-                clip_half_sign: None,
-                caption: String::from("1:1 평면도 (상면·외저면 정밀 탁본)"),
-            });
             paths.push(PlatePathElement {
                 layer_id: String::from("외저면_십자선"),
                 points_mm: vec![
@@ -628,31 +783,85 @@ pub fn compose_archaeological_plate(input: &PlateComposeInput<'_>) -> ComposedPl
                 dash_pattern_mm: None,
                 fill_hex: None,
             });
-            // 1:1 평면도 외곽 원형 윤곽선 (1:1 실제 반지름 plan_r = half_d)
-            let mut plan_outer_ring = Vec::with_capacity(65);
-            for step in 0..=64 {
-                let a = (step as f64) * std::f64::consts::TAU / 64.0;
-                plan_outer_ring.push([cx_plan + plan_r * a.cos(), cy_plan + plan_r * a.sin()]);
+            // 1:1 평면도 외곽 원형 윤곽선 및 구연 내경·내저원각·굽 동심 벡터 실측선 (일러스트레이터 편집용!)
+            let base_r = (m.base_diameter_or_width_mm * 0.5).clamp(plan_r * 0.34, plan_r * 0.72);
+            for (r_ring, layer_name, width_mm) in [
+                (plan_r, "평면도_외곽윤곽선", 0.35),
+                ((plan_r - wall_t).max(6.0), "평면도_구연내경선", 0.28),
+                (base_r, "평면도_굽외경선", 0.26),
+                ((base_r - wall_t * 0.85).max(4.0), "평면도_내저원각선", 0.22),
+            ] {
+                let mut ring_pts = Vec::with_capacity(73);
+                for step in 0..=72 {
+                    let a = (step as f64) * std::f64::consts::TAU / 72.0;
+                    ring_pts.push([cx_plan + r_ring * a.cos(), cy_plan + r_ring * a.sin()]);
+                }
+                paths.push(PlatePathElement {
+                    layer_id: String::from(layer_name),
+                    points_mm: ring_pts,
+                    closed: true,
+                    stroke_hex: String::from("#141413"),
+                    stroke_width_mm: width_mm,
+                    dash_pattern_mm: None,
+                    fill_hex: None,
+                });
             }
-            paths.push(PlatePathElement {
-                layer_id: String::from("평면도_외곽윤곽선"),
-                points_mm: plan_outer_ring,
-                closed: true,
-                stroke_hex: String::from("#141413"),
-                stroke_width_mm: 0.32,
-                dash_pattern_mm: None,
-                fill_hex: None,
-            });
             callouts.push(PlateTextCallout {
                 layer_id: String::from("치수_축척막대"),
-                pos_mm: [cx_plan - 22.0, cy_plan + plan_r + 5.0],
+                pos_mm: [cx_plan - 24.0, cy_plan + plan_r + 5.5],
                 text: format!("1:1 평면도 (Ø{:.1}mm)", max_d),
                 font_size_pt: 8.5,
                 color_hex: String::from("#141413"),
             });
 
-            // (c) 우측: 1:1 수평 횡단면 도면 (수평횡단면 휠 Z 높이에 따라 실시간 1:1 단면 갱신)
-            let cx_hsec = cx + half_d + half_d * 0.88 + 18.0;
+            // (c) 우상단 (Image 1: "탁본은 여기에 1:1로 여기에 나타나게하라"): 1:1 정밀 탁본 전용 배치!
+            let cy_rub = cy_plan;
+            raster_regions.push(PlateRasterRegion {
+                kind: PlateRasterKind::BottomPlanRubbing,
+                rect_mm: [
+                    cx_right - plan_r,
+                    cy_rub - plan_r,
+                    cx_right + plan_r,
+                    cy_rub + plan_r,
+                ],
+                clip_half_sign: None,
+                caption: String::from("1:1 정밀 탁본"),
+            });
+            paths.push(PlatePathElement {
+                layer_id: String::from("탁본_십자선"),
+                points_mm: vec![
+                    [cx_right - plan_r * 1.05, cy_rub],
+                    [cx_right + plan_r * 1.05, cy_rub],
+                ],
+                closed: false,
+                stroke_hex: String::from("#5E5D59"),
+                stroke_width_mm: 0.18,
+                dash_pattern_mm: None,
+                fill_hex: None,
+            });
+            paths.push(PlatePathElement {
+                layer_id: String::from("탁본_십자선"),
+                points_mm: vec![
+                    [cx_right, cy_rub - plan_r * 1.05],
+                    [cx_right, cy_rub + plan_r * 1.05],
+                ],
+                closed: false,
+                stroke_hex: String::from("#5E5D59"),
+                stroke_width_mm: 0.18,
+                dash_pattern_mm: None,
+                fill_hex: None,
+            });
+            callouts.push(PlateTextCallout {
+                layer_id: String::from("치수_축척막대"),
+                pos_mm: [cx_right - 24.0, cy_rub + plan_r + 5.5],
+                text: format!("1:1 정밀 탁본 (Ø{:.1}mm)", max_d),
+                font_size_pt: 8.5,
+                color_hex: String::from("#141413"),
+            });
+
+            // (d) 우하단 (Image 2: "수평횡단면도 실제 그려지는걸로 그려서 나와야하지않나"):
+            // 실제 3D 메쉬의 Z 높이 수평 절단 폴리라인으로부터 실측 외벽·내벽·단면 윤곽선을 추출하여 제도!
+            let cx_hsec = cx_right;
             let cy_hsec = base_y + height * 0.52;
             if let Some(hsec) = input.horizontal_sections.first() {
                 let cut_z_rel = (hsec.offset_mm - z_offset).clamp(1.0, height - 1.0);
@@ -671,27 +880,14 @@ pub fn compose_archaeological_plate(input: &PlateComposeInput<'_>) -> ComposedPl
                     fill_hex: None,
                 });
 
-                let all_pts: Vec<[f64; 2]> =
-                    hsec.polylines_2d.iter().flatten().copied().collect();
-                let (r_outer, r_inner) = if all_pts.len() >= 8 {
-                    let mut radii: Vec<f64> =
-                        all_pts.iter().map(|p| p[0].hypot(p[1])).collect();
-                    radii.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-                    let ro = radii[(radii.len() * 4) / 5].clamp(6.0, half_d * 1.05);
-                    let ri = radii[radii.len() / 5]
-                        .clamp((ro - wall_t * 1.4).max(3.0), (ro - 1.8).max(3.0));
-                    (ro, ri)
-                } else {
-                    let ro = (half_d * 0.78).max(12.0);
-                    let ri = (ro - wall_t).max(8.0);
-                    (ro, ri)
-                };
+                let (outer_contour, inner_contour, right_half_poly, max_r) =
+                    extract_measured_horizontal_section_contours(hsec, wall_t, half_d * 0.78);
 
                 paths.push(PlatePathElement {
                     layer_id: String::from("횡단면_십자선"),
                     points_mm: vec![
-                        [cx_hsec - r_outer * 1.12, cy_hsec],
-                        [cx_hsec + r_outer * 1.12, cy_hsec],
+                        [cx_hsec - max_r * 1.12, cy_hsec],
+                        [cx_hsec + max_r * 1.12, cy_hsec],
                     ],
                     closed: false,
                     stroke_hex: String::from("#5E5D59"),
@@ -702,8 +898,8 @@ pub fn compose_archaeological_plate(input: &PlateComposeInput<'_>) -> ComposedPl
                 paths.push(PlatePathElement {
                     layer_id: String::from("횡단면_십자선"),
                     points_mm: vec![
-                        [cx_hsec, cy_hsec - r_outer * 1.12],
-                        [cx_hsec, cy_hsec + r_outer * 1.12],
+                        [cx_hsec, cy_hsec - max_r * 1.12],
+                        [cx_hsec, cy_hsec + max_r * 1.12],
                     ],
                     closed: false,
                     stroke_hex: String::from("#5E5D59"),
@@ -712,73 +908,86 @@ pub fn compose_archaeological_plate(input: &PlateComposeInput<'_>) -> ComposedPl
                     fill_hex: None,
                 });
 
-                // (b-2) 상단 1:1 평면도(cx_plan, cy_plan) 위에도 1:1 실제 크기로 수평 횡단면 외벽·내벽 윤곽선 중첩 표시
-                for (r_ring, layer_name) in [
-                    (r_outer, "횡단면_외벽윤곽선"),
-                    (r_inner, "횡단면_내벽윤곽선"),
+                // (b-2) 좌상단 1:1 평면도(cx_plan, cy_plan) 위에도 실제 메쉬 절단 외벽·내벽 윤곽선 중첩 표시
+                for (contour_pts, layer_name) in [
+                    (&outer_contour, "횡단면_외벽윤곽선"),
+                    (&inner_contour, "횡단면_내벽윤곽선"),
                 ] {
-                    let mut ring_top = Vec::with_capacity(65);
-                    for step in 0..=64 {
-                        let a = (step as f64) * std::f64::consts::TAU / 64.0;
-                        ring_top.push([cx_plan + r_ring * a.cos(), cy_plan + r_ring * a.sin()]);
+                    if contour_pts.len() >= 3 {
+                        let ring_top: Vec<[f64; 2]> = contour_pts
+                            .iter()
+                            .map(|p| [cx_plan + p[0], cy_plan + p[1]])
+                            .collect();
+                        paths.push(PlatePathElement {
+                            layer_id: String::from(layer_name),
+                            points_mm: ring_top,
+                            closed: true,
+                            stroke_hex: String::from("#B5573A"),
+                            stroke_width_mm: 0.28,
+                            dash_pattern_mm: Some((2.0, 1.2)),
+                            fill_hex: None,
+                        });
                     }
-                    paths.push(PlatePathElement {
-                        layer_id: String::from(layer_name),
-                        points_mm: ring_top,
-                        closed: true,
-                        stroke_hex: String::from("#B5573A"),
-                        stroke_width_mm: 0.28,
-                        dash_pattern_mm: Some((2.0, 1.2)),
-                        fill_hex: None,
-                    });
                 }
 
-                // 1:1 수평 횡단면 외벽·내벽 링 및 우측 반단면 먹물 채움
-                for (r_ring, layer_name) in [
-                    (r_outer, "횡단면_외벽윤곽선"),
-                    (r_inner, "횡단면_내벽윤곽선"),
+                // 우하단 1:1 수평 횡단면: 실제 3D 메쉬에서 절단된 원본 폴리라인(hsec.polylines_2d) 및 실측 외벽·내벽 윤곽선 제도!
+                for (contour_pts, layer_name) in [
+                    (&outer_contour, "횡단면_외벽윤곽선"),
+                    (&inner_contour, "횡단면_내벽윤곽선"),
                 ] {
-                    let mut ring = Vec::with_capacity(65);
-                    for step in 0..=64 {
-                        let a = (step as f64) * std::f64::consts::TAU / 64.0;
-                        ring.push([cx_hsec + r_ring * a.cos(), cy_hsec + r_ring * a.sin()]);
+                    if contour_pts.len() >= 3 {
+                        let ring: Vec<[f64; 2]> = contour_pts
+                            .iter()
+                            .map(|p| [cx_hsec + p[0], cy_hsec + p[1]])
+                            .collect();
+                        paths.push(PlatePathElement {
+                            layer_id: String::from(layer_name),
+                            points_mm: ring,
+                            closed: true,
+                            stroke_hex: String::from("#141413"),
+                            stroke_width_mm: 0.34,
+                            dash_pattern_mm: None,
+                            fill_hex: None,
+                        });
                     }
+                }
+                for raw_poly in &hsec.polylines_2d {
+                    if raw_poly.len() >= 3 {
+                        let pts: Vec<[f64; 2]> = raw_poly
+                            .iter()
+                            .map(|p| [cx_hsec + p[0], cy_hsec + p[1]])
+                            .collect();
+                        paths.push(PlatePathElement {
+                            layer_id: String::from("횡단면_실측윤곽선"),
+                            points_mm: pts,
+                            closed: false,
+                            stroke_hex: String::from("#B5573A"),
+                            stroke_width_mm: 0.24,
+                            dash_pattern_mm: None,
+                            fill_hex: None,
+                        });
+                    }
+                }
+                if right_half_poly.len() >= 6 {
+                    let mapped_rpoly: Vec<[f64; 2]> = right_half_poly
+                        .into_iter()
+                        .map(|p| [cx_hsec + p[0], cy_hsec + p[1]])
+                        .collect();
                     paths.push(PlatePathElement {
-                        layer_id: String::from(layer_name),
-                        points_mm: ring,
+                        layer_id: String::from("횡단면_단면_실선"),
+                        points_mm: mapped_rpoly,
                         closed: true,
                         stroke_hex: String::from("#141413"),
-                        stroke_width_mm: 0.32,
+                        stroke_width_mm: 0.36,
                         dash_pattern_mm: None,
-                        fill_hex: None,
+                        fill_hex: Some(String::from("#141413")),
                     });
                 }
-                // 우측 반원 링 단면 먹물 채움 (#141413)
-                let mut half_annulus = Vec::with_capacity(68);
-                for step in 0..=32 {
-                    let a = -std::f64::consts::FRAC_PI_2
-                        + (step as f64) * std::f64::consts::PI / 32.0;
-                    half_annulus.push([cx_hsec + r_outer * a.cos(), cy_hsec + r_outer * a.sin()]);
-                }
-                for step in (0..=32).rev() {
-                    let a = -std::f64::consts::FRAC_PI_2
-                        + (step as f64) * std::f64::consts::PI / 32.0;
-                    half_annulus.push([cx_hsec + r_inner * a.cos(), cy_hsec + r_inner * a.sin()]);
-                }
-                paths.push(PlatePathElement {
-                    layer_id: String::from("횡단면_단면_실선"),
-                    points_mm: half_annulus,
-                    closed: true,
-                    stroke_hex: String::from("#141413"),
-                    stroke_width_mm: 0.30,
-                    dash_pattern_mm: None,
-                    fill_hex: Some(String::from("#141413")),
-                });
 
                 callouts.push(PlateTextCallout {
                     layer_id: String::from("치수_축척막대"),
-                    pos_mm: [cx_hsec - r_outer * 0.85, cy_hsec + r_outer + 5.5],
-                    text: format!("1:1 수평 횡단면 (Z={:.1}mm)", cut_z_rel),
+                    pos_mm: [cx_hsec - max_r * 0.85, cy_hsec + max_r + 5.5],
+                    text: format!("1:1 수평 횡단면 (Z={:.1}mm · 실측단면)", cut_z_rel),
                     font_size_pt: 8.5,
                     color_hex: String::from("#B5573A"),
                 });
@@ -1051,22 +1260,14 @@ pub fn compose_archaeological_plate(input: &PlateComposeInput<'_>) -> ComposedPl
         }
     }
 
-    // 4-B. 모든 유물 모드에서 1:1 평면도(BottomPlanRubbing) 및 수평 횡단면 절단선이 빠지지 않도록 보장
+    // 4-B. 모든 유물 모드에서 좌상단 1:1 평면도(벡터 실측 선화), 우상단 1:1 정밀 탁본, 그리고 실측 수평 횡단면이 빠지지 않도록 보장
     if mode != PlateLayoutMode::CompleteVesselStandard {
         let plan_r = half_d.max(12.0);
         let cx_plan = cx;
         let cy_plan = top_y + plan_r + 24.0;
-        raster_regions.push(PlateRasterRegion {
-            kind: PlateRasterKind::BottomPlanRubbing,
-            rect_mm: [
-                cx_plan - plan_r,
-                cy_plan - plan_r,
-                cx_plan + plan_r,
-                cy_plan + plan_r,
-            ],
-            clip_half_sign: None,
-            caption: String::from("1:1 평면도 (상면·외저면 정밀 탁본)"),
-        });
+        let cx_right = cx + half_d + half_d * 0.94 + 22.0;
+
+        // 좌상단: 1:1 평면도 (일러스트레이터 편집용 벡터 실측 선화)
         paths.push(PlatePathElement {
             layer_id: String::from("외저면_십자선"),
             points_mm: vec![
@@ -1091,10 +1292,51 @@ pub fn compose_archaeological_plate(input: &PlateComposeInput<'_>) -> ComposedPl
             dash_pattern_mm: None,
             fill_hex: None,
         });
+        let base_r = (m.base_diameter_or_width_mm * 0.5).clamp(plan_r * 0.34, plan_r * 0.72);
+        for (r_ring, layer_name, width_mm) in [
+            (plan_r, "평면도_외곽윤곽선", 0.34),
+            ((plan_r - wall_t).max(6.0), "평면도_구연내경선", 0.26),
+            (base_r, "평면도_굽외경선", 0.24),
+        ] {
+            let mut ring_pts = Vec::with_capacity(73);
+            for step in 0..=72 {
+                let a = (step as f64) * std::f64::consts::TAU / 72.0;
+                ring_pts.push([cx_plan + r_ring * a.cos(), cy_plan + r_ring * a.sin()]);
+            }
+            paths.push(PlatePathElement {
+                layer_id: String::from(layer_name),
+                points_mm: ring_pts,
+                closed: true,
+                stroke_hex: String::from("#141413"),
+                stroke_width_mm: width_mm,
+                dash_pattern_mm: None,
+                fill_hex: None,
+            });
+        }
         callouts.push(PlateTextCallout {
             layer_id: String::from("치수_축척막대"),
-            pos_mm: [cx_plan - 18.0, cy_plan + plan_r + 4.5],
+            pos_mm: [cx_plan - 20.0, cy_plan + plan_r + 4.5],
             text: format!("1:1 평면도 (폭 {:.1}mm)", max_d),
+            font_size_pt: 8.5,
+            color_hex: String::from("#141413"),
+        });
+
+        // 우상단: 1:1 정밀 탁본 (Image 1 위치)
+        raster_regions.push(PlateRasterRegion {
+            kind: PlateRasterKind::BottomPlanRubbing,
+            rect_mm: [
+                cx_right - plan_r,
+                cy_plan - plan_r,
+                cx_right + plan_r,
+                cy_plan + plan_r,
+            ],
+            clip_half_sign: None,
+            caption: String::from("1:1 정밀 탁본"),
+        });
+        callouts.push(PlateTextCallout {
+            layer_id: String::from("치수_축척막대"),
+            pos_mm: [cx_right - 22.0, cy_plan + plan_r + 4.5],
+            text: format!("1:1 정밀 탁본 (폭 {:.1}mm)", max_d),
             font_size_pt: 8.5,
             color_hex: String::from("#141413"),
         });
@@ -1114,6 +1356,29 @@ pub fn compose_archaeological_plate(input: &PlateComposeInput<'_>) -> ComposedPl
                 dash_pattern_mm: Some((2.2, 1.2)),
                 fill_hex: None,
             });
+
+            let (outer_contour, inner_contour, _rpoly, _max_r) =
+                extract_measured_horizontal_section_contours(hsec, wall_t, half_d * 0.78);
+            for (contour_pts, layer_name) in [
+                (&outer_contour, "횡단면_외벽윤곽선"),
+                (&inner_contour, "횡단면_내벽윤곽선"),
+            ] {
+                if contour_pts.len() >= 3 {
+                    let ring_top: Vec<[f64; 2]> = contour_pts
+                        .iter()
+                        .map(|p| [cx_plan + p[0], cy_plan + p[1]])
+                        .collect();
+                    paths.push(PlatePathElement {
+                        layer_id: String::from(layer_name),
+                        points_mm: ring_top,
+                        closed: true,
+                        stroke_hex: String::from("#B5573A"),
+                        stroke_width_mm: 0.28,
+                        dash_pattern_mm: Some((2.0, 1.2)),
+                        fill_hex: None,
+                    });
+                }
+            }
         }
     }
 

@@ -293,8 +293,8 @@ pub fn compute_paper_sheet_graph_spec(
     }
 }
 
-/// 모든 선 조정 위젯(`단면선`, `외곽선`, `횡단면`, `치수선`)이 유물 이동 시 함께 움직이고,
-/// 줌인·줌아웃 시에도 절대 서로 겹치지 않으며 도면 용지(`p_rect`) 내부를 가리지 않도록 상단 도크 좌표를 산출한다 (`Image 2`).
+/// همه 선 조정 위젯(`단면선`, `외곽선`, `횡단면`, `치수선`)이 유물 이동 시 함께 움직이고,
+/// 줌인·줌아웃 시에도 절대 서로 겹치지 않으며 도면 용지(`p_rect`) 내부를 가리지 않도록 상단 도크 좌표를 산출한다 (`Image 2`, `Image 4`).
 pub fn compute_non_overlapping_line_widget_rects(
     origin_px: egui::Pos2,
     scale_px_per_mm: f32,
@@ -302,8 +302,8 @@ pub fn compute_non_overlapping_line_widget_rects(
     artifact_offset_mm: [f64; 3],
     viewport_rect: egui::Rect,
 ) -> [egui::Rect; 4] {
-    let w_px = 160.0_f32;
-    let h_px = 23.0_f32;
+    let w_px = 172.0_f32;
+    let h_px = 25.0_f32;
     let min_gap_x = 8.0_f32;
     let step_x = w_px + min_gap_x;
 
@@ -425,6 +425,63 @@ pub fn compute_full_bleed_graph_paper_spec(
     }
 }
 
+/// Image 7: 우측 2D 도판의 4개 개별 뷰(`0: 1:1 평면도`, `1: 1:1 정면 입·단면도`, `2: 1:1 정밀 탁본`, `3: 1:1 수평 횡단면`)를
+/// 각각 하나하나 개별로 `90° 회전`, `180° 상하뒤집기`, `앞으로 연속뒤집기(0°->90°->180°->270°->0°)` 할 수 있는 상태.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct IndividualViewTransform2D {
+    /// 평면 내 시계방향 90° 회전 단계 (`0..4` -> `0°, 90°, 180°, 270°`)
+    pub rot_90_steps: u8,
+    /// 앞으로 연속 뒤집기 단계 (`0..4` -> 누를 때마다 90°씩 앞으로 연속 뒤집힘)
+    pub flip_forward_steps: u8,
+}
+
+impl IndividualViewTransform2D {
+    /// 시계방향 90° 개별 회전 (`↻90°`)
+    pub fn rotate_cw_90(&mut self) {
+        self.rot_90_steps = (self.rot_90_steps + 1) % 4;
+    }
+
+    /// 180° 상하 뒤집기 (`🔃180°`)
+    pub fn flip_180(&mut self) {
+        self.flip_forward_steps = (self.flip_forward_steps + 2) % 4;
+    }
+
+    /// 누를 때마다 앞으로 90°씩 연속 뒤집기 (`🔁앞으로연속: 0° -> 90° -> 180° -> 270° -> 0°`)
+    pub fn flip_forward_continuous_90(&mut self) {
+        self.flip_forward_steps = (self.flip_forward_steps + 1) % 4;
+    }
+
+    /// 2D 도면 좌표 `pt_mm`을 해당 개별 뷰의 중심 `center_mm` 기준으로 회전·뒤집기 변환한다.
+    #[inline]
+    pub fn transform_point_around(&self, pt_mm: [f64; 2], center_mm: [f64; 2]) -> [f64; 2] {
+        let mut dx = pt_mm[0] - center_mm[0];
+        let mut dy = pt_mm[1] - center_mm[1];
+        // 앞으로 연속 뒤집기: 홀수 스텝(90°/270°)은 상하 반전 + 축 교차, 2스텝(180°)은 상하 반전(dy = -dy)
+        match self.flip_forward_steps % 4 {
+            1 => {
+                dy = -dy;
+                std::mem::swap(&mut dx, &mut dy);
+            }
+            2 => {
+                dy = -dy;
+            }
+            3 => {
+                dx = -dx;
+                std::mem::swap(&mut dx, &mut dy);
+            }
+            _ => {}
+        }
+        // 시계방향 90° 회전 적용
+        let (rx, ry) = match self.rot_90_steps % 4 {
+            1 => (dy, -dx),
+            2 => (-dx, -dy),
+            3 => (-dy, dx),
+            _ => (dx, dy),
+        };
+        [center_mm[0] + rx, center_mm[1] + ry]
+    }
+}
+
 type SheetRubbingCacheKey = (
     String,
     i32,
@@ -435,6 +492,7 @@ type SheetRubbingCacheKey = (
     AcademicRubbingStyle,
     bool,
     Option<[i32; 4]>,
+    IndividualViewTransform2D,
 );
 
 /// 우측 2D 실측 도판 뷰포트(`SheetPane`)의 줌·팬, 드래그 `1:1` 부분 탁본(`ROI`), 선 굵기(`mm`)·색상 설정 및 정밀 탁본 캐시 상태.
@@ -454,6 +512,10 @@ pub struct SheetPaneState {
     pub rubbing_roi_mm: Option<[f64; 4]>,
     /// 『부분 정밀 탁본 창 (ROI Rubbing Studio)』 표시 여부
     pub show_roi_rubbing_window: bool,
+    /// Image 0 & Image 1: 좌측 1:1 단면도는 일러스트용 순수 벡터 실측 선화로 표시하고, 우측 상단에 1:1 탁본을 단독 표시 (`기본값 = false`)
+    pub show_elevation_rubbing_overlay: bool,
+    /// Image 7: 4개 개별 도면 뷰(`0: 평면도`, `1: 단면도`, `2: 1:1 탁본`, `3: 수평 횡단면`) 각각의 90°/180°/앞으로연속뒤집기 상태
+    pub view_transforms: [IndividualViewTransform2D; 4],
     /// 학술 논문 기반 정밀 탁본 파라미터 (농도·MSII 감도·시그모이드 대비·여백 임계·기법)
     pub rubbing_params: AcademicRubbingParams,
     /// Image 11 & Image 15: 모든 제도선의 색상 및 `mm` 두께 즉시 조정 상태
@@ -477,6 +539,8 @@ impl std::fmt::Debug for SheetPaneState {
             .field("roi_drag_mode", &self.roi_drag_mode)
             .field("rubbing_roi_mm", &self.rubbing_roi_mm)
             .field("show_roi_rubbing_window", &self.show_roi_rubbing_window)
+            .field("show_elevation_rubbing_overlay", &self.show_elevation_rubbing_overlay)
+            .field("view_transforms", &self.view_transforms)
             .field("rubbing_params", &self.rubbing_params)
             .field("line_style", &self.line_style)
             .finish()
@@ -494,6 +558,8 @@ impl Default for SheetPaneState {
             roi_drag_start_mm: None,
             rubbing_roi_mm: None,
             show_roi_rubbing_window: false,
+            show_elevation_rubbing_overlay: false,
+            view_transforms: [IndividualViewTransform2D::default(); 4],
             rubbing_params: AcademicRubbingParams::default(),
             line_style: PlateLineStyleConfig::default(),
             cached_key: None,
@@ -1039,7 +1105,7 @@ pub fn rgba_to_color_image_clipped_with_roi(
     }
 }
 
-/// 탁본 이미지 바로 밑에 가로형 정밀 미세조정 휠 위젯을 그리고 드래그/클릭 스텝을 반환한다 (`Image 14`).
+/// 탁본 이미지 바로 밑에 가로형 정밀 미세조정 휠 위젯을 그리고 드래그/클릭 스텝을 반환한다 (`Image 14`, `Image 3: 감도 +30% 향상`).
 fn draw_rubbing_fine_wheel(
     ui: &mut egui::Ui,
     painter: &egui::Painter,
@@ -1058,7 +1124,8 @@ fn draw_rubbing_fine_wheel(
     if resp.clicked() {
         steps = 1;
     } else if resp.dragged() {
-        steps = (resp.drag_delta().x / 2.2).round() as i32;
+        // Image 3 ("감도를 30%올려라"): 기존 (1 / 2.2) 대비 +30% 향상된 (1.30 / 2.2) 감도 적용!
+        steps = (resp.drag_delta().x * (1.30 / 2.2)).round() as i32;
     }
 
     let dial_fill = egui::Color32::from_rgba_unmultiplied(236, 233, 224, 242);
@@ -1118,6 +1185,177 @@ fn draw_rubbing_fine_wheel(
     steps
 }
 
+/// Image 4 ("아이콘형태 ui로 잘보이게하라"):
+/// 단면선(0) · 외곽선(1) · 횡단면(2) · 치수선(3) 카드 좌측에 직관적인 고시인성 벡터 아이콘을 제도한다.
+fn draw_line_style_vector_icon(
+    painter: &egui::Painter,
+    icon_rect: egui::Rect,
+    idx: usize,
+    stroke_col: egui::Color32,
+) {
+    let bg = egui::Color32::from_rgba_unmultiplied(
+        stroke_col.r(),
+        stroke_col.g(),
+        stroke_col.b(),
+        28,
+    );
+    painter.rect_filled(icon_rect, 3.5, bg);
+    painter.rect_stroke(
+        icon_rect,
+        3.5,
+        egui::Stroke::new(1.0_f32, stroke_col),
+        egui::StrokeKind::Inside,
+    );
+    let c = icon_rect.center();
+    let r = (icon_rect.width().min(icon_rect.height()) * 0.36).max(4.5);
+    match idx {
+        0 => {
+            // 단면선 아이콘: 중심축 + 우측 단면 두께 프로파일
+            painter.line_segment(
+                [egui::pos2(c.x, c.y - r), egui::pos2(c.x, c.y + r)],
+                egui::Stroke::new(1.0_f32, stroke_col),
+            );
+            painter.add(egui::Shape::line(
+                vec![
+                    egui::pos2(c.x + r * 0.85, c.y - r * 0.85),
+                    egui::pos2(c.x + r * 0.65, c.y + r * 0.25),
+                    egui::pos2(c.x + r * 0.25, c.y + r * 0.85),
+                    egui::pos2(c.x, c.y + r * 0.85),
+                ],
+                egui::Stroke::new(2.0_f32, stroke_col),
+            ));
+        }
+        1 => {
+            // 외곽선 아이콘: 토기 좌우 대칭 외곽 입면 윤곽
+            painter.add(egui::Shape::line(
+                vec![
+                    egui::pos2(c.x - r * 0.85, c.y - r * 0.80),
+                    egui::pos2(c.x - r * 0.65, c.y + r * 0.25),
+                    egui::pos2(c.x - r * 0.35, c.y + r * 0.80),
+                    egui::pos2(c.x + r * 0.35, c.y + r * 0.80),
+                    egui::pos2(c.x + r * 0.65, c.y + r * 0.25),
+                    egui::pos2(c.x + r * 0.85, c.y - r * 0.80),
+                ],
+                egui::Stroke::new(1.7_f32, stroke_col),
+            ));
+        }
+        2 => {
+            // 횡단면 아이콘: 동심원 + 수평 절단선
+            painter.circle_stroke(c, r * 0.85, egui::Stroke::new(1.4_f32, stroke_col));
+            painter.circle_stroke(c, r * 0.52, egui::Stroke::new(1.0_f32, stroke_col));
+            painter.line_segment(
+                [egui::pos2(c.x - r, c.y), egui::pos2(c.x + r, c.y)],
+                egui::Stroke::new(1.3_f32, stroke_col),
+            );
+        }
+        _ => {
+            // 치수선 아이콘: 양방향 치수 화살표 + 양끝 보조선
+            painter.line_segment(
+                [
+                    egui::pos2(c.x - r * 0.85, c.y - r * 0.65),
+                    egui::pos2(c.x - r * 0.85, c.y + r * 0.65),
+                ],
+                egui::Stroke::new(1.1_f32, stroke_col),
+            );
+            painter.line_segment(
+                [
+                    egui::pos2(c.x + r * 0.85, c.y - r * 0.65),
+                    egui::pos2(c.x + r * 0.85, c.y + r * 0.65),
+                ],
+                egui::Stroke::new(1.1_f32, stroke_col),
+            );
+            painter.line_segment(
+                [
+                    egui::pos2(c.x - r * 0.80, c.y),
+                    egui::pos2(c.x + r * 0.80, c.y),
+                ],
+                egui::Stroke::new(1.4_f32, stroke_col),
+            );
+        }
+    }
+}
+
+/// Image 7: 개별 도면 뷰(`0: 평면도`, `1: 단면도`, `2: 1:1 탁본`, `3: 수평 횡단면`) 상단에
+/// `[↻90°] [🔃180°] [🔁앞으로연속]` 소형 아이콘 버튼을 렌더링한다.
+fn draw_individual_view_flip_controls(
+    ui: &mut egui::Ui,
+    painter: &egui::Painter,
+    anchor_top_center: egui::Pos2,
+    view_id_prefix: &str,
+    transform: &mut IndividualViewTransform2D,
+) {
+    let total_w = 136.0_f32;
+    let bar_h = 18.0_f32;
+    let bar_rect = egui::Rect::from_center_size(
+        egui::pos2(anchor_top_center.x, anchor_top_center.y - 12.0),
+        egui::vec2(total_w, bar_h),
+    );
+    let terra = egui::Color32::from_rgb(ACTION.rgb[0], ACTION.rgb[1], ACTION.rgb[2]);
+    let ink = egui::Color32::from_rgb(INK.rgb[0], INK.rgb[1], INK.rgb[2]);
+    let profile_red = egui::Color32::from_rgb(
+        PROFILE_RED.rgb[0],
+        PROFILE_RED.rgb[1],
+        PROFILE_RED.rgb[2],
+    );
+    painter.rect_filled(
+        bar_rect,
+        3.5,
+        egui::Color32::from_rgba_unmultiplied(250, 249, 245, 238),
+    );
+    painter.rect_stroke(
+        bar_rect,
+        3.5,
+        egui::Stroke::new(1.0_f32, terra),
+        egui::StrokeKind::Inside,
+    );
+
+    let specs = [
+        ("rot90", "↻90°", 36.0_f32, 0u8),
+        ("flip180", "↕180°", 40.0_f32, 1u8),
+        ("flipfwd", "↻앞으로", 52.0_f32, 2u8),
+    ];
+    let mut bx = bar_rect.left() + 2.0;
+    for (suffix, lbl, bw, kind) in specs {
+        let brect = egui::Rect::from_min_size(
+            egui::pos2(bx, bar_rect.top() + 1.5),
+            egui::vec2(bw, bar_h - 3.0),
+        );
+        let resp = ui.interact(
+            brect,
+            egui::Id::new((view_id_prefix, suffix)),
+            egui::Sense::click(),
+        );
+        if resp.clicked() {
+            match kind {
+                0 => transform.rotate_cw_90(),
+                1 => transform.flip_180(),
+                _ => transform.flip_forward_continuous_90(),
+            }
+        }
+        let active = (kind == 0 && transform.rot_90_steps != 0)
+            || (kind > 0 && transform.flip_forward_steps != 0);
+        painter.rect_filled(
+            brect,
+            2.5,
+            if active {
+                profile_red
+            } else if resp.hovered() {
+                egui::Color32::from_rgb(240, 232, 220)
+            } else {
+                egui::Color32::from_rgb(246, 243, 236)
+            },
+        );
+        painter.text(
+            brect.center(),
+            egui::Align2::CENTER_CENTER,
+            lbl,
+            egui::FontId::proportional(8.4),
+            if active { egui::Color32::WHITE } else { ink },
+        );
+        bx += bw + 2.0;
+    }
+}
+
 /// 우측 `73%` (또는 `Tab` 키 `100%`) 2D 실측 도판 작업대(`SheetPane`)를 렌더링한다.
 #[allow(clippy::too_many_arguments)]
 pub fn render_sheet_pane_egui(
@@ -1163,6 +1401,7 @@ pub fn render_sheet_pane_egui(
         // Keep user wheel adjustments primary
     }
 
+    let rub_view_tf = state.view_transforms[2];
     let key: SheetRubbingCacheKey = (
         mesh.name.clone(),
         psi_deg.round() as i32,
@@ -1173,11 +1412,14 @@ pub fn render_sheet_pane_egui(
         state.rubbing_params.style,
         plate.flip_exterior_right,
         None,
+        rub_view_tf,
     );
     // Rayon 3-뷰 동시 병렬 탁본 버퍼 생성 (560x560 고선명 + 멀티코어 병렬화로 렉 제로 달성!)
+    // Image 7: 우측 상단 1:1 정밀 탁본(bottom_img)은 개별 뷰의 [🔁앞으로], [🔃180°], [↻90°] 조작에 따라
+    // 연속으로 앞으로 뒤집힌 면(외저면 -> 정면외면 -> 상하반전 -> 내면/후면) 및 90°/180° 회전이 즉시 반영됨!
     if state.cached_key.as_ref() != Some(&key) {
         let params_copy = state.rubbing_params.clone();
-        let (front_img, (back_img, bottom_img)) = rayon::join(
+        let (front_img, (back_img, mut bottom_img)) = rayon::join(
             || {
                 render_orthographic_rubbing_rgba_with_params(
                     mesh,
@@ -1201,9 +1443,14 @@ pub fn render_sheet_pane_egui(
                         )
                     },
                     || {
+                        let flipped_kind = match rub_view_tf.flip_forward_steps % 4 {
+                            1 => PlateRasterKind::FrontExteriorRubbing,
+                            3 => PlateRasterKind::BackInteriorRubbing,
+                            _ => PlateRasterKind::BottomPlanRubbing,
+                        };
                         render_orthographic_rubbing_rgba_with_params(
                             mesh,
-                            PlateRasterKind::BottomPlanRubbing,
+                            flipped_kind,
                             psi_deg,
                             &params_copy,
                             520,
@@ -1213,6 +1460,15 @@ pub fn render_sheet_pane_egui(
                 )
             },
         );
+        if rub_view_tf.flip_forward_steps % 4 == 2 {
+            bottom_img = image::imageops::flip_vertical(&bottom_img);
+        }
+        bottom_img = match rub_view_tf.rot_90_steps % 4 {
+            1 => image::imageops::rotate90(&bottom_img),
+            2 => image::imageops::rotate180(&bottom_img),
+            3 => image::imageops::rotate270(&bottom_img),
+            _ => bottom_img,
+        };
         state.cached_front_img = Some(front_img);
         state.cached_back_img = Some(back_img);
         state.cached_bottom_img = Some(bottom_img);
@@ -1410,10 +1666,22 @@ pub fn render_sheet_pane_egui(
             egui::StrokeKind::Inside,
         );
 
-        // 2. 다중 뷰 정밀 탁본(`Rubbing`) 래스터 영역 합성 및 Image 14 `1:1 드래그 부분 탁본` + `바로 밑 4종 미세조정 휠`
+        // 2. 다중 뷰 정밀 탁본(`Rubbing`) 래스터 영역 합성 및 Image 0 / Image 1 반영:
+        //    - Image 0 ("평단면을 그려야한다 이렇게나오는게 맞나 ? 이것은 일러스트에서 그려야한다. 내가."):
+        //      좌측 1:1 평면도 + 1:1 정면 입·단면도에는 기본적으로 회색 래스터 탁본을 덮어씌우지 않고 순수 일러스트 벡터 실측 선화로 표시한다!
+        //    - Image 1 ("탁본은 여기에 1:1로 여기에 나타나게하라."):
+        //      우측 상단(`ri > 0` 또는 `BottomPlanRubbing`) 자리에 1:1 정밀 탁본이 선명하게 나타나게 한다!
         let mut right_rubbing_box_px: Option<egui::Rect> = None;
 
         for (ri, region) in plate.raster_regions.iter().enumerate() {
+            if ri == 0
+                && region.kind == PlateRasterKind::FrontExteriorRubbing
+                && !state.show_elevation_rubbing_overlay
+                && plate.raster_regions.len() > 1
+            {
+                // 좌측 평단면(1:1 평면도 + 1:1 정면 입·단면도)은 일러스트용 순수 벡터 실측 선화로 유지!
+                continue;
+            }
             let rx0 = origin_x + (region.rect_mm[0] as f32) * scale;
             let ry1 = origin_y - (region.rect_mm[1] as f32) * scale;
             let rx1 = origin_x + (region.rect_mm[2] as f32) * scale;
@@ -1699,6 +1967,28 @@ pub fn render_sheet_pane_egui(
         let mut main_vessel_bot_y = f32::NEG_INFINITY;
         let mut section_badge_anchor: Option<egui::Pos2> = None;
 
+        // Image 7: 4개 개별 뷰(0: 좌상 1:1 평면도, 1: 좌하 1:1 단면도, 2: 우상 1:1 정밀 탁본, 3: 우하 1:1 수평 횡단면)의 중심점 산출
+        let elev_reg_mm = plate
+            .raster_regions
+            .first()
+            .map(|r| r.rect_mm)
+            .unwrap_or([36.0, 24.0, 160.0, 88.0]);
+        let rub_reg_mm = plate
+            .raster_regions
+            .get(1)
+            .map(|r| r.rect_mm)
+            .unwrap_or([180.0, 110.0, 300.0, 230.0]);
+        let cx_left_mm = 0.5 * (elev_reg_mm[0] + elev_reg_mm[2]);
+        let cy_elev_mm = 0.5 * (elev_reg_mm[1] + elev_reg_mm[3]);
+        let top_elev_mm = elev_reg_mm[1].max(elev_reg_mm[3]);
+        let half_d_mm = 0.5 * (elev_reg_mm[2] - elev_reg_mm[0]).abs().max(20.0);
+        let cy_plan_mm = top_elev_mm + half_d_mm + 24.0;
+        let cx_right_mm = 0.5 * (rub_reg_mm[0] + rub_reg_mm[2]);
+        let cy_rub_mm = 0.5 * (rub_reg_mm[1] + rub_reg_mm[3]);
+        let cy_hsec_mm = cy_elev_mm;
+        let mid_split_x_mm = 0.5 * (elev_reg_mm[0].max(elev_reg_mm[2]) + rub_reg_mm[0].min(rub_reg_mm[2]));
+        let mid_split_y_mm = top_elev_mm + 12.0;
+
         for elem in &plate.paths {
             if elem.points_mm.len() < 2 {
                 continue;
@@ -1710,6 +2000,31 @@ pub fn render_sheet_pane_egui(
             {
                 continue;
             }
+            // Image 7: 각 선분이 속한 개별 뷰(0: 평면도, 1: 단면도, 2: 탁본, 3: 수평 횡단면) 판별 및 개별 90°/180°/앞으로연속뒤집기 변환 적용
+            let first_pt_mm = elem.points_mm[0];
+            let is_scale_bar = elem.layer_id == "치수_축척막대" || elem.layer_id == "축척자_5cm";
+            let (view_idx, view_center_mm) = if first_pt_mm[0] <= mid_split_x_mm {
+                if first_pt_mm[1] >= mid_split_y_mm {
+                    (0usize, [cx_left_mm, cy_plan_mm])
+                } else {
+                    (1usize, [cx_left_mm, cy_elev_mm])
+                }
+            } else if first_pt_mm[1] >= mid_split_y_mm {
+                (2usize, [cx_right_mm, cy_rub_mm])
+            } else {
+                (3usize, [cx_right_mm, cy_hsec_mm])
+            };
+            let vtf = state.view_transforms[view_idx];
+            let transformed_points_mm: Vec<[f64; 2]> = if !is_scale_bar
+                && (vtf.rot_90_steps != 0 || vtf.flip_forward_steps != 0)
+            {
+                elem.points_mm
+                    .iter()
+                    .map(|&p| vtf.transform_point_around(p, view_center_mm))
+                    .collect()
+            } else {
+                elem.points_mm.clone()
+            };
             let is_section_layer = elem.layer_id.contains("단면_실선");
             let is_outer_layer = elem.layer_id.contains("외곽선")
                 || elem.layer_id.contains("구경")
@@ -1740,12 +2055,12 @@ pub fn render_sheet_pane_egui(
             // state.line_style.fill_section_solid == true 일 때만 내부 채움을 수행하고, 기본값(false)에서는 깨끗한 외곽선(선)으로만 제도한다!
             if state.line_style.fill_section_solid {
                 if let Some(ref fill_hex) = elem.fill_hex {
-                    if elem.points_mm.len() >= 3 {
-                        let tris = triangulate_polygon_ear_clipping(&elem.points_mm);
+                    if transformed_points_mm.len() >= 3 {
+                        let tris = triangulate_polygon_ear_clipping(&transformed_points_mm);
                         if !tris.is_empty() {
                             let fill_col = if fill_hex == "#B5573A" { terra } else { sec_col };
                             let mut mesh_shape = egui::epaint::Mesh::default();
-                            for p in &elem.points_mm {
+                            for p in &transformed_points_mm {
                                 let pos = egui::pos2(
                                     origin_x + (p[0] as f32) * scale,
                                     origin_y - (p[1] as f32) * scale,
@@ -1769,10 +2084,10 @@ pub fn render_sheet_pane_egui(
 
             // 교차 흑백 블록 축척자 (`치수_축척막대`)
             if (elem.layer_id == "치수_축척막대" || elem.layer_id == "축척자_5cm")
-                && elem.points_mm.len() >= 2
+                && transformed_points_mm.len() >= 2
             {
-                let p_start = elem.points_mm[0];
-                let p_end = elem.points_mm[elem.points_mm.len() - 1];
+                let p_start = transformed_points_mm[0];
+                let p_end = transformed_points_mm[transformed_points_mm.len() - 1];
                 let x0 = origin_x + (p_start[0] as f32) * scale;
                 let x1 = origin_x + (p_end[0] as f32) * scale;
                 let y_bar = origin_y - (p_start[1] as f32) * scale;
@@ -1798,8 +2113,7 @@ pub fn render_sheet_pane_egui(
                 continue;
             }
 
-            let mut pts: Vec<egui::Pos2> = elem
-                .points_mm
+            let mut pts: Vec<egui::Pos2> = transformed_points_mm
                 .iter()
                 .map(|p| {
                     egui::pos2(
@@ -1985,8 +2299,62 @@ pub fn render_sheet_pane_egui(
         }
 
         // =========================================================================================
-        // 5. Image 2: "모든선조정 위치 중복금지 이것은 유물이 움직이면 같이 움직이고 줌인줌아웃에 중복이되지않아야한다"
-        // 단면선·외곽선·횡단면·치수선 4개 조정 위젯을 각 1회씩만 렌더링하고, 유물 좌표와 함께 움직이며 절대 겹치지 않게 배치!
+        // 4-B. Image 7 ("이것도 하나하나 개별로 90도 180도 뒤집을수있게하라 누르면 연속으로 앞으로 두집히게하라")
+        // 4개 개별 도면 뷰(0: 1:1 평면도, 1: 1:1 단면도, 2: 1:1 정밀 탁본, 3: 1:1 수평 횡단면) 상단에
+        // 각각 독립된 [↻90°] [🔃180°] [🔁앞으로] 컨트롤 바를 배치한다!
+        // =========================================================================================
+        let plan_top_mm = cy_plan_mm + half_d_mm + 12.0;
+        let elev_top_ctrl_mm = top_elev_mm + 16.0;
+        let rub_top_mm = rub_reg_mm[1].max(rub_reg_mm[3]) + 12.0;
+        // 우하단 1:1 수평 횡단면의 개별 회전·뒤집기 바는 수평 횡단면 바로 아래쪽에 배치하여 상단 1:1 정밀 탁본과 절대 겹치지 않게 함!
+        let hsec_bot_ctrl_mm = (cy_hsec_mm - half_d_mm * 0.86 - 4.0).max(8.0);
+        let individual_anchors = [
+            (
+                0usize,
+                "sheet_view_tf_plan",
+                egui::pos2(
+                    origin_x + (cx_left_mm as f32) * scale,
+                    (origin_y - (plan_top_mm as f32) * scale).max(sheet_rect.top() + 78.0),
+                ),
+            ),
+            (
+                1usize,
+                "sheet_view_tf_elev",
+                egui::pos2(
+                    origin_x + (cx_left_mm as f32) * scale,
+                    (origin_y - (elev_top_ctrl_mm as f32) * scale).max(sheet_rect.top() + 180.0),
+                ),
+            ),
+            (
+                2usize,
+                "sheet_view_tf_rubbing",
+                egui::pos2(
+                    origin_x + (cx_right_mm as f32) * scale,
+                    (origin_y - (rub_top_mm as f32) * scale).max(sheet_rect.top() + 78.0),
+                ),
+            ),
+            (
+                3usize,
+                "sheet_view_tf_hsec",
+                egui::pos2(
+                    origin_x + (cx_right_mm as f32) * scale,
+                    (origin_y - (hsec_bot_ctrl_mm as f32) * scale).min(sheet_rect.bottom() - 48.0),
+                ),
+            ),
+        ];
+        for (v_idx, v_prefix, anchor_px) in individual_anchors {
+            draw_individual_view_flip_controls(
+                ui,
+                &paper_painter,
+                anchor_px,
+                v_prefix,
+                &mut state.view_transforms[v_idx],
+            );
+        }
+
+        // =========================================================================================
+        // 5. Image 2 & Image 4 ("아이콘형태 ui로 잘보이게하라"):
+        // 단면선·외곽선·횡단면·치수선 4개 조정 위젯에 고시인성 벡터 아이콘 배지를 추가하고 유물 좌표와 함께 움직이며 절대 겹치지 않게 배치!
         // =========================================================================================
         let vessel_rect_mm = plate
             .raster_regions
@@ -2012,24 +2380,34 @@ pub fn render_sheet_pane_egui(
             };
             paper_painter.rect_filled(
                 w_rect,
-                4.0,
-                egui::Color32::from_rgba_unmultiplied(250, 249, 245, 242),
+                4.5,
+                egui::Color32::from_rgba_unmultiplied(250, 249, 245, 246),
             );
             paper_painter.rect_stroke(
                 w_rect,
-                4.0,
-                egui::Stroke::new(1.0_f32, stroke_c),
+                4.5,
+                egui::Stroke::new(1.2_f32, stroke_c),
                 egui::StrokeKind::Inside,
+            );
+            let icon_rect = egui::Rect::from_min_size(
+                egui::pos2(w_rect.left() + 3.5, w_rect.top() + 3.0),
+                egui::vec2(19.0, w_rect.height() - 6.0),
+            );
+            draw_line_style_vector_icon(&paper_painter, icon_rect, idx, stroke_c);
+
+            let content_rect = egui::Rect::from_min_max(
+                egui::pos2(icon_rect.right() + 4.0, w_rect.top() + 2.0),
+                egui::pos2(w_rect.right() - 3.0, w_rect.bottom() - 2.0),
             );
             let mut child_ui = ui.new_child(
                 egui::UiBuilder::new()
-                    .max_rect(w_rect.shrink2(egui::vec2(4.0, 2.0)))
+                    .max_rect(content_rect)
                     .layout(egui::Layout::left_to_right(egui::Align::Center)),
             );
             child_ui.spacing_mut().item_spacing.x = 3.0;
             match idx {
                 0 => {
-                    child_ui.label(egui::RichText::new("단면선").size(9.5).color(ink));
+                    child_ui.label(egui::RichText::new("단면선").size(9.5).strong().color(ink));
                     let _ = child_ui.add(
                         egui::DragValue::new(&mut state.line_style.section_width_mm)
                             .speed(0.02)
@@ -2040,7 +2418,7 @@ pub fn render_sheet_pane_egui(
                     let _ = child_ui.color_edit_button_srgb(&mut state.line_style.section_color_rgb);
                 }
                 1 => {
-                    child_ui.label(egui::RichText::new("외곽선").size(9.5).color(ink));
+                    child_ui.label(egui::RichText::new("외곽선").size(9.5).strong().color(ink));
                     let _ = child_ui.add(
                         egui::DragValue::new(&mut state.line_style.outer_width_mm)
                             .speed(0.02)
@@ -2051,7 +2429,7 @@ pub fn render_sheet_pane_egui(
                     let _ = child_ui.color_edit_button_srgb(&mut state.line_style.outer_color_rgb);
                 }
                 2 => {
-                    child_ui.label(egui::RichText::new("횡단면").size(9.5).color(ink));
+                    child_ui.label(egui::RichText::new("횡단면").size(9.5).strong().color(ink));
                     let _ = child_ui.add(
                         egui::DragValue::new(&mut state.line_style.aux_width_mm)
                             .speed(0.02)
@@ -2062,7 +2440,7 @@ pub fn render_sheet_pane_egui(
                     let _ = child_ui.color_edit_button_srgb(&mut state.line_style.aux_color_rgb);
                 }
                 _ => {
-                    child_ui.label(egui::RichText::new("치수선").size(9.5).color(ink));
+                    child_ui.label(egui::RichText::new("치수선").size(9.5).strong().color(ink));
                     let _ = child_ui.add(
                         egui::DragValue::new(&mut state.line_style.dim_width_mm)
                             .speed(0.02)
@@ -2076,17 +2454,17 @@ pub fn render_sheet_pane_egui(
         }
 
         // =========================================================================================
-        // 5-B. Image 3: 조판 용지 설정 바 (A4 세로 · A4 가로 · A3 가로 · B4 세로 · B5 세로 + 부분탁본 선택 + 단면채움)
+        // 5-B. Image 3 & Image 4: 조판 용지 설정 바 (아이콘 형태 UI로 시인성 극대화!)
         // =========================================================================================
         paper_painter.rect_filled(
             top_style_bar_rect,
-            4.0,
-            egui::Color32::from_rgba_unmultiplied(250, 249, 245, 242),
+            4.5,
+            egui::Color32::from_rgba_unmultiplied(250, 249, 245, 246),
         );
         paper_painter.rect_stroke(
             top_style_bar_rect,
-            4.0,
-            egui::Stroke::new(1.0_f32, border),
+            4.5,
+            egui::Stroke::new(1.1_f32, terra),
             egui::StrokeKind::Inside,
         );
         let mut bar_ui = ui.new_child(
@@ -2096,37 +2474,39 @@ pub fn render_sheet_pane_egui(
         );
         bar_ui.spacing_mut().item_spacing.x = 4.0;
 
-        bar_ui.label(egui::RichText::new("📄 조판 용지:").size(9.5).strong().color(ink));
-        for preset in [
-            PaperSheetPreset::A3Landscape,
-            PaperSheetPreset::A4Landscape,
-            PaperSheetPreset::A4Portrait,
-            PaperSheetPreset::B4Portrait,
-            PaperSheetPreset::B5Portrait,
+        bar_ui.label(egui::RichText::new("■ 조판용지:").size(9.5).strong().color(terra));
+        for (preset, icon_lbl) in [
+            (PaperSheetPreset::A3Landscape, "■ A3가로"),
+            (PaperSheetPreset::A4Landscape, "■ A4가로"),
+            (PaperSheetPreset::A4Portrait, "□ A4세로"),
+            (PaperSheetPreset::B4Portrait, "□ B4세로"),
+            (PaperSheetPreset::B5Portrait, "□ B5세로"),
         ] {
             let is_sel = state.paper_preset == preset;
             let btn = egui::Button::new(
-                egui::RichText::new(preset.label_kr())
-                    .size(9.0)
+                egui::RichText::new(icon_lbl)
+                    .size(9.2)
+                    .strong()
                     .color(if is_sel { paper } else { ink }),
             )
-            .fill(if is_sel { ink } else { wash })
-            .stroke(egui::Stroke::new(1.0_f32, border))
-            .corner_radius(3.0);
+            .fill(if is_sel { terra } else { wash })
+            .stroke(egui::Stroke::new(1.0_f32, if is_sel { terra } else { border }))
+            .corner_radius(3.5);
             if bar_ui.add(btn).clicked() {
                 state.paper_preset = preset;
             }
         }
         bar_ui.separator();
 
-        // Image 13: 탁본할 부분 선택 버튼 (누르면 바로 드래그하여 1:1 크기 탁본 추출)
+        // Image 13 & Image 4: 아이콘형 부분탁본 1:1 드래그 선택 버튼 + 단면채움 아이콘 버튼
         let roi_btn = egui::Button::new(
             egui::RichText::new(if state.roi_drag_mode {
-                "⬚ 부분탁본 드래그중 (1:1)"
+                "✂ 부분탁본 1:1 드래그중"
             } else {
-                "⬚ 부분탁본 선택 (드래그 1:1)"
+                "✂ 부분탁본 1:1"
             })
-            .size(9.5)
+            .size(9.3)
+            .strong()
             .color(if state.roi_drag_mode { paper } else { select_blue }),
         )
         .fill(if state.roi_drag_mode {
@@ -2134,21 +2514,43 @@ pub fn render_sheet_pane_egui(
         } else {
             egui::Color32::from_rgb(235, 243, 252)
         })
-        .stroke(egui::Stroke::new(1.0_f32, select_blue))
-        .corner_radius(3.0);
+        .stroke(egui::Stroke::new(1.1_f32, select_blue))
+        .corner_radius(3.5);
         if bar_ui.add(roi_btn).clicked() {
             state.roi_drag_mode = !state.roi_drag_mode;
         }
         if state.rubbing_roi_mm.is_some()
             && bar_ui
-                .add(egui::Button::new(egui::RichText::new("전체복원").size(9.0)).corner_radius(3.0))
+                .add(egui::Button::new(egui::RichText::new("↺ 복원").size(9.0)).corner_radius(3.0))
                 .clicked()
         {
             state.set_rubbing_roi_mm(None);
             state.roi_drag_mode = false;
         }
-        bar_ui.separator();
-        let _ = bar_ui.checkbox(&mut state.line_style.fill_section_solid, "단면채움");
+        let fill_btn = egui::Button::new(
+            egui::RichText::new(if state.line_style.fill_section_solid {
+                "■ 단면채움 ON"
+            } else {
+                "□ 단면채움"
+            })
+            .size(9.2)
+            .strong()
+            .color(if state.line_style.fill_section_solid {
+                paper
+            } else {
+                ink
+            }),
+        )
+        .fill(if state.line_style.fill_section_solid {
+            ink
+        } else {
+            wash
+        })
+        .stroke(egui::Stroke::new(1.0_f32, border))
+        .corner_radius(3.5);
+        if bar_ui.add(fill_btn).clicked() {
+            state.line_style.fill_section_solid = !state.line_style.fill_section_solid;
+        }
 
         // =========================================================================================
         // 5-B2. "프로그램 우측창 상단오른쪽제일끝에 gpu사용여부와 프레임숫자를 작게출력하라"
@@ -2925,5 +3327,88 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn test_tdd21_all8_feedback_illustrator_vector_plan_measured_hsec_and_individual_flips() {
+        // 1. Image 0 & Image 1: 기본값에서 좌측 평단면은 일러스트용 순수 벡터 선화(show_elevation_rubbing_overlay == false)이고,
+        //    우측 상단에 1:1 정밀 탁본(BottomPlanRubbing)이 배치됨을 검증
+        let state = SheetPaneState::default();
+        assert!(
+            !state.show_elevation_rubbing_overlay,
+            "left column (1:1 plan + 1:1 section) must default to pure Illustrator vector line art"
+        );
+
+        let mesh = make_patterned_bowl_mesh();
+        let m = compute_artifact_measurements(&mesh, ArtifactCategory::CompleteVessel);
+        let vsec = strata_section::slice_mesh_with_fixed_plane(
+            &mesh,
+            None,
+            strata_section::CutPlaneOrientation::VerticalLongitudinal,
+            0.0,
+            0.0,
+            0.25,
+        );
+        let hsec = strata_section::slice_mesh_with_fixed_plane(
+            &mesh,
+            None,
+            strata_section::CutPlaneOrientation::HorizontalTransverse,
+            0.0,
+            24.0,
+            0.25,
+        );
+        let plate = strata_export::compose_archaeological_plate(&strata_export::PlateComposeInput {
+            title: "테스트 완형 토기",
+            measurements: &m,
+            vertical_section: &vsec,
+            horizontal_sections: &[hsec],
+            occluded_spans: &[],
+            sherd_subtype: None,
+            sherd_strategy: None,
+            handle_attachment: None,
+            bead_subtype: None,
+            bead_drill_type: None,
+            wado_cut_ratio: None,
+            hemp_density_label: None,
+            flip_exterior_right: false,
+        });
+        assert!(
+            plate.paths.iter().any(|p| p.layer_id == "평면도_구연내경선"),
+            "1:1 plan view must contain Illustrator concentric vector lines"
+        );
+        assert!(
+            plate.paths.iter().any(|p| p.layer_id == "횡단면_단면_실선"),
+            "1:1 horizontal cross-section must contain measured cross-section polygon"
+        );
+        assert!(
+            plate.raster_regions.len() >= 2
+                && plate.raster_regions[1].rect_mm[0] > plate.raster_regions[0].rect_mm[2],
+            "1:1 precision rubbing must be placed in the right column at 1:1 scale"
+        );
+
+        // 2. Image 7: 개별 도면 뷰(0~3)의 90° 회전 · 180° 뒤집기 · 앞으로 연속 뒤집기 동작 검증
+        let mut tf = IndividualViewTransform2D::default();
+        let center = [100.0, 100.0];
+        let p = [120.0, 110.0];
+        tf.rotate_cw_90();
+        let p_rot90 = tf.transform_point_around(p, center);
+        assert!((p_rot90[0] - 110.0).abs() < 1e-6 && (p_rot90[1] - 80.0).abs() < 1e-6);
+
+        let mut tf_flip = IndividualViewTransform2D::default();
+        tf_flip.flip_forward_continuous_90();
+        assert_eq!(tf_flip.flip_forward_steps, 1);
+        tf_flip.flip_forward_continuous_90();
+        assert_eq!(tf_flip.flip_forward_steps, 2);
+        let p_flip180 = tf_flip.transform_point_around(p, center);
+        assert!((p_flip180[0] - 120.0).abs() < 1e-6 && (p_flip180[1] - 90.0).abs() < 1e-6);
+
+        // 3. Image 6: 3D 유물 90° 앞으로뒤집기 · 180° 상하뒤집기 검증
+        let mut v3d = crate::view3d_pane::View3DPaneState::default();
+        v3d.flip_artifact_forward_90();
+        assert!((v3d.tilt_deg - 90.0).abs() < 1e-5);
+        v3d.flip_artifact_forward_90();
+        assert!((v3d.tilt_deg.abs() - 180.0).abs() < 1e-5);
+        v3d.flip_artifact_upside_down_180();
+        assert!(v3d.tilt_deg.abs() < 1e-5);
     }
 }
