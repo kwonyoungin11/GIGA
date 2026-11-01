@@ -520,6 +520,26 @@ pub fn worley_stone_grain(x_px: f32, y_px: f32) -> f32 {
     min_dist2.sqrt().clamp(0.0, 1.0)
 }
 
+/// MSII(다중 스케일 구면 적분) 반경과 PCV AO 상한 반경을 **유물 실제 크기에 비례**해 산출한다.
+/// 문헌 기본값 `[0.8, 1.6, 3.2, 6.0]mm` / `4.0mm` 는 대각 100mm 급 유물 기준이며,
+/// 3mm 소옥에서는 반경이 유물보다 커지고 400mm 기와에서는 너무 작아지는 문제를 막는다.
+pub fn msii_radii_for_extent(extent_mm: f32) -> ([f32; 4], f32) {
+    let scale = if extent_mm.is_finite() && extent_mm > 1e-3 {
+        (extent_mm / 100.0).clamp(0.08, 4.0)
+    } else {
+        1.0
+    };
+    (
+        [
+            0.8 * scale,
+            1.6 * scale,
+            3.2 * scale,
+            6.0 * scale,
+        ],
+        4.0 * scale,
+    )
+}
+
 /// 4~5단계 통합: 정사투영 G-Buffer + MSII(`0.8, 1.6, 3.2, 6.0 mm`) + 반경 제한 PCV AO(`4.0 mm`)
 /// + Radiance Scaling + XDoG + 한지 섬유/암석 입자 + Blue-Noise Stippling 기반 발굴보고서용 정밀 탁본 합성
 pub fn render_ddg_msii_xdog_stipple_rubbing_rgba<F>(
@@ -664,8 +684,7 @@ where
         (0.5, -0.8660254),
         (0.8660254, -0.5),
     ];
-    let msii_radii_mm = [0.8_f32, 1.6_f32, 3.2_f32, 6.0_f32];
-    let ao_max_r_mm = 4.0_f32;
+    let (msii_radii_mm, ao_max_r_mm) = msii_radii_for_extent(span_x.max(span_y));
     let w_isize = w as isize;
     let h_isize = h as isize;
     let w_usize = w as usize;
@@ -873,6 +892,34 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_msii_radii_scale_with_artifact_size() {
+        // 기준 크기(100mm)에서는 문헌 기본값 그대로.
+        let (base, ao) = msii_radii_for_extent(100.0);
+        assert_eq!(base, [0.8, 1.6, 3.2, 6.0]);
+        assert!((ao - 4.0).abs() < 1e-6);
+
+        // 3mm 소옥: 반경이 유물보다 커지면 안 된다.
+        let (tiny, tiny_ao) = msii_radii_for_extent(3.0);
+        assert!(
+            tiny[3] < 1.0,
+            "3mm 유물에 MSII 최대 반경 {:.2}mm 는 과대",
+            tiny[3]
+        );
+        assert!(tiny_ao < 1.0);
+
+        // 400mm 기와: 반경이 너무 작으면 문양이 사라진다.
+        let (large, large_ao) = msii_radii_for_extent(400.0);
+        assert!(large[3] > 12.0, "400mm 유물에 MSII 반경 {:.2}mm 는 과소", large[3]);
+        assert!(large_ao > 8.0);
+
+        // 크기에 대해 단조 증가해야 한다.
+        let (mid, _) = msii_radii_for_extent(50.0);
+        for k in 0..4 {
+            assert!(mid[k] <= base[k] && base[k] <= large[k]);
+        }
+    }
 
     #[test]
     fn test_ddg_cotangent_curvatures_and_xdog_stipple_rubbing_pipeline() {
