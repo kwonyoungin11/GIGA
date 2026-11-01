@@ -70,8 +70,12 @@ jobs:
           New-Item -ItemType Directory -Force -Path $shotDir | Out-Null
           # 이전 워크플로는 존재하지 않는 패키지 이름(arch3d-studio)을 호출해 항상 실패했다.
           cargo run --release --locked -p strata-studio -- --verify-all --screenshot-tour "$shotDir"
-          Get-ChildItem "$shotDir/*" | ForEach-Object {
-            if ($_.Length -lt 1000) { throw "Artifact $($_.Name) is unexpectedly small ($($_.Length) bytes)" }
+          # PNG 는 1,000B 이상, CSV/SVG 같은 텍스트 산출물은 0B 만 아니면 통과(작은 표 산출물이 정상).
+          Get-ChildItem "$shotDir/*" -File | ForEach-Object {
+            if ($_.Length -eq 0) { throw "Artifact $($_.Name) is empty" }
+            if ($_.Extension -match '^\.(png|jpg|jpeg)$' -and $_.Length -lt 1000) {
+              throw "Image $($_.Name) is unexpectedly small ($($_.Length) bytes)"
+            }
           }
 
       - name: Upload STRATA Rust verification artifacts (PNG, SVG, DXF, PDF, harness report)
