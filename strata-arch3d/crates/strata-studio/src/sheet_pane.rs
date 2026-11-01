@@ -631,6 +631,8 @@ pub struct SheetPaneState {
     cached_front_tex: Option<egui::TextureHandle>,
     cached_back_tex: Option<egui::TextureHandle>,
     cached_bottom_tex: Option<egui::TextureHandle>,
+    /// 곡면 전개 탁본의 실제 물리 크기 `[둘레 mm, 높이 mm]` (`None` = 평면 탁본)
+    pub unrolled_size_mm: Option<[f64; 2]>,
 }
 
 impl std::fmt::Debug for SheetPaneState {
@@ -679,6 +681,7 @@ impl Default for SheetPaneState {
             cached_front_tex: None,
             cached_back_tex: None,
             cached_bottom_tex: None,
+            unrolled_size_mm: None,
         }
     }
 }
@@ -792,6 +795,39 @@ fn get_or_build_ddg_mesh(
 /// 3) Mara et al. (2010) 다중 스케일 구면 적분 불변량(MSII) + 반경 제한 PCV AO + Vergne et al. (2010) Radiance Scaling
 /// 4) Winnemöller et al. (2012) XDoG (`σ_fine = 0.8`, `σ_coarse = 14.0`) 대역통과 필터링
 /// 5) 5-Octave FBM Perlin 한지 섬유 + Cellular Worley 암석 입자 + Interleaved Gradient Noise (Blue-Noise) 다계조 점묘 합성
+/// 전개 탁본 텍스처 해상도를 물리 종횡비에 맞춰 계산한다.
+/// 정사각형으로 굽으면 모눈 위 1:1 계측이 깨지므로, 긴 변을 `base_px` 로 두고 짧은 변을 비례 축소한다.
+pub fn unrolled_texture_dims(size_mm: [f64; 2], base_px: u32) -> (u32, u32) {
+    let w_mm = size_mm[0].max(1e-3);
+    let h_mm = size_mm[1].max(1e-3);
+    let long = w_mm.max(h_mm);
+    let base = base_px.clamp(64, 960) as f64;
+    if (w_mm - long).abs() < 1e-9 {
+        let h = (base * h_mm / w_mm).round().clamp(48.0, 960.0);
+        (base as u32, h as u32)
+    } else {
+        let w = (base * w_mm / h_mm).round().clamp(48.0, 960.0);
+        (w as u32, base as u32)
+    }
+}
+
+/// 곡면 전개도에서 봉합선($\theta = \pm\pi$)을 가로지르는 삼각형 판별.
+/// 세 정점의 전개 좌표가 총 폭의 절반 이상 벌어지면 봉합선 스패닝으로 보고 컬링한다.
+pub fn is_seam_spanning_triangle(u: [f64; 3], total_width_mm: f64) -> bool {
+    if total_width_mm <= 1e-6 {
+        return false;
+    }
+    let mut lo = f64::INFINITY;
+    let mut hi = f64::NEG_INFINITY;
+    for v in u {
+        lo = lo.min(v);
+        hi = hi.max(v);
+    }
+    // 전개 범위는 [-πR, +πR] = [-w/2, +w/2] 이므로,
+    // 양 끝 극단(±45% 폭)에 정점이 동시에 걸린 삼각형만 봉합선 스패닝으로 본다.
+    lo < -total_width_mm * 0.45 && hi > total_width_mm * 0.45
+}
+
 pub fn render_orthographic_rubbing_rgba_with_params(
     mesh: &TriMesh,
     kind: PlateRasterKind,
@@ -922,6 +958,11 @@ pub fn render_orthographic_rubbing_rgba_with_params(
         let (p0, n0) = projected[i0];
         let (p1, n1) = projected[i1];
         let (p2, n2) = projected[i2];
+
+        // 봉합선을 가로지르는 삼각형은 전개도 전체를 가로지르는 줄무늬를 만든다 → 컬링
+        if unrolled.is_some() && is_seam_spanning_triangle([p0[0], p1[0], p2[0]], du) {
+            continue;
+        }
 
         let x0 = (pad + (p0[0] - u_min) * sx) as f32;
         let y0 = ((h as f64) - 1.0 - pad - (p0[1] - v_min) * sy) as f32;
@@ -1709,6 +1750,15 @@ pub fn render_sheet_pane_egui(
     // 연속으로 앞으로 뒤집힌 면(외저면 -> 정면외면 -> 상하반전 -> 내면/후면) 및 90°/180° 회전이 즉시 반영됨!
     if state.cached_key.as_ref() != Some(&key) {
         let params_copy = state.rubbing_params.clone();
+        // 곡면 전개 시 실제 물리 크기(둘레 × 높이)와 그에 맞는 텍스처 해상도를 쓴다.
+        state.unrolled_size_mm = params_copy.unroll_mode.map(|mode| {
+            let u = strata_shade::unroll_mesh_surface(mesh, mode);
+            [u.unrolled_width_mm, u.unrolled_height_mm]
+        });
+        let (bw, bh) = match state.unrolled_size_mm {
+            Some(size) => unrolled_texture_dims(size, 520),
+            None => (520, 520),
+        };
         let (front_img, (back_img, mut bottom_img)) = rayon::join(
             || {
                 render_orthographic_rubbing_rgba_with_params(
@@ -1743,8 +1793,8 @@ pub fn render_sheet_pane_egui(
                             flipped_kind,
                             psi_deg,
                             &params_copy,
-                            520,
-                            520,
+                            bw,
+                            bh,
                         )
                     },
                 )
@@ -1987,6 +2037,12 @@ pub fn render_sheet_pane_egui(
         let mut right_rubbing_box_px: Option<egui::Rect> = None;
 
         for (ri, region) in plate.raster_regions.iter().enumerate() {
+            // 곡면 전개 모드에서는 전개 띠 하나만 도판에 표시한다(다른 판과 겹치지 않도록).
+            if state.unrolled_size_mm.is_some()
+                && region.kind != PlateRasterKind::BottomPlanRubbing
+            {
+                continue;
+            }
             let raster_layer_idx = if ri == 0 && region.kind == PlateRasterKind::FrontExteriorRubbing {
                 1usize
             } else {
@@ -2012,6 +2068,33 @@ pub fn render_sheet_pane_egui(
                 egui::pos2(rx0.min(rx1), ry0.min(ry1)),
                 egui::pos2(rx0.max(rx1), ry0.max(ry1)),
             );
+
+            // 곡면 전개 탁본은 실제 (둘레 × 높이) mm 크기로 1:1 배치해야 모눈 위 계측이 성립한다.
+            if region.kind == PlateRasterKind::BottomPlanRubbing {
+                if let Some([sw, sh]) = state.unrolled_size_mm {
+                    let w_px = (sw as f32) * scale;
+                    let h_px = (sh as f32) * scale;
+                    let center = dst_rect.center();
+                    let mut rect = egui::Rect::from_center_size(center, egui::vec2(w_px, h_px));
+                    let dx = if rect.left() < p_rect.left() {
+                        p_rect.left() - rect.left()
+                    } else if rect.right() > p_rect.right() {
+                        p_rect.right() - rect.right()
+                    } else {
+                        0.0
+                    };
+                    let dy = if rect.top() < p_rect.top() {
+                        p_rect.top() - rect.top()
+                    } else if rect.bottom() > p_rect.bottom() {
+                        p_rect.bottom() - rect.bottom()
+                    } else {
+                        0.0
+                    };
+                    rect = rect.translate(egui::vec2(dx, dy));
+                    dst_rect = rect;
+                    right_rubbing_box_px = Some(rect);
+                }
+            }
 
             // Image 14: 우측 탁본 영역(BottomPlanRubbing 또는 두 번째 보조 탁본 영역)은
             // 사용자가 드래그한 부분 탁본(rubbing_roi_mm)이 있을 때 그 드래그한 실제 크기(1:1 mm 스케일) 그대로 나타나게 함!
@@ -2319,7 +2402,7 @@ pub fn render_sheet_pane_egui(
             [cx_left_mm, cy_elev_mm],
         ];
 
-        for elem in &plate.paths {
+        for elem in plate.paths.iter().filter(|_| state.unrolled_size_mm.is_none()) {
             if elem.points_mm.len() < 2 {
                 continue;
             }
@@ -2481,7 +2564,7 @@ pub fn render_sheet_pane_egui(
         }
 
         // 텍스트 주석 및 치수 콜아웃 (각 레이어의 가시성 및 오프셋 연동)
-        for c in &plate.callouts {
+        for c in plate.callouts.iter().filter(|_| state.unrolled_size_mm.is_none()) {
             if c.text.contains("평균두께")
                 || c.text.contains("최대동경")
                 || (state.rubbing_roi_mm.is_some() && c.text.contains("외저면"))
@@ -2527,7 +2610,10 @@ pub fn render_sheet_pane_egui(
         // 4. Image 15: "이것도 도면안에 필요한 부분에 최대한 가깝게 와야한다. 유물의 크기 이동에따라 이동할수있게"
         // 유물 실제 외곽 경계(main_vessel_min_x .. max_x, top_y .. bot_y)에 최대한 밀착되어 함께 이동하는 치수선!
         // =========================================================================================
-        if state.view_transforms[5].visible && state.view_transforms[1].visible {
+        if state.view_transforms[5].visible
+            && state.view_transforms[1].visible
+            && state.unrolled_size_mm.is_none()
+        {
             if let Some(first_reg) = plate.raster_regions.first() {
                 let fallback_rx0 =
                     origin_x + (first_reg.rect_mm[0].min(first_reg.rect_mm[2]) as f32) * scale;
@@ -3626,6 +3712,32 @@ mod tests {
             assert!(opaque_px > 2_000);
             assert!(ink_shaded_px > 400);
         }
+    }
+
+    #[test]
+    fn test_unrolled_texture_keeps_physical_aspect_ratio() {
+        // 원주 364.4mm × 높이 64.0mm 전개 띠: 텍셀 종횡비가 물리 비율과 같아야 1:1 계측이 성립한다.
+        let (w, h) = unrolled_texture_dims([364.4, 64.0], 520);
+        assert_eq!(w, 520);
+        let expected_h = 520.0 * (64.0 / 364.4);
+        assert!(
+            ((h as f64) - expected_h).abs() < 2.0,
+            "전개 텍스처 높이 {}px 는 물리 비율 {:.1}px 와 어긋남",
+            h,
+            expected_h
+        );
+    }
+
+    #[test]
+    fn test_seam_spanning_triangle_is_culled_in_unroll() {
+        // 원주 364mm 전개도에서 봉합선(±π)을 가로지르는 삼각형은 전체 폭 줄무늬를 만든다.
+        let width = 364.0;
+        assert!(is_seam_spanning_triangle([-182.0, 0.0, 182.0], width));
+        // 정상 삼각형은 컬링하지 않는다.
+        assert!(!is_seam_spanning_triangle([-100.0, 0.0, 100.0], width));
+        assert!(!is_seam_spanning_triangle([10.0, 12.0, 15.0], width));
+        // 폭이 0 이면 판정 불가 → 컬링하지 않는다.
+        assert!(!is_seam_spanning_triangle([-1.0, 0.0, 1.0], 0.0));
     }
 
     #[test]
