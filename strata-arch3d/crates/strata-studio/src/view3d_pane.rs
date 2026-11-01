@@ -35,6 +35,15 @@ impl View3DShaderMode {
     }
 }
 
+/// 3D 뷰포트 셰이더 칩에 노출되는 모드 목록. 백엔드 5종과 항상 일치해야 한다.
+pub const SHADER_CHIP_MODES: [View3DShaderMode; 5] = [
+    View3DShaderMode::PhotoTexture,
+    View3DShaderMode::SolidClay,
+    View3DShaderMode::RealTimeRubbing,
+    View3DShaderMode::Segmentation3Way,
+    View3DShaderMode::XRayInner,
+];
+
 /// 3D 뷰포트 마우스 드래그 조작 모드.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DragMode3D {
@@ -2800,11 +2809,7 @@ pub fn render_view3d_pane_egui(
             ink,
         );
 
-        let modes = [
-            View3DShaderMode::PhotoTexture,
-            View3DShaderMode::SolidClay,
-            View3DShaderMode::RealTimeRubbing,
-        ];
+        let modes = SHADER_CHIP_MODES;
         let mut chip_x = rect.left() + 6.0;
         let chip_y = rect.top() + 26.0;
         for m in modes {
@@ -2817,12 +2822,31 @@ pub fn render_view3d_pane_egui(
                 egui::Id::new(("v3d_shader_chip", label)),
                 egui::Sense::click(),
             );
-            let is_on =
-                !state.show_3way_segmentation && !state.xray_inner_mode && state.shader_mode == m;
+            let is_on = match m {
+                View3DShaderMode::Segmentation3Way => state.show_3way_segmentation,
+                View3DShaderMode::XRayInner => state.xray_inner_mode,
+                _ => {
+                    !state.show_3way_segmentation
+                        && !state.xray_inner_mode
+                        && state.shader_mode == m
+                }
+            };
             if c_resp.clicked() {
-                state.show_3way_segmentation = false;
-                state.xray_inner_mode = false;
-                state.shader_mode = m;
+                match m {
+                    View3DShaderMode::Segmentation3Way => {
+                        state.show_3way_segmentation = true;
+                        state.xray_inner_mode = false;
+                    }
+                    View3DShaderMode::XRayInner => {
+                        state.xray_inner_mode = true;
+                        state.show_3way_segmentation = false;
+                    }
+                    _ => {
+                        state.show_3way_segmentation = false;
+                        state.xray_inner_mode = false;
+                        state.shader_mode = m;
+                    }
+                }
             }
             painter.rect_filled(c_rect, 3.0, if is_on { ink } else { surface });
             painter.rect_stroke(
@@ -3311,6 +3335,26 @@ mod tests {
             state.apply_cardinal_fine_dial(CardinalDialDir::Left, 1);
         }
         assert!((state.active_section_angle_deg - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_shader_chip_modes_expose_all_five_backend_modes() {
+        let modes = SHADER_CHIP_MODES;
+        assert_eq!(
+            modes.len(),
+            5,
+            "3D 셰이더 칩은 백엔드 5종을 모두 노출해야 한다(현재 {}개)",
+            modes.len()
+        );
+        for m in [
+            View3DShaderMode::PhotoTexture,
+            View3DShaderMode::SolidClay,
+            View3DShaderMode::RealTimeRubbing,
+            View3DShaderMode::Segmentation3Way,
+            View3DShaderMode::XRayInner,
+        ] {
+            assert!(modes.contains(&m), "{:?} 칩이 노출되지 않음", m);
+        }
     }
 
     #[test]
