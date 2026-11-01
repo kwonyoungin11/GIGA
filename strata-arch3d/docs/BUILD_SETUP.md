@@ -64,7 +64,28 @@ components = ["rustfmt", "clippy"]
 - 이전 워크플로는 존재하지 않는 패키지 이름(`arch3d-studio`)을 호출해 V8 단계가 항상 실패했다. `strata-studio` 로 고쳤다.
 
 ## 6. 포맷 정리 (2026-11-01 완료)
-
 - `cargo fmt --all` 을 **한 번 일괄 적용**했다(43개 파일, 942+/692-). 이전에는 `cargo fmt --check` 가 50개 파일 219 hunks 로 실패했는데, 저장소 코드가 rustfmt 로 정리된 적이 없었기 때문이다.
 - 이후 `cargo fmt --all -- --check` 는 통과하며, CI 게이트에도 같은 검사를 넣었다.
 - 새 코드를 작성할 때는 `cargo format`(별칭)으로 적용하고 `cargo fmt-check` 로 확인한다.
+
+## 7. 배포용 실행 파일과 바탕화면 바로가기
+
+- 바탕화면 바로가기(`STRATA 동국유물실측.lnk`)는 빌드 산출물 폴더가 아니라 **고정 폴더**
+  `%LOCALAPPDATA%\Programs\STRATA\strata-studio.exe` 를 가리킨다(`cargo clean` 으로 깨지지 않게).
+- 코드를 바꾼 뒤에는 두 줄로 갱신한다.
+
+```powershell
+cd A:\giga\strata-arch3d
+cargo build --release -p strata-studio
+Copy-Item target\release\strata-studio.exe "$env:LOCALAPPDATA\Programs\STRATA\strata-studio.exe" -Force
+```
+
+- 저장 기능 자동 검증:
+  `strata-studio.exe --open <mesh> --save-project <out.darch>` → 창이 6프레임 그려진 뒤
+  현재 상태를 `.darch` 로 저장하고 스스로 종료한다(EXIT=0).
+
+## 8. 알려진 환경 제약
+
+- 이 PC 에는 **rustup 실행 파일이 없다**(`~/.cargo/bin` 없음). clippy·rustfmt 는 배포본 컴포넌트를
+  임시 폴더에 풀어 PATH 로만 쓰고 있어 재부팅·정리 후 다시 준비해야 한다.
+  영구 사용하려면 [rustup-init](https://rustup.rs) 설치를 권장한다(설치되면 `rust-toolchain.toml` 이 자동 처리).
