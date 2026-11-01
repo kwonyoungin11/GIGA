@@ -282,6 +282,10 @@ pub struct StrataStudioApp {
     capture_window_path: Option<PathBuf>,
     capture_frames_rendered: u32,
     screenshot_requested: bool,
+    /// `--save-project <path>`: 창을 띄운 뒤 현재 상태를 이 경로에 저장하고 종료한다(저장 경로 자동 검증용).
+    save_project_path: Option<PathBuf>,
+    save_project_frames: u32,
+    save_project_done: bool,
 }
 
 /// `[저장]` 시점의 화면 상태를 `.darch` 프로젝트로 변환하기 위한 값 묶음.
@@ -342,11 +346,13 @@ impl StrataStudioApp {
         initial_slot: Option<usize>,
         initial_unroll: Option<strata_shade::UnrollMode>,
         initial_open: Option<PathBuf>,
+        save_project_path: Option<PathBuf>,
     ) -> Self {
         configure_korean_fonts_and_strata_theme(&cc.egui_ctx);
 
         let mut slots = Vec::new();
-        let deferred_startup_load = if capture_window_path.is_some() {
+        let deferred_startup_load = if capture_window_path.is_some() || save_project_path.is_some()
+        {
             Self::load_real_or_preset_slots(&mut slots);
             false
         } else {
@@ -443,6 +449,9 @@ impl StrataStudioApp {
             deferred_startup_load,
             capture_window_path,
             capture_frames_rendered: 0,
+            save_project_path,
+            save_project_frames: 0,
+            save_project_done: false,
             screenshot_requested: false,
         }
     }
@@ -591,6 +600,12 @@ impl StrataStudioApp {
     /// `[저장]`: 현재 유물·자세·탁본 설정을 `.darch` 프로젝트로 저장한다.
     /// 이미 프로젝트 경로가 있으면 그 경로에 덮어쓰고, 없으면 저장 대화상자를 띄운다.
     fn save_darch_project(&mut self) {
+        self.save_darch_project_to(None);
+    }
+
+    /// 저장 대상 경로를 지정해 저장한다(`Some`) — `None` 이면 대화상자를 띄운다.
+    /// `--save-project <path>` 자동 검증도 이 경로를 쓴다.
+    fn save_darch_project_to(&mut self, explicit_target: Option<PathBuf>) {
         let input = match self.slots.get(self.selected_slot_idx) {
             Some(slot) => ProjectSaveInput {
                 title: slot.title.clone(),
@@ -614,18 +629,20 @@ impl StrataStudioApp {
             }
         };
         let project = build_darch_project(&input);
-        let target = self.project_path.clone().or_else(|| {
-            let default_name = input
-                .mesh_path
-                .as_ref()
-                .and_then(|p| p.file_stem())
-                .map(|s| format!("{}.darch", s.to_string_lossy()))
-                .unwrap_or_else(|| String::from("무제_유물.darch"));
-            rfd::FileDialog::new()
-                .add_filter("STRATA 프로젝트 (.darch)", &["darch"])
-                .set_file_name(default_name)
-                .save_file()
-        });
+        let target = explicit_target
+            .or_else(|| self.project_path.clone())
+            .or_else(|| {
+                let default_name = input
+                    .mesh_path
+                    .as_ref()
+                    .and_then(|p| p.file_stem())
+                    .map(|s| format!("{}.darch", s.to_string_lossy()))
+                    .unwrap_or_else(|| String::from("무제_유물.darch"));
+                rfd::FileDialog::new()
+                    .add_filter("STRATA 프로젝트 (.darch)", &["darch"])
+                    .set_file_name(default_name)
+                    .save_file()
+            });
         let Some(target) = target else {
             self.status_message = String::from("저장이 취소되었습니다");
             return;
@@ -1356,6 +1373,17 @@ impl eframe::App for StrataStudioApp {
                 }
             });
 
+        // 저장 경로 자동 검증 (`--save-project <path>`): 창이 뜬 뒤 현재 상태를 저장하고 종료
+        if let Some(path) = self.save_project_path.clone() {
+            self.save_project_frames += 1;
+            if self.save_project_frames >= 6 && !self.save_project_done {
+                self.save_project_done = true;
+                self.save_darch_project_to(Some(path));
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+            ctx.request_repaint();
+        }
+
         // 실제 실행 창 프레임버퍼 캡처 요청 (`--capture-window`)
         if self.capture_window_path.is_some() {
             self.capture_frames_rendered += 1;
@@ -1421,6 +1449,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut open_rubbing_win = false;
     let mut initial_unroll: Option<strata_shade::UnrollMode> = None;
     let mut initial_open: Option<PathBuf> = None;
+    let mut save_project_path: Option<PathBuf> = None;
 
     let mut i = 1;
     while i < args.len() {
@@ -1459,6 +1488,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             "--open" if i + 1 < args.len() => {
                 initial_open = Some(PathBuf::from(&args[i + 1]));
+                i += 1;
+            }
+            "--save-project" if i + 1 < args.len() => {
+                save_project_path = Some(PathBuf::from(&args[i + 1]));
                 i += 1;
             }
             _ => {}
@@ -1522,6 +1555,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 initial_slot,
                 initial_unroll,
                 initial_open,
+                save_project_path,
             );
             if open_rubbing_win {
                 app.handle_tile_click("ROI_RUBBING_WIN");
