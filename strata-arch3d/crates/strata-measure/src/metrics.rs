@@ -90,12 +90,31 @@ pub fn compute_artifact_measurements(
     let mut sherd_circle_fit = None;
     let mut diameter_std_err_mm = None;
     let mut remaining_arc_pct = None;
-    let mut rim_or_outer_diameter_mm = round_01(max_xy);
+
+    let cx_mid = 0.5 * (mesh.bbox.min[0] + mesh.bbox.max[0]);
+    let cy_mid = 0.5 * (mesh.bbox.min[1] + mesh.bbox.max[1]);
+
+    // 구연부(상단 8% 높이 띠) 실측 최대 반경 → 구경. 최대복경과 분리 계측한다.
+    let z_top_band = mesh.bbox.max[2] - height_z * 0.08;
+    let mut rim_band_pts = 0usize;
+    let mut max_rim_r = 0.0f64;
+    for p in &mesh.positions {
+        if p[2] >= z_top_band {
+            let r = (p[0] - cx_mid).hypot(p[1] - cy_mid);
+            if r > max_rim_r {
+                max_rim_r = r;
+            }
+            rim_band_pts += 1;
+        }
+    }
+    let mut rim_or_outer_diameter_mm = if rim_band_pts >= 8 && max_rim_r > 1.0 {
+        round_01((max_rim_r * 2.0).min(max_xy))
+    } else {
+        round_01(max_xy)
+    };
 
     // 하단 8% 높이 구간 정점들의 최대 반경으로부터 저경(굽외경) 동적 계측
     let z_base_band = mesh.bbox.min[2] + height_z * 0.08;
-    let cx_mid = 0.5 * (mesh.bbox.min[0] + mesh.bbox.max[0]);
-    let cy_mid = 0.5 * (mesh.bbox.min[1] + mesh.bbox.max[1]);
     let mut max_base_r = 0.0f64;
     for p in &mesh.positions {
         if p[2] <= z_base_band {
@@ -111,7 +130,8 @@ pub fn compute_artifact_measurements(
         round_01(min_xy * 0.45)
     };
     let max_belly_diameter_mm = round_01(max_xy);
-    let mean_wall_thickness_mm = round_01((max_xy * 0.042).clamp(2.5, 18.0));
+    let mean_wall_thickness_mm = measure_radial_wall_thickness(mesh, cx_mid, cy_mid, height_z)
+        .unwrap_or_else(|| round_01((max_xy * 0.042).clamp(2.5, 18.0)));
     let slope_rad = height_z.atan2(((max_xy - base_diameter_or_width_mm) * 0.5).abs().max(1.0));
     let wall_stance_angle_deg = round_01(slope_rad.to_degrees().clamp(35.0, 89.5));
 
@@ -269,4 +289,64 @@ pub fn compute_artifact_measurements(
         estimated_weight_g,
         metric_strip_summary,
     }
+}
+
+/// 중간 높이 띠(`40~60%`)에서 방위각별 `외벽 반경 - 내벽 반경` 의 중앙값으로 기벽 두께를 실측한다.
+/// 내벽이 스캔되지 않은 단일 껍질 메쉬는 `None` 을 돌려 호출측이 추정값으로 되돌아가게 한다.
+fn measure_radial_wall_thickness(
+    mesh: &TriMesh,
+    cx: f64,
+    cy: f64,
+    height_z: f64,
+) -> Option<f64> {
+    const BINS: usize = 36;
+    if height_z <= 0.0 || mesh.positions.len() < BINS * 2 {
+        return None;
+    }
+    let z_lo = mesh.bbox.min[2] + height_z * 0.40;
+    let z_hi = mesh.bbox.min[2] + height_z * 0.60;
+
+    let mut r_min = [f64::INFINITY; BINS];
+    let mut r_max = [0.0f64; BINS];
+    let mut counts = [0usize; BINS];
+
+    for p in &mesh.positions {
+        if p[2] < z_lo || p[2] > z_hi {
+            continue;
+        }
+        let dx = p[0] - cx;
+        let dy = p[1] - cy;
+        let r = dx.hypot(dy);
+        if r <= 1e-6 {
+            continue;
+        }
+        let mut a = dy.atan2(dx);
+        if a < 0.0 {
+            a += std::f64::consts::TAU;
+        }
+        let bin = ((a / std::f64::consts::TAU) * BINS as f64) as usize % BINS;
+        if r < r_min[bin] {
+            r_min[bin] = r;
+        }
+        if r > r_max[bin] {
+            r_max[bin] = r;
+        }
+        counts[bin] += 1;
+    }
+
+    let filled = counts.iter().filter(|&&c| c >= 2).count();
+    if filled < BINS / 3 {
+        return None;
+    }
+
+    let mut diffs: Vec<f64> = (0..BINS)
+        .filter(|&b| counts[b] >= 2 && (r_max[b] - r_min[b]) > 0.3)
+        .map(|b| r_max[b] - r_min[b])
+        .collect();
+    if diffs.len() < filled / 3 {
+        return None;
+    }
+    diffs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let median = diffs[diffs.len() / 2];
+    Some(((median * 10.0).round() / 10.0).clamp(0.5, 40.0))
 }
