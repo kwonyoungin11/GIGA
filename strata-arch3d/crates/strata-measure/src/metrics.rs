@@ -346,7 +346,17 @@ fn measure_radial_wall_thickness(
     if diffs.len() < filled / 2 {
         return None;
     }
+    let mut inner_radii: Vec<f64> = (0..BINS)
+        .filter(|&b| counts[b] >= 2 && (r_max[b] - r_min[b]) > 1.5)
+        .map(|b| r_min[b])
+        .collect();
     diffs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    inner_radii.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let median = diffs[diffs.len() / 2];
+    let inner_med = inner_radii[inner_radii.len() / 2];
+    // 실제 기벽은 내벽 반경의 35% 를 넘지 않는다. 넘으면 같은 띠에 잡힌 다른 면(조각 폭)이므로 실측 포기.
+    if inner_med <= 1e-6 || median > inner_med * 0.35 {
+        return None;
+    }
     Some(((median * 10.0).round() / 10.0).clamp(1.0, 40.0))
 }

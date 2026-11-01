@@ -102,6 +102,19 @@ mod tests {
     }
 
     #[test]
+    fn test_fragment_does_not_report_band_spread_as_wall_thickness() {
+        // 편조각 스캔처럼 같은 방위각 띠에 서로 먼 두 면이 잡히면 기벽이 아니라 조각 폭이다.
+        // 이런 경우 실측을 포기하고 추정식으로 되돌아가야 한다(40mm 같은 값 금지).
+        let mesh = hollow_jar_mesh(72.0, 112.0, 112.0, 112.0, 40.0);
+        let report = compute_artifact_measurements(&mesh, ArtifactCategory::Potsherd);
+        assert!(
+            report.mean_wall_thickness_mm < 20.0,
+            "조각 유물에 기벽 {:.1}mm 로 오측정",
+            report.mean_wall_thickness_mm
+        );
+    }
+
+    #[test]
     fn test_complete_vessel_rim_separated_from_max_belly_and_wall_measured() {
         // 바닥 반경 30, 최대복경 반경 58(Ø116), 구연 반경 40(Ø80), 기벽 6mm 인 완형 항아리.
         let mesh = hollow_jar_mesh(64.0, 40.0, 58.0, 30.0, 6.0);

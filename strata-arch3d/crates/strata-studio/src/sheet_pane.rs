@@ -795,6 +795,20 @@ fn get_or_build_ddg_mesh(
 /// 3) Mara et al. (2010) 다중 스케일 구면 적분 불변량(MSII) + 반경 제한 PCV AO + Vergne et al. (2010) Radiance Scaling
 /// 4) Winnemöller et al. (2012) XDoG (`σ_fine = 0.8`, `σ_coarse = 14.0`) 대역통과 필터링
 /// 5) 5-Octave FBM Perlin 한지 섬유 + Cellular Worley 암석 입자 + Interleaved Gradient Noise (Blue-Noise) 다계조 점묘 합성
+/// CLI `--plate-mode <1..8|auto>` 값을 도판 모드로 해석한다.
+pub fn parse_plate_mode(arg: &str) -> Option<strata_export::PlateLayoutMode> {
+    let s = arg.trim();
+    if s.eq_ignore_ascii_case("auto") || s.is_empty() {
+        return None;
+    }
+    let n = s.parse::<usize>().ok()?;
+    if (1..=strata_export::PlateLayoutMode::ALL.len()).contains(&n) {
+        Some(strata_export::PlateLayoutMode::ALL[n - 1])
+    } else {
+        None
+    }
+}
+
 /// CLI `--unroll <mode>` 값을 전개 모드로 해석한다. `none`/미지정은 평면 탁본(`None`).
 pub fn parse_unroll_mode(arg: &str) -> Option<strata_shade::UnrollMode> {
     match arg.trim().to_ascii_lowercase().as_str() {
@@ -3722,6 +3736,22 @@ mod tests {
             assert!(opaque_px > 2_000);
             assert!(ink_shaded_px > 400);
         }
+    }
+
+    #[test]
+    fn test_parse_plate_mode_cli() {
+        assert_eq!(parse_plate_mode("auto"), None);
+        assert_eq!(
+            parse_plate_mode("1"),
+            Some(strata_export::PlateLayoutMode::ALL[0])
+        );
+        assert_eq!(
+            parse_plate_mode("8"),
+            Some(strata_export::PlateLayoutMode::ALL[7])
+        );
+        assert_eq!(parse_plate_mode("9"), None);
+        assert_eq!(parse_plate_mode("0"), None);
+        assert_eq!(parse_plate_mode("bogus"), None);
     }
 
     #[test]

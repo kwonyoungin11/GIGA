@@ -273,6 +273,7 @@ impl StrataStudioApp {
         initial_tab: Option<WorkflowTab>,
         initial_slot: Option<usize>,
         initial_unroll: Option<strata_shade::UnrollMode>,
+        initial_open: Option<PathBuf>,
     ) -> Self {
         configure_korean_fonts_and_strata_theme(&cc.egui_ctx);
 
@@ -294,6 +295,29 @@ impl StrataStudioApp {
             ));
             true
         };
+
+        // `--open <path>`: 하네스·검증용으로 지정한 실물 스캔을 최우선 슬롯으로 올린다.
+        if let Some(ref p) = initial_open {
+            if let Ok(mesh) = load_any_mesh(p) {
+                let title = p
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("스캔 유물")
+                    .to_string();
+                slots.insert(
+                    0,
+                    ArtifactSlotEntry::from_mesh(
+                        title,
+                        Some(p.clone()),
+                        ArtifactCategory::CompleteVessel,
+                        None,
+                        None,
+                        None,
+                        mesh,
+                    ),
+                );
+            }
+        }
 
         let mut splash = SplashState::default();
         if capture_window_path.is_some() {
@@ -1193,6 +1217,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut initial_slot: Option<usize> = None;
     let mut open_rubbing_win = false;
     let mut initial_unroll: Option<strata_shade::UnrollMode> = None;
+    let mut initial_open: Option<PathBuf> = None;
 
     let mut i = 1;
     while i < args.len() {
@@ -1227,6 +1252,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             "--unroll" if i + 1 < args.len() => {
                 initial_unroll = crate::sheet_pane::parse_unroll_mode(&args[i + 1]);
+                i += 1;
+            }
+            "--open" if i + 1 < args.len() => {
+                initial_open = Some(PathBuf::from(&args[i + 1]));
                 i += 1;
             }
             _ => {}
@@ -1287,6 +1316,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 initial_tab,
                 initial_slot,
                 initial_unroll,
+                initial_open,
             );
             if open_rubbing_win {
                 app.handle_tile_click("ROI_RUBBING_WIN");
