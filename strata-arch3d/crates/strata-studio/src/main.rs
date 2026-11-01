@@ -23,7 +23,8 @@ use strata_core::{
 };
 use strata_export::{
     compose_archaeological_plate, compose_archaeological_plate_with_mode, compute_tiled_print_plan,
-    export_ret_folder_package, render_plate_to_illustrator_svg, render_plate_to_pdf_bytes,
+    export_ret_folder_package, render_plate_to_illustrator_svg_with_meta,
+    render_plate_to_pdf_bytes,
     ComposedPlate2D, PaperSheetSize, PlateComposeInput, PlateLayoutMode,
 };
 use strata_io::{load_any_mesh, Ap2Project};
@@ -703,7 +704,13 @@ impl StrataStudioApp {
             "EXP_SVG" => {
                 if let Some(slot) = self.slots.get(self.selected_slot_idx) {
                     let out_path = std::env::temp_dir().join("strata_cutline_rc0.svg");
-                    let svg = render_plate_to_illustrator_svg(&slot.composed_plate);
+                    // 탁본 출처(광원·파라미터·전개모드)를 SVG 메타데이터에 각인해 재현 근거를 남긴다.
+                    let provenance =
+                        crate::sheet_pane::rubbing_provenance_line(&self.sheet_state.rubbing_params);
+                    let svg = render_plate_to_illustrator_svg_with_meta(
+                        &slot.composed_plate,
+                        &provenance,
+                    );
                     if std::fs::write(&out_path, svg.as_bytes()).is_ok() {
                         self.status_message =
                             format!("1mm=5px SVG 제도선 저장 완료: {}", out_path.display());

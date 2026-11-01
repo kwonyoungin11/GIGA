@@ -8,6 +8,14 @@ pub const PX_PER_MM_1TO1: f64 = 5.0;
 /// - `1 mm = 5 px` (`PX_PER_MM_1TO1 = 5.0`) 정밀 스케일 계약을 준수한다.
 /// - 네 모서리에 `1×1 px` 투명 정렬 앵커 `<rect>`를 삽입하여 래스터 탁본 PNG와 Illustrator에서 0.00 px 오차로 겹쳐지게 한다 (`V7`).
 pub fn render_plate_to_illustrator_svg(plate: &ComposedPlate2D) -> String {
+    render_plate_to_illustrator_svg_with_meta(plate, "")
+}
+
+/// `provenance` 문자열을 SVG `<metadata>` 와 숨김 레이어로 각인해 도판의 재현 근거를 남긴다.
+pub fn render_plate_to_illustrator_svg_with_meta(
+    plate: &ComposedPlate2D,
+    provenance: &str,
+) -> String {
     let w_px = (plate.canvas_width_mm * PX_PER_MM_1TO1).round().max(50.0);
     let h_px = (plate.canvas_height_mm * PX_PER_MM_1TO1).round().max(50.0);
 
@@ -18,6 +26,18 @@ pub fn render_plate_to_illustrator_svg(plate: &ComposedPlate2D) -> String {
         r#"<svg xmlns="http://www.w3.org/2000/svg" width="{w_px:.0}px" height="{h_px:.0}px" viewBox="0 0 {w_px:.0} {h_px:.0}" data-scale-px-per-mm="{PX_PER_MM_1TO1:.1}" data-plate-mode="{:?}">"#,
         plate.mode
     );
+    if !provenance.is_empty() {
+        let _ = writeln!(
+            svg,
+            "  <metadata id=\"STRATA_PROVENANCE\">{}</metadata>",
+            provenance.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+        );
+        let _ = writeln!(
+            svg,
+            r#"  <g id="출처_비인쇄" display="none"><text x="0" y="0" font-size="1">{}</text></g>"#,
+            provenance.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+        );
+    }
     let _ = writeln!(
         svg,
         r##"  <rect id="한지_배경" x="0" y="0" width="{w_px:.0}" height="{h_px:.0}" fill="#FAF9F5" />"##

@@ -795,6 +795,60 @@ fn get_or_build_ddg_mesh(
 /// 3) Mara et al. (2010) 다중 스케일 구면 적분 불변량(MSII) + 반경 제한 PCV AO + Vergne et al. (2010) Radiance Scaling
 /// 4) Winnemöller et al. (2012) XDoG (`σ_fine = 0.8`, `σ_coarse = 14.0`) 대역통과 필터링
 /// 5) 5-Octave FBM Perlin 한지 섬유 + Cellular Worley 암석 입자 + Interleaved Gradient Noise (Blue-Noise) 다계조 점묘 합성
+/// 탁본 파라미터를 결정론적으로 요약한 64비트 해시(FNV-1a).
+/// 같은 값이면 언제나 같은 해시가 나오므로 도판 출처(provenance)에 각인할 수 있다.
+pub fn rubbing_params_hash(p: &AcademicRubbingParams) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    let mut feed = |v: i64| {
+        for b in v.to_le_bytes() {
+            h ^= b as u64;
+            h = h.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    };
+    feed(p.ink_density_pct.round() as i64);
+    feed((p.msii_detail_boost * 100.0).round() as i64);
+    feed((p.sigmoid_contrast * 10.0).round() as i64);
+    feed((p.contact_threshold * 100.0).round() as i64);
+    feed(match p.style {
+        AcademicRubbingStyle::WetHanjiInk => 1,
+        AcademicRubbingStyle::DryGraphite => 2,
+        AcademicRubbingStyle::MsiiRidgeEnhance => 3,
+    });
+    feed((p.pose_tilt_deg * 10.0).round() as i64);
+    feed((p.pose_roll_deg * 10.0).round() as i64);
+    feed(p.light_azimuth_deg.round() as i64);
+    feed(p.light_elevation_deg.round() as i64);
+    feed((p.light_intensity * 100.0).round() as i64);
+    feed(match p.unroll_mode {
+        None => 0,
+        Some(strata_shade::UnrollMode::Cylindrical) => 1,
+        Some(strata_shade::UnrollMode::Conical) => 2,
+        Some(strata_shade::UnrollMode::Spherical) => 3,
+    });
+    h
+}
+
+/// 도판에 각인할 탁본 출처 한 줄. 값이 바뀌면 문자열도 바뀐다.
+pub fn rubbing_provenance_line(p: &AcademicRubbingParams) -> String {
+    let unroll = match p.unroll_mode {
+        None => "평면",
+        Some(strata_shade::UnrollMode::Cylindrical) => "원통",
+        Some(strata_shade::UnrollMode::Conical) => "원뿔",
+        Some(strata_shade::UnrollMode::Spherical) => "구면",
+    };
+    format!(
+        "L-Std {:.0}/{:.0}/{:.2} · MSII {:.2} · Sigmoid {:.1} · Ink {:.0}% · {} · #{:08x}",
+        p.light_azimuth_deg,
+        p.light_elevation_deg,
+        p.light_intensity,
+        p.msii_detail_boost,
+        p.sigmoid_contrast,
+        p.ink_density_pct,
+        unroll,
+        (rubbing_params_hash(p) & 0xffff_ffff) as u32
+    )
+}
+
 /// CLI `--plate-mode <1..8|auto>` 값을 도판 모드로 해석한다.
 pub fn parse_plate_mode(arg: &str) -> Option<strata_export::PlateLayoutMode> {
     let s = arg.trim();
@@ -3736,6 +3790,65 @@ mod tests {
             assert!(opaque_px > 2_000);
             assert!(ink_shaded_px > 400);
         }
+    }
+
+    #[test]
+    fn test_rubbing_params_hash_tracks_every_field() {
+        let base = AcademicRubbingParams::default();
+        let h0 = rubbing_params_hash(&base);
+        assert_eq!(h0, rubbing_params_hash(&base.clone()), "해시가 결정론적이어야 함");
+
+        let mut ink = base.clone();
+        ink.ink_density_pct = 79.0;
+        let mut light = base.clone();
+        light.light_azimuth_deg = 316.0;
+        let mut style = base.clone();
+        style.style = AcademicRubbingStyle::DryGraphite;
+        let mut unroll = base.clone();
+        unroll.unroll_mode = Some(strata_shade::UnrollMode::Cylindrical);
+
+        for (name, h) in [
+            ("먹물농도", rubbing_params_hash(&ink)),
+            ("조명방위", rubbing_params_hash(&light)),
+            ("표현기법", rubbing_params_hash(&style)),
+            ("전개모드", rubbing_params_hash(&unroll)),
+        ] {
+            assert_ne!(h, h0, "{} 변경이 해시에 반영되지 않음", name);
+        }
+    }
+
+    #[test]
+    fn test_rubbing_provenance_line_records_standard_values() {
+        let line = rubbing_provenance_line(&AcademicRubbingParams::default());
+        for token in ["L-Std 315/45/1.00", "MSII 1.45", "Ink 78", "평면"] {
+            assert!(line.contains(token), "출처 문자열에 '{}' 없음: {}", token, line);
+        }
+        let mut unrolled = AcademicRubbingParams::default();
+        unrolled.unroll_mode = Some(strata_shade::UnrollMode::Cylindrical);
+        assert!(rubbing_provenance_line(&unrolled).contains("원통"));
+    }
+
+    #[test]
+    fn test_rubbing_render_is_bit_identical() {
+        let mesh = make_patterned_bowl_mesh();
+        let params = AcademicRubbingParams::default();
+        let a = render_orthographic_rubbing_rgba_with_params(
+            &mesh,
+            PlateRasterKind::BottomPlanRubbing,
+            0.0,
+            &params,
+            160,
+            160,
+        );
+        let b = render_orthographic_rubbing_rgba_with_params(
+            &mesh,
+            PlateRasterKind::BottomPlanRubbing,
+            0.0,
+            &params,
+            160,
+            160,
+        );
+        assert_eq!(a.as_raw(), b.as_raw(), "같은 입력인데 렌더 결과가 다름(비결정적)");
     }
 
     #[test]

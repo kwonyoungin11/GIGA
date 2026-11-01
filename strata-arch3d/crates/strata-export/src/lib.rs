@@ -16,7 +16,9 @@ pub use plate_composer::{
     PlatePathElement, PlateRasterKind, PlateRasterRegion, PlateTextCallout,
 };
 pub use ret_exporter::{export_ret_folder_package, RetPackageManifest};
-pub use svg_illustrator::render_plate_to_illustrator_svg;
+pub use svg_illustrator::{
+    render_plate_to_illustrator_svg, render_plate_to_illustrator_svg_with_meta,
+};
 
 #[cfg(test)]
 mod tests {
@@ -216,6 +218,30 @@ mod tests {
             let plate = compose_archaeological_plate_with_mode(&input, forced);
             assert_eq!(plate.mode, forced);
         }
+    }
+
+    #[test]
+    fn test_svg_embeds_rubbing_provenance_metadata() {
+        let plate = ComposedPlate2D {
+            mode: PlateLayoutMode::CompleteVesselStandard,
+            title: String::from("출처 테스트"),
+            scale_preset: strata_core::ScalePreset::Full1To1,
+            canvas_width_mm: 100.0,
+            canvas_height_mm: 80.0,
+            flip_exterior_right: false,
+            paths: Vec::new(),
+            callouts: Vec::new(),
+            raster_regions: Vec::new(),
+        };
+        let svg = render_plate_to_illustrator_svg_with_meta(
+            &plate,
+            "L-Std 315/45/1.00 · MSII 1.45 · Ink 78% · #deadbeef",
+        );
+        assert!(svg.contains(r#"<metadata id="STRATA_PROVENANCE">"#));
+        assert!(svg.contains("L-Std 315/45/1.00"));
+        assert!(svg.contains("출처_비인쇄"));
+        // 기존 경로는 메타데이터를 넣지 않는다(하위 호환).
+        assert!(!render_plate_to_illustrator_svg(&plate).contains("STRATA_PROVENANCE"));
     }
 
     #[test]
