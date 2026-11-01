@@ -1,12 +1,10 @@
+use eframe::egui;
+use serde::{Deserialize, Serialize};
 use strata_core::strata_tokens::metrics::{
     CTX_BAR_HEIGHT, RIBBON_HEIGHT, RIBBON_TILE_SIZE, SHEET_DEFAULT_RATIO, SLOT_LIST_WIDTH,
     STATUS_BAR_HEIGHT, TAB_BAR_HEIGHT, VIEW3D_DEFAULT_RATIO,
 };
-use strata_core::{
-    ArtifactCategory, BeadSubtype, SherdPlateStrategy, SherdSubtype,
-};
-use eframe::egui;
-use serde::{Deserialize, Serialize};
+use strata_core::{ArtifactCategory, BeadSubtype, SherdPlateStrategy, SherdSubtype};
 
 /// 국가유산청(구 문화재청) 『발굴조사보고서 작성 표준』 기반 10종 실측도면 작성양식 템플릿.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -143,9 +141,7 @@ impl ChsReportTemplate {
             Self::RoofTileMaksae | Self::RoofTilePlain => {
                 (ArtifactCategory::RoofTile, None, None, None)
             }
-            Self::LithicFlaked | Self::LithicGround => {
-                (ArtifactCategory::Lithic, None, None, None)
-            }
+            Self::LithicFlaked | Self::LithicGround => (ArtifactCategory::Lithic, None, None, None),
             Self::MetalCorroded => (ArtifactCategory::CorrodedMetal, None, None, None),
             Self::JadeBeadMicro => (
                 ArtifactCategory::BeadJade,
@@ -615,7 +611,8 @@ pub fn draw_ribbon_tile_vector_icon(
 
     match icon {
         TileIconKind::FolderOpen => {
-            let r = egui::Rect::from_center_size(egui::pos2(c.x, c.y + 2.0), egui::vec2(24.0, 16.0));
+            let r =
+                egui::Rect::from_center_size(egui::pos2(c.x, c.y + 2.0), egui::vec2(24.0, 16.0));
             painter.rect_stroke(r, 2.0, s_main, egui::StrokeKind::Inside);
             painter.line_segment(
                 [
@@ -625,7 +622,10 @@ pub fn draw_ribbon_tile_vector_icon(
                 s_main,
             );
             // 테라코타 위쪽 화살표
-            painter.line_segment([egui::pos2(c.x, c.y + 6.0), egui::pos2(c.x, c.y - 4.0)], s_acc);
+            painter.line_segment(
+                [egui::pos2(c.x, c.y + 6.0), egui::pos2(c.x, c.y - 4.0)],
+                s_acc,
+            );
             painter.line_segment(
                 [egui::pos2(c.x - 4.0, c.y), egui::pos2(c.x, c.y - 4.0)],
                 s_acc,
@@ -638,8 +638,20 @@ pub fn draw_ribbon_tile_vector_icon(
         TileIconKind::Ap2Project => {
             let r = egui::Rect::from_center_size(c, egui::vec2(22.0, 22.0));
             painter.rect_stroke(r, 3.0, s_main, egui::StrokeKind::Inside);
-            painter.line_segment([egui::pos2(c.x, r.top() + 3.0), egui::pos2(c.x, r.bottom() - 3.0)], s_acc);
-            painter.line_segment([egui::pos2(r.left() + 3.0, c.y), egui::pos2(r.right() - 3.0, c.y)], s_acc);
+            painter.line_segment(
+                [
+                    egui::pos2(c.x, r.top() + 3.0),
+                    egui::pos2(c.x, r.bottom() - 3.0),
+                ],
+                s_acc,
+            );
+            painter.line_segment(
+                [
+                    egui::pos2(r.left() + 3.0, c.y),
+                    egui::pos2(r.right() - 3.0, c.y),
+                ],
+                s_acc,
+            );
             painter.circle_filled(c, 2.5, accent_col);
         }
         TileIconKind::SaveDisk => {
@@ -654,13 +666,52 @@ pub fn draw_ribbon_tile_vector_icon(
         }
         TileIconKind::VesselComplete => {
             // 완형 토기 좌우 대칭 윤곽 + 중심축(테라코타)
-            painter.line_segment([egui::pos2(c.x, c.y - 12.0), egui::pos2(c.x, c.y + 12.0)], s_acc);
-            painter.line_segment([egui::pos2(c.x - 11.0, c.y - 9.0), egui::pos2(c.x + 11.0, c.y - 9.0)], s_main);
-            painter.line_segment([egui::pos2(c.x - 11.0, c.y - 9.0), egui::pos2(c.x - 8.0, c.y + 5.0)], s_main);
-            painter.line_segment([egui::pos2(c.x - 8.0, c.y + 5.0), egui::pos2(c.x - 5.0, c.y + 10.0)], s_main);
-            painter.line_segment([egui::pos2(c.x + 11.0, c.y - 9.0), egui::pos2(c.x + 8.0, c.y + 5.0)], s_main);
-            painter.line_segment([egui::pos2(c.x + 8.0, c.y + 5.0), egui::pos2(c.x + 5.0, c.y + 10.0)], s_main);
-            painter.line_segment([egui::pos2(c.x - 6.0, c.y + 10.0), egui::pos2(c.x + 6.0, c.y + 10.0)], s_main);
+            painter.line_segment(
+                [egui::pos2(c.x, c.y - 12.0), egui::pos2(c.x, c.y + 12.0)],
+                s_acc,
+            );
+            painter.line_segment(
+                [
+                    egui::pos2(c.x - 11.0, c.y - 9.0),
+                    egui::pos2(c.x + 11.0, c.y - 9.0),
+                ],
+                s_main,
+            );
+            painter.line_segment(
+                [
+                    egui::pos2(c.x - 11.0, c.y - 9.0),
+                    egui::pos2(c.x - 8.0, c.y + 5.0),
+                ],
+                s_main,
+            );
+            painter.line_segment(
+                [
+                    egui::pos2(c.x - 8.0, c.y + 5.0),
+                    egui::pos2(c.x - 5.0, c.y + 10.0),
+                ],
+                s_main,
+            );
+            painter.line_segment(
+                [
+                    egui::pos2(c.x + 11.0, c.y - 9.0),
+                    egui::pos2(c.x + 8.0, c.y + 5.0),
+                ],
+                s_main,
+            );
+            painter.line_segment(
+                [
+                    egui::pos2(c.x + 8.0, c.y + 5.0),
+                    egui::pos2(c.x + 5.0, c.y + 10.0),
+                ],
+                s_main,
+            );
+            painter.line_segment(
+                [
+                    egui::pos2(c.x - 6.0, c.y + 10.0),
+                    egui::pos2(c.x + 6.0, c.y + 10.0),
+                ],
+                s_main,
+            );
         }
         TileIconKind::PotsherdFragment => {
             // 비대칭 편조각 다각형 + 파단 경계(테라코타)
@@ -676,7 +727,10 @@ pub fn draw_ribbon_tile_vector_icon(
                 painter.line_segment([w[0], w[1]], s_main);
             }
             painter.line_segment(
-                [egui::pos2(c.x + 8.0, c.y - 8.0), egui::pos2(c.x + 2.0, c.y + 11.0)],
+                [
+                    egui::pos2(c.x + 8.0, c.y - 8.0),
+                    egui::pos2(c.x + 2.0, c.y + 11.0),
+                ],
                 s_acc,
             );
         }
@@ -694,29 +748,74 @@ pub fn draw_ribbon_tile_vector_icon(
                 arc_pts.push(egui::pos2(c.x + t.sin() * 13.0, c.y + 6.0 - t.cos() * 12.0));
             }
             painter.add(egui::Shape::line(arc_pts, s_main));
-            painter.line_segment([egui::pos2(c.x - 7.0, c.y + 5.0), egui::pos2(c.x + 7.0, c.y + 5.0)], s_acc);
-            painter.line_segment([egui::pos2(c.x - 5.0, c.y + 9.0), egui::pos2(c.x + 5.0, c.y + 9.0)], s_thin);
+            painter.line_segment(
+                [
+                    egui::pos2(c.x - 7.0, c.y + 5.0),
+                    egui::pos2(c.x + 7.0, c.y + 5.0),
+                ],
+                s_acc,
+            );
+            painter.line_segment(
+                [
+                    egui::pos2(c.x - 5.0, c.y + 9.0),
+                    egui::pos2(c.x + 5.0, c.y + 9.0),
+                ],
+                s_thin,
+            );
         }
         TileIconKind::Fracture3Way => {
             // 내벽/외벽/파단면 3영역 분할 아이콘
             let r = egui::Rect::from_center_size(c, egui::vec2(22.0, 20.0));
             painter.rect_stroke(r, 2.0, s_main, egui::StrokeKind::Inside);
             painter.line_segment(
-                [egui::pos2(r.left() + 3.0, c.y - 3.0), egui::pos2(c.x + 2.0, c.y + 2.0)],
+                [
+                    egui::pos2(r.left() + 3.0, c.y - 3.0),
+                    egui::pos2(c.x + 2.0, c.y + 2.0),
+                ],
                 s_acc,
             );
             painter.line_segment(
-                [egui::pos2(c.x + 2.0, c.y + 2.0), egui::pos2(r.right() - 3.0, c.y - 4.0)],
+                [
+                    egui::pos2(c.x + 2.0, c.y + 2.0),
+                    egui::pos2(r.right() - 3.0, c.y - 4.0),
+                ],
                 s_acc,
             );
-            painter.line_segment([egui::pos2(c.x + 2.0, c.y + 2.0), egui::pos2(c.x, r.bottom() - 2.0)], s_main);
+            painter.line_segment(
+                [
+                    egui::pos2(c.x + 2.0, c.y + 2.0),
+                    egui::pos2(c.x, r.bottom() - 2.0),
+                ],
+                s_main,
+            );
         }
         TileIconKind::AxisSolver => {
             // 수평 바닥 기준선 + 수직 회전 중심축 화살표
-            painter.line_segment([egui::pos2(c.x - 11.0, c.y + 10.0), egui::pos2(c.x + 11.0, c.y + 10.0)], s_main);
-            painter.line_segment([egui::pos2(c.x, c.y + 10.0), egui::pos2(c.x, c.y - 11.0)], s_acc);
-            painter.line_segment([egui::pos2(c.x - 4.0, c.y - 7.0), egui::pos2(c.x, c.y - 11.0)], s_acc);
-            painter.line_segment([egui::pos2(c.x + 4.0, c.y - 7.0), egui::pos2(c.x, c.y - 11.0)], s_acc);
+            painter.line_segment(
+                [
+                    egui::pos2(c.x - 11.0, c.y + 10.0),
+                    egui::pos2(c.x + 11.0, c.y + 10.0),
+                ],
+                s_main,
+            );
+            painter.line_segment(
+                [egui::pos2(c.x, c.y + 10.0), egui::pos2(c.x, c.y - 11.0)],
+                s_acc,
+            );
+            painter.line_segment(
+                [
+                    egui::pos2(c.x - 4.0, c.y - 7.0),
+                    egui::pos2(c.x, c.y - 11.0),
+                ],
+                s_acc,
+            );
+            painter.line_segment(
+                [
+                    egui::pos2(c.x + 4.0, c.y - 7.0),
+                    egui::pos2(c.x, c.y - 11.0),
+                ],
+                s_acc,
+            );
             painter.circle_stroke(egui::pos2(c.x, c.y + 1.0), 6.5, s_thin);
         }
         TileIconKind::BestSectionAngle => {
@@ -729,10 +828,28 @@ pub fn draw_ribbon_tile_vector_icon(
             // 모래시계형 양방향 맞조르기(IIb) 천공 단면 아이콘
             let r = egui::Rect::from_center_size(c, egui::vec2(18.0, 22.0));
             painter.rect_stroke(r, 2.0, s_main, egui::StrokeKind::Inside);
-            painter.line_segment([egui::pos2(c.x - 5.0, r.top()), egui::pos2(c.x - 1.5, c.y)], s_acc);
-            painter.line_segment([egui::pos2(c.x - 1.5, c.y), egui::pos2(c.x - 5.0, r.bottom())], s_acc);
-            painter.line_segment([egui::pos2(c.x + 5.0, r.top()), egui::pos2(c.x + 1.5, c.y)], s_acc);
-            painter.line_segment([egui::pos2(c.x + 1.5, c.y), egui::pos2(c.x + 5.0, r.bottom())], s_acc);
+            painter.line_segment(
+                [egui::pos2(c.x - 5.0, r.top()), egui::pos2(c.x - 1.5, c.y)],
+                s_acc,
+            );
+            painter.line_segment(
+                [
+                    egui::pos2(c.x - 1.5, c.y),
+                    egui::pos2(c.x - 5.0, r.bottom()),
+                ],
+                s_acc,
+            );
+            painter.line_segment(
+                [egui::pos2(c.x + 5.0, r.top()), egui::pos2(c.x + 1.5, c.y)],
+                s_acc,
+            );
+            painter.line_segment(
+                [
+                    egui::pos2(c.x + 1.5, c.y),
+                    egui::pos2(c.x + 5.0, r.bottom()),
+                ],
+                s_acc,
+            );
         }
         TileIconKind::VirtualRefit => {
             // 두 파편 맞물림 화살표
@@ -748,32 +865,68 @@ pub fn draw_ribbon_tile_vector_icon(
                 s_main,
                 egui::StrokeKind::Inside,
             );
-            painter.line_segment([egui::pos2(c.x - 3.0, c.y), egui::pos2(c.x + 3.0, c.y)], s_acc);
+            painter.line_segment(
+                [egui::pos2(c.x - 3.0, c.y), egui::pos2(c.x + 3.0, c.y)],
+                s_acc,
+            );
         }
         TileIconKind::LockPoseAction => {
             // 주 행동 타일: 체크 마크 + 기준틀 고정
             painter.circle_stroke(c, 10.5, s_main);
-            painter.line_segment([egui::pos2(c.x - 5.0, c.y), egui::pos2(c.x - 1.0, c.y + 4.5)], s_acc);
-            painter.line_segment([egui::pos2(c.x - 1.0, c.y + 4.5), egui::pos2(c.x + 6.0, c.y - 4.5)], s_acc);
+            painter.line_segment(
+                [egui::pos2(c.x - 5.0, c.y), egui::pos2(c.x - 1.0, c.y + 4.5)],
+                s_acc,
+            );
+            painter.line_segment(
+                [
+                    egui::pos2(c.x - 1.0, c.y + 4.5),
+                    egui::pos2(c.x + 6.0, c.y - 4.5),
+                ],
+                s_acc,
+            );
         }
         TileIconKind::SliceVertical => {
             // 고정 절단틀 사각형 + 수직 절개 단면선
             let r = egui::Rect::from_center_size(c, egui::vec2(22.0, 18.0));
             painter.rect_stroke(r, 1.5, s_thin, egui::StrokeKind::Inside);
-            painter.line_segment([egui::pos2(c.x, r.top() - 3.0), egui::pos2(c.x, r.bottom() + 3.0)], s_acc);
-            painter.line_segment([egui::pos2(c.x - 6.0, c.y - 6.0), egui::pos2(c.x - 4.0, c.y + 6.0)], s_main);
+            painter.line_segment(
+                [
+                    egui::pos2(c.x, r.top() - 3.0),
+                    egui::pos2(c.x, r.bottom() + 3.0),
+                ],
+                s_acc,
+            );
+            painter.line_segment(
+                [
+                    egui::pos2(c.x - 6.0, c.y - 6.0),
+                    egui::pos2(c.x - 4.0, c.y + 6.0),
+                ],
+                s_main,
+            );
         }
         TileIconKind::SliceHorizontal => {
             // 수평 횡단면(Top Cut Z)
             painter.circle_stroke(c, 9.5, s_main);
-            painter.line_segment([egui::pos2(c.x - 12.0, c.y), egui::pos2(c.x + 12.0, c.y)], s_acc);
+            painter.line_segment(
+                [egui::pos2(c.x - 12.0, c.y), egui::pos2(c.x + 12.0, c.y)],
+                s_acc,
+            );
         }
         TileIconKind::OccludedDashed => {
             // 미스캔 내벽 파선 보간
-            painter.line_segment([egui::pos2(c.x - 7.0, c.y - 10.0), egui::pos2(c.x - 5.0, c.y + 10.0)], s_main);
+            painter.line_segment(
+                [
+                    egui::pos2(c.x - 7.0, c.y - 10.0),
+                    egui::pos2(c.x - 5.0, c.y + 10.0),
+                ],
+                s_main,
+            );
             for dy in [-8.0_f32, -2.0, 4.0] {
                 painter.line_segment(
-                    [egui::pos2(c.x + 4.0, c.y + dy), egui::pos2(c.x + 4.0, c.y + dy + 3.5)],
+                    [
+                        egui::pos2(c.x + 4.0, c.y + dy),
+                        egui::pos2(c.x + 4.0, c.y + dy + 3.5),
+                    ],
                     s_acc,
                 );
             }
@@ -802,48 +955,105 @@ pub fn draw_ribbon_tile_vector_icon(
                 s_main,
                 egui::StrokeKind::Inside,
             );
-            painter.line_segment([egui::pos2(c.x - 9.0, c.y - 8.0), egui::pos2(c.x + 9.0, c.y - 8.0)], s_acc);
+            painter.line_segment(
+                [
+                    egui::pos2(c.x - 9.0, c.y - 8.0),
+                    egui::pos2(c.x + 9.0, c.y - 8.0),
+                ],
+                s_acc,
+            );
         }
         TileIconKind::HempFftCount => {
             // 1×1 cm 포목흔 격자 올수 계측
             let r = egui::Rect::from_center_size(c, egui::vec2(20.0, 20.0));
             painter.rect_stroke(r, 1.5, s_acc, egui::StrokeKind::Inside);
             for off in [-4.0_f32, 0.0, 4.0] {
-                painter.line_segment([egui::pos2(c.x + off, r.top() + 2.0), egui::pos2(c.x + off, r.bottom() - 2.0)], s_thin);
-                painter.line_segment([egui::pos2(r.left() + 2.0, c.y + off), egui::pos2(r.right() - 2.0, c.y + off)], s_thin);
+                painter.line_segment(
+                    [
+                        egui::pos2(c.x + off, r.top() + 2.0),
+                        egui::pos2(c.x + off, r.bottom() - 2.0),
+                    ],
+                    s_thin,
+                );
+                painter.line_segment(
+                    [
+                        egui::pos2(r.left() + 2.0, c.y + off),
+                        egui::pos2(r.right() - 2.0, c.y + off),
+                    ],
+                    s_thin,
+                );
             }
         }
         TileIconKind::FlipLeftRight => {
             // 중심축 기준 좌/우 반전(R)
-            painter.line_segment([egui::pos2(c.x, c.y - 11.0), egui::pos2(c.x, c.y + 11.0)], s_main);
-            painter.line_segment([egui::pos2(c.x - 9.0, c.y), egui::pos2(c.x + 9.0, c.y)], s_acc);
-            painter.line_segment([egui::pos2(c.x - 9.0, c.y), egui::pos2(c.x - 5.0, c.y - 4.0)], s_acc);
-            painter.line_segment([egui::pos2(c.x + 9.0, c.y), egui::pos2(c.x + 5.0, c.y - 4.0)], s_acc);
+            painter.line_segment(
+                [egui::pos2(c.x, c.y - 11.0), egui::pos2(c.x, c.y + 11.0)],
+                s_main,
+            );
+            painter.line_segment(
+                [egui::pos2(c.x - 9.0, c.y), egui::pos2(c.x + 9.0, c.y)],
+                s_acc,
+            );
+            painter.line_segment(
+                [egui::pos2(c.x - 9.0, c.y), egui::pos2(c.x - 5.0, c.y - 4.0)],
+                s_acc,
+            );
+            painter.line_segment(
+                [egui::pos2(c.x + 9.0, c.y), egui::pos2(c.x + 5.0, c.y - 4.0)],
+                s_acc,
+            );
         }
         TileIconKind::FullSheetTab => {
             // 100% 도판 최대화(Tab)
             let r = egui::Rect::from_center_size(c, egui::vec2(22.0, 18.0));
             painter.rect_stroke(r, 2.0, s_main, egui::StrokeKind::Inside);
-            painter.line_segment([egui::pos2(r.left() + 3.0, r.top() + 3.0), egui::pos2(r.right() - 3.0, r.bottom() - 3.0)], s_acc);
+            painter.line_segment(
+                [
+                    egui::pos2(r.left() + 3.0, r.top() + 3.0),
+                    egui::pos2(r.right() - 3.0, r.bottom() - 3.0),
+                ],
+                s_acc,
+            );
         }
         TileIconKind::VerifyReport => {
             // 실측 검수 보고서(L)
             let r = egui::Rect::from_center_size(c, egui::vec2(18.0, 22.0));
             painter.rect_stroke(r, 2.0, s_main, egui::StrokeKind::Inside);
-            painter.line_segment([egui::pos2(c.x - 4.0, c.y + 1.0), egui::pos2(c.x - 1.0, c.y + 4.0)], s_acc);
-            painter.line_segment([egui::pos2(c.x - 1.0, c.y + 4.0), egui::pos2(c.x + 5.0, c.y - 3.0)], s_acc);
+            painter.line_segment(
+                [
+                    egui::pos2(c.x - 4.0, c.y + 1.0),
+                    egui::pos2(c.x - 1.0, c.y + 4.0),
+                ],
+                s_acc,
+            );
+            painter.line_segment(
+                [
+                    egui::pos2(c.x - 1.0, c.y + 4.0),
+                    egui::pos2(c.x + 5.0, c.y - 3.0),
+                ],
+                s_acc,
+            );
         }
         TileIconKind::MultiPlateComposer => {
             // 다중 유물 합본 편집판(XL)
             for (dx, dy) in [(-5.5_f32, -4.5_f32), (5.5, -4.5), (-5.5, 4.5), (5.5, 4.5)] {
-                let cell = egui::Rect::from_center_size(egui::pos2(c.x + dx, c.y + dy), egui::vec2(8.5, 7.0));
+                let cell = egui::Rect::from_center_size(
+                    egui::pos2(c.x + dx, c.y + dy),
+                    egui::vec2(8.5, 7.0),
+                );
                 painter.rect_stroke(cell, 1.0, s_main, egui::StrokeKind::Inside);
             }
         }
         TileIconKind::ExportSvg => {
             // 베지어 핸들 곡선 아이콘
-            painter.line_segment([egui::pos2(c.x - 9.0, c.y + 6.0), egui::pos2(c.x, c.y - 7.0)], s_main);
-            painter.line_segment([egui::pos2(c.x, c.y - 7.0), egui::pos2(c.x + 9.0, c.y + 6.0)], s_main);
+            painter.line_segment(
+                [egui::pos2(c.x - 9.0, c.y + 6.0), egui::pos2(c.x, c.y - 7.0)],
+                s_main,
+            );
+            painter.line_segment(
+                [egui::pos2(c.x, c.y - 7.0), egui::pos2(c.x + 9.0, c.y + 6.0)],
+                s_main,
+            );
             painter.circle_filled(egui::pos2(c.x, c.y - 7.0), 3.0, accent_col);
             painter.circle_filled(egui::pos2(c.x - 9.0, c.y + 6.0), 2.5, primary_col);
             painter.circle_filled(egui::pos2(c.x + 9.0, c.y + 6.0), 2.5, primary_col);
@@ -852,16 +1062,32 @@ pub fn draw_ribbon_tile_vector_icon(
             // 분할 인쇄 PDF 용지 격자
             let r = egui::Rect::from_center_size(c, egui::vec2(20.0, 22.0));
             painter.rect_stroke(r, 2.0, s_main, egui::StrokeKind::Inside);
-            painter.line_segment([egui::pos2(c.x, r.top()), egui::pos2(c.x, r.bottom())], s_acc);
-            painter.line_segment([egui::pos2(r.left(), c.y), egui::pos2(r.right(), c.y)], s_acc);
+            painter.line_segment(
+                [egui::pos2(c.x, r.top()), egui::pos2(c.x, r.bottom())],
+                s_acc,
+            );
+            painter.line_segment(
+                [egui::pos2(r.left(), c.y), egui::pos2(r.right(), c.y)],
+                s_acc,
+            );
         }
         TileIconKind::ExportRetPackage => {
             // 도면·내보내기 주 행동 아이콘
-            let r = egui::Rect::from_center_size(egui::pos2(c.x, c.y + 3.0), egui::vec2(20.0, 14.0));
+            let r =
+                egui::Rect::from_center_size(egui::pos2(c.x, c.y + 3.0), egui::vec2(20.0, 14.0));
             painter.rect_stroke(r, 2.0, s_main, egui::StrokeKind::Inside);
-            painter.line_segment([egui::pos2(c.x, c.y + 4.0), egui::pos2(c.x, c.y - 9.0)], s_acc);
-            painter.line_segment([egui::pos2(c.x - 5.0, c.y - 4.0), egui::pos2(c.x, c.y - 9.0)], s_acc);
-            painter.line_segment([egui::pos2(c.x + 5.0, c.y - 4.0), egui::pos2(c.x, c.y - 9.0)], s_acc);
+            painter.line_segment(
+                [egui::pos2(c.x, c.y + 4.0), egui::pos2(c.x, c.y - 9.0)],
+                s_acc,
+            );
+            painter.line_segment(
+                [egui::pos2(c.x - 5.0, c.y - 4.0), egui::pos2(c.x, c.y - 9.0)],
+                s_acc,
+            );
+            painter.line_segment(
+                [egui::pos2(c.x + 5.0, c.y - 4.0), egui::pos2(c.x, c.y - 9.0)],
+                s_acc,
+            );
         }
     }
 }
@@ -969,7 +1195,8 @@ impl R1FiveTierGeometry {
             && (self.status_bar_h - 30.0).abs() < 1e-3
             && (self.slot_list_w - 176.0).abs() < 1e-3
             && (self.sheet_full_tab_mode
-                || ((self.sheet_pane_w / (self.view3d_w + self.sheet_pane_w)) - SHEET_DEFAULT_RATIO)
+                || ((self.sheet_pane_w / (self.view3d_w + self.sheet_pane_w))
+                    - SHEET_DEFAULT_RATIO)
                     .abs()
                     < 0.01)
     }
@@ -993,19 +1220,29 @@ mod tests {
             }
         }
         assert_eq!(total_tiles, 27);
-        assert_eq!(seen_icons.len(), 27, "모든 27개 리본 타일은 고유한 벡터 아이콘 종류를 가져야 한다");
+        assert_eq!(
+            seen_icons.len(),
+            27,
+            "모든 27개 리본 타일은 고유한 벡터 아이콘 종류를 가져야 한다"
+        );
     }
 
     #[test]
     fn test_tdd2_full_width_workspace_without_left_slot_panel_or_step_tabs() {
         let geom = R1FiveTierGeometry::compute_full_width_workspace(1440.0, 900.0, false);
-        assert_eq!(geom.slot_list_w, 0.0, "좌측 슬롯 패널(176px)을 제거하여 작업창을 최대화해야 한다");
+        assert_eq!(
+            geom.slot_list_w, 0.0,
+            "좌측 슬롯 패널(176px)을 제거하여 작업창을 최대화해야 한다"
+        );
         assert!(
             ((geom.view3d_w + geom.sheet_pane_w) - 1440.0).abs() < 1e-3,
             "3D 뷰포트와 2D 방안지 도판의 합이 창 전체 가로폭(1440px) 100%를 차지해야 한다"
         );
         let unified = unified_studio_ribbon_tiles();
-        assert!(unified.len() >= 14, "단계 탭 없이 한눈에 조작 가능한 통합 리본 타일이 제공되어야 한다");
+        assert!(
+            unified.len() >= 14,
+            "단계 탭 없이 한눈에 조작 가능한 통합 리본 타일이 제공되어야 한다"
+        );
     }
 
     #[test]

@@ -1,6 +1,6 @@
-use strata_core::{StacklessLbvh, TriMesh};
 use image::{Rgba, RgbaImage};
 use serde::{Deserialize, Serialize};
+use strata_core::{StacklessLbvh, TriMesh};
 
 /// 3대 고고학 정밀 탁본(`Rubbing`) 핵심 알고리즘 (`DESIGN_SPEC.md` 1.2 & 3.4).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]

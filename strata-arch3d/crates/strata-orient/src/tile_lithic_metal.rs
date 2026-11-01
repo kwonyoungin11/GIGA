@@ -1,5 +1,5 @@
-use strata_core::{MetalSectionLayer, TriMesh};
 use serde::{Deserialize, Serialize};
+use strata_core::{MetalSectionLayer, TriMesh};
 
 /// 기와·막새(`RoofTile`) 정위치 및 접합기법·와도분할 분석 결과.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -21,11 +21,7 @@ pub fn analyze_roof_tile(mesh: &TriMesh) -> RoofTileDiagnostics {
     let arc_radius_mm = ((chord_w * chord_w) / (8.0 * arch_h) + arch_h * 0.5).clamp(40.0, 350.0);
 
     // 상단부에 드림새 단차가 있으면 막새 보강토 두께 산출
-    let eaves_reinforcing_clay_mm = if ext[1] > 35.0 {
-        Some(14.5)
-    } else {
-        None
-    };
+    let eaves_reinforcing_clay_mm = if ext[1] > 35.0 { Some(14.5) } else { None };
 
     RoofTileDiagnostics {
         arc_radius_mm: (arc_radius_mm * 10.0).round() / 10.0,

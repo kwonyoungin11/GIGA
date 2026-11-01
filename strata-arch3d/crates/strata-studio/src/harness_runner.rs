@@ -1,9 +1,12 @@
 use crate::layout_r1::R1FiveTierGeometry;
 use crate::sheet_pane::render_full_workspace_offscreen_png;
 use crate::splash::SplashState;
+use std::fmt::Write as _;
+use std::fs;
+use std::path::Path;
 use strata_core::{
-    StrataError, ArtifactCategory, BeadDrillType, BeadSubtype, GpuVertex16, HandleAttachmentKind,
-    SherdPlateStrategy, SherdSubtype, StacklessLbvh, TriMesh,
+    ArtifactCategory, BeadDrillType, BeadSubtype, GpuVertex16, HandleAttachmentKind,
+    SherdPlateStrategy, SherdSubtype, StacklessLbvh, StrataError, TriMesh,
 };
 use strata_export::{
     compose_archaeological_plate, compute_tiled_print_plan, export_measurements_to_csv,
@@ -24,9 +27,6 @@ use strata_shade::{
     compute_vertex_rubbing_ink_weights, measure_hemp_cloth_threads_per_cm, unroll_mesh_surface,
     RubbingAlgorithm, RubbingRenderParams, UnrollMode,
 };
-use std::fmt::Write as _;
-use std::fs;
-use std::path::Path;
 
 #[derive(Debug, Clone)]
 pub struct GateCheckResult {
@@ -124,7 +124,10 @@ pub fn run_v1_to_v8_verification_harness() -> Vec<GateCheckResult> {
                     ),
                 )
             }
-            (e1, e2) => (false, format!("실데이터 로드 실패: {:?} / {:?}", e1.err(), e2.err())),
+            (e1, e2) => (
+                false,
+                format!("실데이터 로드 실패: {:?} / {:?}", e1.err(), e2.err()),
+            ),
         }
     } else {
         (
@@ -148,7 +151,11 @@ pub fn run_v1_to_v8_verification_harness() -> Vec<GateCheckResult> {
     }
     let cfit_res = fit_rim_arc_unbiased(&arc_pts, false);
     let (cfit_d, cfit_err, cfit_pct) = match cfit_res {
-        Ok(ref fit) => (fit.diameter_mm, fit.diameter_std_err_mm, fit.remaining_arc_pct),
+        Ok(ref fit) => (
+            fit.diameter_mm,
+            fit.diameter_std_err_mm,
+            fit.remaining_arc_pct,
+        ),
         Err(_) => (0.0, 999.0, 0.0),
     };
     let gap_chart = compute_rim_gap_chart_360(&mesh, true);

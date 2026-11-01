@@ -1,6 +1,6 @@
-use strata_core::{SurfaceRegion, TriMesh};
 use eframe::egui;
 use image::RgbaImage;
+use strata_core::{SurfaceRegion, TriMesh};
 
 use super::geometry::{clamp_ordered, extract_3d_plane_intersection_segments_full};
 use super::raster::{render_mesh_zbuffer_rgba, render_topdown_concentric_plan_rgba};
@@ -47,10 +47,12 @@ pub enum DragMode3D {
     /// 기본값: 절단틀(`P_cut`)은 월드 중앙에 고정하고 유물만 회전축 둘레로 회전(`ψ`)
     TurntableArtifact,
     /// 카메라 궤도 회전 (`cam_yaw_deg`, `cam_pitch_deg`)
-    #[allow(dead_code)] // ui.rs 드래그 match 는 처리하지만 선택 UI 가 아직 없어 생성 지점이 없다(향후 배선용).
+    #[allow(dead_code)]
+    // ui.rs 드래그 match 는 처리하지만 선택 UI 가 아직 없어 생성 지점이 없다(향후 배선용).
     CameraOrbit,
     /// 바닥·천공축 미세 기울기 조절 (`0.1°` 단위)
-    #[allow(dead_code)] // ui.rs 드래그 match 는 처리하지만 선택 UI 가 아직 없어 생성 지점이 없다(향후 배선용).
+    #[allow(dead_code)]
+    // ui.rs 드래그 match 는 처리하지만 선택 UI 가 아직 없어 생성 지점이 없다(향후 배선용).
     AxisTilt,
 }
 
@@ -76,7 +78,8 @@ pub enum PrecisionWheelKind {
     /// Image 4 (좌측 세로 휠): 유물의 아래위를 회전하는 휠 — 올리면 위로 회전, 내리면 아래로 회전 (`tilt_deg`, `0.1°` 스텝, 휠 옆 설명)
     LeftPitchUpDown,
     /// <USER_REQUEST> (상하좌우 안쪽 제5휠 호환): 내부 수평 미세정합 휠 (`inner_level_deg`, `0.05°` 스텝)
-    #[allow(dead_code)] // 테스트(test_tdd13)가 5번째 휠을 생성해 검증한다(테스트 전용 조작 경로).
+    #[allow(dead_code)]
+    // 테스트(test_tdd13)가 5번째 휠을 생성해 검증한다(테스트 전용 조작 경로).
     InnerHorizontalLevel,
     /// Image 0 (수평횡단면 전용 휠): 유물은 고정하고 수평횡단면 절단선(`top_cut_z_mm`)만 아래위로 이동시켜 수평횡단면 도면을 그리는 휠 (`0.1mm` 스텝)
     InnerHorizSectionZ,
@@ -287,7 +290,12 @@ impl View3DPaneState {
         }
     }
 
-    pub fn build_cache_key(&self, mesh_name: &str, width: u32, height: u32) -> View3DRenderCacheKey {
+    pub fn build_cache_key(
+        &self,
+        mesh_name: &str,
+        width: u32,
+        height: u32,
+    ) -> View3DRenderCacheKey {
         View3DRenderCacheKey {
             mesh_name: mesh_name.to_string(),
             width,
@@ -319,11 +327,8 @@ impl View3DPaneState {
         width: u32,
         height: u32,
     ) -> (u32, u32, bool) {
-        let (w, h) = compute_isotropic_render_dimensions(
-            width as f32,
-            height as f32,
-            self.is_interacting,
-        );
+        let (w, h) =
+            compute_isotropic_render_dimensions(width as f32, height as f32, self.is_interacting);
         let key = self.build_cache_key(&mesh.name, w, h);
         if self.cached_zbuffer_key.as_ref() == Some(&key) {
             if let Some(ref img) = self.cached_zbuffer_rgba {
@@ -346,11 +351,8 @@ impl View3DPaneState {
         width: u32,
         height: u32,
     ) -> (u32, u32, bool) {
-        let (w, h) = compute_isotropic_render_dimensions(
-            width as f32,
-            height as f32,
-            self.is_interacting,
-        );
+        let (w, h) =
+            compute_isotropic_render_dimensions(width as f32, height as f32, self.is_interacting);
         let key = self.build_cache_key(&mesh.name, w, h);
         if self.cached_topdown_key.as_ref() == Some(&key) {
             if let Some(ref img) = self.cached_topdown_rgba {
@@ -512,12 +514,12 @@ impl View3DPaneState {
     #[allow(dead_code)] // 테스트(test_tdd4)가 구면 트랙볼 드래그를 검증한다(테스트 전용 API).
     pub fn apply_hand_dial_drag(&mut self, dx_px: f32, dy_px: f32, fine_axis_tilt_mode: bool) {
         if fine_axis_tilt_mode {
-            self.roll_deg =
-                ((self.roll_deg + f64::from(dx_px) * 0.15).clamp(-25.0, 25.0) * 10.0).round()
-                    / 10.0;
-            self.tilt_deg =
-                ((self.tilt_deg + f64::from(dy_px) * 0.15).clamp(-25.0, 25.0) * 10.0).round()
-                    / 10.0;
+            self.roll_deg = ((self.roll_deg + f64::from(dx_px) * 0.15).clamp(-25.0, 25.0) * 10.0)
+                .round()
+                / 10.0;
+            self.tilt_deg = ((self.tilt_deg + f64::from(dy_px) * 0.15).clamp(-25.0, 25.0) * 10.0)
+                .round()
+                / 10.0;
         } else {
             self.active_section_angle_deg =
                 (self.active_section_angle_deg + f64::from(dx_px) * 0.85).rem_euclid(360.0);

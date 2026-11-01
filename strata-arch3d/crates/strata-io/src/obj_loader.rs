@@ -1,9 +1,9 @@
-use strata_core::{StrataError, MeshTextureRgba, TriMesh};
 use image::ImageReader;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 use std::sync::Arc;
+use strata_core::{MeshTextureRgba, StrataError, TriMesh};
 
 /// `.obj` + `.mtl` 메타데이터 및 로드된 메쉬 결과.
 #[derive(Debug, Clone)]
@@ -114,7 +114,13 @@ pub fn load_obj_file(path: impl AsRef<Path>) -> Result<LoadedObjBundle, StrataEr
 
                 let vt_opt = slash_iter
                     .next()
-                    .and_then(|s| if s.is_empty() { None } else { s.parse::<i64>().ok() })
+                    .and_then(|s| {
+                        if s.is_empty() {
+                            None
+                        } else {
+                            s.parse::<i64>().ok()
+                        }
+                    })
                     .map(|vt_raw| {
                         if vt_raw > 0 {
                             (vt_raw - 1) as u32
@@ -157,14 +163,13 @@ pub fn load_obj_file(path: impl AsRef<Path>) -> Result<LoadedObjBundle, StrataEr
         }
     }
 
-    let mut diffuse_texture_filename = if let (Some(parent), Some(mtl_name)) =
-        (path_ref.parent(), mtl_filename.as_deref())
-    {
-        let mtl_path = parent.join(mtl_name);
-        parse_mtl_diffuse_texture(&mtl_path)
-    } else {
-        None
-    };
+    let mut diffuse_texture_filename =
+        if let (Some(parent), Some(mtl_name)) = (path_ref.parent(), mtl_filename.as_deref()) {
+            let mtl_path = parent.join(mtl_name);
+            parse_mtl_diffuse_texture(&mtl_path)
+        } else {
+            None
+        };
 
     if let Some(parent) = path_ref.parent() {
         let tex_exists = diffuse_texture_filename
@@ -241,8 +246,7 @@ pub fn load_obj_file(path: impl AsRef<Path>) -> Result<LoadedObjBundle, StrataEr
         .unwrap_or("unnamed.obj")
         .to_string();
 
-    let mut mesh =
-        TriMesh::build_complete(mesh_name, positions, triangles, colors_rgb, texcoords)?;
+    let mut mesh = TriMesh::build_complete(mesh_name, positions, triangles, colors_rgb, texcoords)?;
     mesh.triangle_uvs = triangle_uvs;
     mesh.texture_image = texture_image;
     mesh.source_dir = path_ref.parent().map(Path::to_path_buf);
@@ -281,7 +285,10 @@ fn load_and_downsample_texture(tex_path: &Path, max_dim: u32) -> Option<MeshText
     if !tex_path.exists() {
         return None;
     }
-    let mut reader = ImageReader::open(tex_path).ok()?.with_guessed_format().ok()?;
+    let mut reader = ImageReader::open(tex_path)
+        .ok()?
+        .with_guessed_format()
+        .ok()?;
     reader.no_limits();
     let img = reader.decode().ok()?.into_rgba8();
     let (src_w, src_h) = img.dimensions();

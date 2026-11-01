@@ -36,10 +36,13 @@ pub mod tokens {
     pub const GROUND: ColorToken = ColorToken::new("종이", "Ground", "#FAF9F5", 0xFA, 0xF9, 0xF5);
     pub const WASH: ColorToken = ColorToken::new("옅은 종이", "Wash", "#F5F4ED", 0xF5, 0xF4, 0xED);
     pub const DESK: ColorToken = ColorToken::new("눌린 면", "Desk", "#F0EEE6", 0xF0, 0xEE, 0xE6);
-    pub const SURFACE: ColorToken = ColorToken::new("흰 면", "Surface", "#FFFFFF", 0xFF, 0xFF, 0xFF);
+    pub const SURFACE: ColorToken =
+        ColorToken::new("흰 면", "Surface", "#FFFFFF", 0xFF, 0xFF, 0xFF);
     pub const INK: ColorToken = ColorToken::new("먹", "Ink", "#141413", 0x14, 0x14, 0x13);
-    pub const MUTED: ColorToken = ColorToken::new("보조 글자", "Muted", "#5E5D59", 0x5E, 0x5D, 0x59);
-    pub const FAINT: ColorToken = ColorToken::new("흐린 글자", "Faint", "#73726C", 0x73, 0x72, 0x6C);
+    pub const MUTED: ColorToken =
+        ColorToken::new("보조 글자", "Muted", "#5E5D59", 0x5E, 0x5D, 0x59);
+    pub const FAINT: ColorToken =
+        ColorToken::new("흐린 글자", "Faint", "#73726C", 0x73, 0x72, 0x6C);
     pub const DISABLED: ColorToken =
         ColorToken::new("꺼진 글자", "Disabled", "#B0AEA5", 0xB0, 0xAE, 0xA5);
     pub const LINE: ColorToken = ColorToken::new("구분선", "Line", "#DEDCD1", 0xDE, 0xDC, 0xD1);

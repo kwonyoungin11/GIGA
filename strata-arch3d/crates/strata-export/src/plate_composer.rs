@@ -1,10 +1,10 @@
+use serde::{Deserialize, Serialize};
 use strata_core::{
     ArtifactCategory, BeadDrillType, BeadSubtype, HandleAttachmentKind, ScalePreset,
     SherdPlateStrategy, SherdSubtype,
 };
 use strata_measure::ArtifactMeasurementReport;
 use strata_section::{OccludedDashedSpan, PlaneSliceResult};
-use serde::{Deserialize, Serialize};
 
 /// 8대 고고학 유물군별 표준 보고서 도판 배치 모드 (`DESIGN_SPEC.md` 1.3 & 3.5).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -444,11 +444,11 @@ fn extract_measured_horizontal_section_contours(
         if !smooth_valid[k] {
             continue;
         }
-        let a = -std::f64::consts::PI
-            + ((k as f64) + 0.5) * std::f64::consts::TAU / (N_BINS as f64);
+        let a =
+            -std::f64::consts::PI + ((k as f64) + 0.5) * std::f64::consts::TAU / (N_BINS as f64);
         let (sin_a, cos_a) = a.sin_cos();
-        let po = [ smooth_out_r[k] * cos_a, smooth_out_r[k] * sin_a ];
-        let pi = [ smooth_in_r[k] * cos_a, smooth_in_r[k] * sin_a ];
+        let po = [smooth_out_r[k] * cos_a, smooth_out_r[k] * sin_a];
+        let pi = [smooth_in_r[k] * cos_a, smooth_in_r[k] * sin_a];
         outer_pts.push(po);
         inner_pts.push(pi);
         if cos_a >= -0.02 {
@@ -579,8 +579,8 @@ fn append_measured_top_plan_view_paths(
             outer_ring.clear();
             inner_ring.clear();
             for (k, broken_slot) in is_broken.iter_mut().enumerate().take(N_SECTORS) {
-                let a =
-                    -std::f64::consts::PI + ((k as f64) + 0.5) * std::f64::consts::TAU / (N_SECTORS as f64);
+                let a = -std::f64::consts::PI
+                    + ((k as f64) + 0.5) * std::f64::consts::TAU / (N_SECTORS as f64);
                 let (s, c) = a.sin_cos();
                 // 상단(12시 방향, k ≈ 52..=56) 구연부 미세 파손(깨진 부분) 기본 재현
                 let chip_indent = if (52..=56).contains(&k) {
@@ -624,8 +624,8 @@ fn append_measured_top_plan_view_paths(
         floor_inner_ring.clear();
         let r_floor = (base_r - wall_t * 0.85).max(4.0);
         for (k, out_pt) in outer_ring.iter().enumerate().take(N_SECTORS) {
-            let a =
-                -std::f64::consts::PI + ((k as f64) + 0.5) * std::f64::consts::TAU / (N_SECTORS as f64);
+            let a = -std::f64::consts::PI
+                + ((k as f64) + 0.5) * std::f64::consts::TAU / (N_SECTORS as f64);
             let (s, c) = a.sin_cos();
             // 외곽 비대칭 비율을 내저원각·굽 윤곽에도 자연스럽게 반영
             let ratio = (out_pt[0].hypot(out_pt[1]) / recon_outer_r.max(10.0)).clamp(0.92, 1.06);
@@ -840,12 +840,8 @@ pub fn hatch_polygon_45(poly: &[[f64; 2]], gap_mm: f64) -> Vec<[[f64; 2]; 2]> {
     }
     let inv = std::f64::consts::FRAC_1_SQRT_2;
     // 45° 회전 좌표계로 옮겨 수평 스캔라인으로 처리한다.
-    let rot = |p: [f64; 2]| -> [f64; 2] {
-        [(p[0] - p[1]) * inv, (p[0] + p[1]) * inv]
-    };
-    let unrot = |p: [f64; 2]| -> [f64; 2] {
-        [(p[0] + p[1]) * inv, (p[1] - p[0]) * inv]
-    };
+    let rot = |p: [f64; 2]| -> [f64; 2] { [(p[0] - p[1]) * inv, (p[0] + p[1]) * inv] };
+    let unrot = |p: [f64; 2]| -> [f64; 2] { [(p[0] + p[1]) * inv, (p[1] - p[0]) * inv] };
     let rp: Vec<[f64; 2]> = poly.iter().map(|&p| rot(p)).collect();
     let mut min_v = f64::INFINITY;
     let mut max_v = f64::NEG_INFINITY;
@@ -969,8 +965,7 @@ fn compose_archaeological_plate_inner(
         .any(|s| s.orientation == strata_section::CutPlaneOrientation::VerticalLongitudinal);
 
     let (mut canvas_width_mm, canvas_height_mm) = match mode {
-        PlateLayoutMode::CompleteVesselStandard
-        | PlateLayoutMode::RimOrBaseSherdReconstructed => (
+        PlateLayoutMode::CompleteVesselStandard | PlateLayoutMode::RimOrBaseSherdReconstructed => (
             (max_d * 2.68 + margin * 2.2).max(236.0),
             (height + max_d + margin * 3.6).max(256.0),
         ),
@@ -997,8 +992,9 @@ fn compose_archaeological_plate_inner(
 
     // 완형 토기 및 구연·저부 복원 도판은 좌측 열(제1열)에 평·단면도를 두고 우측 열(제2열)에 1:1 정밀 탁본 및 수평 횡단면을 충분한 간격으로 배치
     let cx = match mode {
-        PlateLayoutMode::CompleteVesselStandard
-        | PlateLayoutMode::RimOrBaseSherdReconstructed => margin + max_d * 0.56,
+        PlateLayoutMode::CompleteVesselStandard | PlateLayoutMode::RimOrBaseSherdReconstructed => {
+            margin + max_d * 0.56
+        }
         _ => canvas_width_mm * 0.32,
     };
     let base_y = margin + 10.0;
@@ -1098,24 +1094,28 @@ fn compose_archaeological_plate_inner(
     let keep_positive_x = section_sign > 0.0;
     let wall_t = m.mean_wall_thickness_mm.clamp(2.2, 12.0);
 
-    let fallback_polylines: Vec<Vec<[f64; 2]>> =
-        if input.vertical_section.polylines_2d.iter().all(|p| p.len() < 2) {
-            let r_base = (m.base_diameter_or_width_mm * 0.5).max(max_d * 0.32);
-            let r_belly = (m.max_belly_diameter_mm * 0.5).max(r_base + 4.0);
-            let r_rim = (m.rim_or_outer_diameter_mm * 0.5).max(r_base + 2.0);
-            vec![vec![
-                [0.0, 0.0],
-                [r_base, 0.0],
-                [r_belly, height * 0.55],
-                [r_rim, height],
-                [(r_rim - wall_t).max(0.0), height],
-                [(r_belly - wall_t).max(0.0), height * 0.55],
-                [(r_base - wall_t).max(0.0), wall_t],
-                [0.0, wall_t],
-            ]]
-        } else {
-            Vec::new()
-        };
+    let fallback_polylines: Vec<Vec<[f64; 2]>> = if input
+        .vertical_section
+        .polylines_2d
+        .iter()
+        .all(|p| p.len() < 2)
+    {
+        let r_base = (m.base_diameter_or_width_mm * 0.5).max(max_d * 0.32);
+        let r_belly = (m.max_belly_diameter_mm * 0.5).max(r_base + 4.0);
+        let r_rim = (m.rim_or_outer_diameter_mm * 0.5).max(r_base + 2.0);
+        vec![vec![
+            [0.0, 0.0],
+            [r_base, 0.0],
+            [r_belly, height * 0.55],
+            [r_rim, height],
+            [(r_rim - wall_t).max(0.0), height],
+            [(r_belly - wall_t).max(0.0), height * 0.55],
+            [(r_base - wall_t).max(0.0), wall_t],
+            [0.0, wall_t],
+        ]]
+    } else {
+        Vec::new()
+    };
     let active_polylines = if fallback_polylines.is_empty() {
         &input.vertical_section.polylines_2d
     } else {
@@ -1205,10 +1205,8 @@ fn compose_archaeological_plate_inner(
                 // 일러스트레이터 표준 입면 구조선 (구연단선·동체 굴곡선·굽 접합선: 좌측 외곽선에서 중심축 cx까지 수평 실선 연결)
                 for z_frac in [0.93_f64, 0.32_f64, 0.09_f64] {
                     let target_z = height * z_frac;
-                    if let Some(best_pt) = ext_half
-                        .iter()
-                        .filter(|p| p[0].abs() > 3.0)
-                        .min_by(|a, b| {
+                    if let Some(best_pt) =
+                        ext_half.iter().filter(|p| p[0].abs() > 3.0).min_by(|a, b| {
                             (a[1] - target_z)
                                 .abs()
                                 .partial_cmp(&(b[1] - target_z).abs())
@@ -1279,20 +1277,14 @@ fn compose_archaeological_plate_inner(
 
     // 4. 유물군별 다중 뷰 정밀 탁본(`Rubbing`) 래스터 영역 및 특화 도판 요소 배치
     let half_d = max_d * 0.5;
-    let hsec_opt = input
-        .horizontal_sections
-        .iter()
-        .find(|s| {
-            s.orientation == strata_section::CutPlaneOrientation::HorizontalTransverse
-                && s.offset_mm > -9000.0
-        });
-    let top_plan_opt = input
-        .horizontal_sections
-        .iter()
-        .find(|s| {
-            s.orientation == strata_section::CutPlaneOrientation::HorizontalTransverse
-                && s.offset_mm <= -9000.0
-        });
+    let hsec_opt = input.horizontal_sections.iter().find(|s| {
+        s.orientation == strata_section::CutPlaneOrientation::HorizontalTransverse
+            && s.offset_mm > -9000.0
+    });
+    let top_plan_opt = input.horizontal_sections.iter().find(|s| {
+        s.orientation == strata_section::CutPlaneOrientation::HorizontalTransverse
+            && s.offset_mm <= -9000.0
+    });
     let custom_sec_opt = input
         .horizontal_sections
         .iter()
@@ -1536,10 +1528,7 @@ fn compose_archaeological_plate_inner(
             for bridge_y in [top_y, base_y] {
                 paths.push(PlatePathElement {
                     layer_id: String::from("3단병렬_연결선"),
-                    points_mm: vec![
-                        [x_ext + col_w * 0.45, bridge_y],
-                        [x_sec - 4.0, bridge_y],
-                    ],
+                    points_mm: vec![[x_ext + col_w * 0.45, bridge_y], [x_sec - 4.0, bridge_y]],
                     closed: false,
                     stroke_hex: String::from("#5C5B57"),
                     stroke_width_mm: 0.22,
@@ -1548,10 +1537,7 @@ fn compose_archaeological_plate_inner(
                 });
                 paths.push(PlatePathElement {
                     layer_id: String::from("3단병렬_연결선"),
-                    points_mm: vec![
-                        [x_sec + 4.0, bridge_y],
-                        [x_int - col_w * 0.45, bridge_y],
-                    ],
+                    points_mm: vec![[x_sec + 4.0, bridge_y], [x_int - col_w * 0.45, bridge_y]],
                     closed: false,
                     stroke_hex: String::from("#5C5B57"),
                     stroke_width_mm: 0.22,

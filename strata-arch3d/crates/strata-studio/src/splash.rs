@@ -1,9 +1,9 @@
+use eframe::egui;
+use image::{Rgba, RgbaImage};
 use strata_core::strata_tokens::{
     metrics::{SPLASH_DURATION_SEC, SPLASH_HEIGHT, SPLASH_WIDTH},
     tokens::{ACTION, EDGE, GROUND, INK, MUTED, WASH},
 };
-use eframe::egui;
-use image::{Rgba, RgbaImage};
 
 /// 스플래시 화면 상태 (`700 × 400 px`, `3.0초` 지층 등고선 페이드인).
 #[derive(Debug, Clone)]
@@ -21,7 +21,10 @@ impl Default for SplashState {
             checklist: [
                 ("GPU 16B 정점 파이프라인 및 한지 렌더러 초기화", true),
                 ("Stackless LBVH 다중 스케일 곡률 적분 엔진 준비", true),
-                ("6대 발굴 유물군(완형·편·구슬·기와·석기·금속) 도법 로드", true),
+                (
+                    "6대 발굴 유물군(완형·편·구슬·기와·석기·금속) 도법 로드",
+                    true,
+                ),
                 ("작업 공간(.darch / .ap2) 및 1mm=5px 정밀 스케일 검증", true),
             ],
         }
@@ -74,11 +77,17 @@ impl SplashState {
                     for ix in 0..36 {
                         let t = (ix as f32) / 35.0;
                         let x = rect.left() + 36.0 + t * (sw - 72.0);
-                        let wave = ((t * std::f32::consts::TAU + layer_idx as f32 * 0.7 + ratio * 2.0).sin()) * 4.5;
+                        let wave =
+                            ((t * std::f32::consts::TAU + layer_idx as f32 * 0.7 + ratio * 2.0)
+                                .sin())
+                                * 4.5;
                         pts.push(egui::pos2(x, rect.top() + y_off + wave));
                     }
                     let stroke_col = if layer_idx == 2 { terra } else { border };
-                    painter.add(egui::Shape::line(pts, egui::Stroke::new(1.2_f32, stroke_col)));
+                    painter.add(egui::Shape::line(
+                        pts,
+                        egui::Stroke::new(1.2_f32, stroke_col),
+                    ));
                 }
 
                 // 타이틀 & 부제
@@ -116,10 +125,8 @@ impl SplashState {
                     egui::vec2(sw - 80.0, 4.0),
                 );
                 painter.rect_filled(bar_bg, 2.0, wash);
-                let bar_fg = egui::Rect::from_min_size(
-                    bar_bg.min,
-                    egui::vec2(bar_bg.width() * ratio, 4.0),
-                );
+                let bar_fg =
+                    egui::Rect::from_min_size(bar_bg.min, egui::vec2(bar_bg.width() * ratio, 4.0));
                 painter.rect_filled(bar_fg, 2.0, terra);
             });
     }
@@ -128,7 +135,11 @@ impl SplashState {
     pub fn render_offscreen_image() -> RgbaImage {
         let w = SPLASH_WIDTH;
         let h = SPLASH_HEIGHT;
-        let mut img = RgbaImage::from_pixel(w, h, Rgba([GROUND.rgb[0], GROUND.rgb[1], GROUND.rgb[2], 255]));
+        let mut img = RgbaImage::from_pixel(
+            w,
+            h,
+            Rgba([GROUND.rgb[0], GROUND.rgb[1], GROUND.rgb[2], 255]),
+        );
 
         for x in 0..w {
             for dy in 0..2 {
@@ -163,7 +174,11 @@ impl SplashState {
 
         for x in 40..(w - 40) {
             for y in (h - 36)..(h - 31) {
-                img.put_pixel(x, y, Rgba([ACTION.rgb[0], ACTION.rgb[1], ACTION.rgb[2], 255]));
+                img.put_pixel(
+                    x,
+                    y,
+                    Rgba([ACTION.rgb[0], ACTION.rgb[1], ACTION.rgb[2], 255]),
+                );
             }
         }
 

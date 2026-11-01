@@ -1,15 +1,13 @@
+use eframe::egui;
+use image::{Rgba, RgbaImage};
+use rayon::prelude::*;
 use strata_core::strata_tokens::tokens::{
     ACTION, DONE_BG, DONE_INK, EDGE, GRID_1MM, GROUND, INK, LINE, MUTED, PROFILE_RED, SELECT_BLUE,
     SURFACE, WASH,
 };
 use strata_core::{ScalePreset, TriMesh};
-use strata_export::{
-    triangulate_polygon_ear_clipping, ComposedPlate2D, PlateRasterKind,
-};
+use strata_export::{triangulate_polygon_ear_clipping, ComposedPlate2D, PlateRasterKind};
 use strata_measure::ArtifactMeasurementReport;
-use eframe::egui;
-use image::{Rgba, RgbaImage};
-use rayon::prelude::*;
 
 #[inline]
 #[allow(dead_code)]
@@ -665,7 +663,10 @@ impl std::fmt::Debug for SheetPaneState {
             .field("roi_drag_mode", &self.roi_drag_mode)
             .field("rubbing_roi_mm", &self.rubbing_roi_mm)
             .field("show_roi_rubbing_window", &self.show_roi_rubbing_window)
-            .field("show_elevation_rubbing_overlay", &self.show_elevation_rubbing_overlay)
+            .field(
+                "show_elevation_rubbing_overlay",
+                &self.show_elevation_rubbing_overlay,
+            )
             .field("view_transforms", &self.view_transforms)
             .field("selected_layer_idx", &self.selected_layer_idx)
             .field("has_custom_section_layer", &self.has_custom_section_layer)
@@ -785,10 +786,8 @@ fn get_or_build_ddg_mesh(
 ) -> std::sync::Arc<crate::rubbing_ddg_pipeline::TopologicalDdgMesh> {
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex, OnceLock};
-    type DdgCacheMap = HashMap<
-        (String, usize, usize),
-        Arc<crate::rubbing_ddg_pipeline::TopologicalDdgMesh>,
-    >;
+    type DdgCacheMap =
+        HashMap<(String, usize, usize), Arc<crate::rubbing_ddg_pipeline::TopologicalDdgMesh>>;
     static DDG_CACHE: OnceLock<Mutex<DdgCacheMap>> = OnceLock::new();
     let cache = DDG_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
     let key = (
@@ -801,9 +800,7 @@ fn get_or_build_ddg_mesh(
             return Arc::clone(found);
         }
     }
-    let built = Arc::new(crate::rubbing_ddg_pipeline::TopologicalDdgMesh::from_trimesh(
-        mesh,
-    ));
+    let built = Arc::new(crate::rubbing_ddg_pipeline::TopologicalDdgMesh::from_trimesh(mesh));
     if let Ok(mut guard) = cache.lock() {
         guard.insert(key, Arc::clone(&built));
     }
@@ -1009,28 +1006,12 @@ pub fn render_orthographic_rubbing_rgba_with_params(
         .enumerate()
         .map(|(vi, &p)| {
             let [rx, ry, rz] = crate::view3d_pane::transform_local_vertex_full(
-                p,
-                center_xy,
-                z_min,
-                height_mm,
-                cos_p,
-                sin_p,
-                cos_t,
-                sin_t,
-                cos_r,
-                sin_r,
-                0.0,
+                p, center_xy, z_min, height_mm, cos_p, sin_p, cos_t, sin_t, cos_r, sin_r, 0.0,
             );
 
             let n = ddg.normals.get(vi).copied().unwrap_or([0.0, -1.0, 0.0]);
             let [nrx, nry, nrz] = crate::view3d_pane::transform_local_normal_full(
-                n,
-                cos_p,
-                sin_p,
-                cos_t,
-                sin_t,
-                cos_r,
-                sin_r,
+                n, cos_p, sin_p, cos_t, sin_t, cos_r, sin_r,
             );
 
             let (u, v, depth, vn) = match &unrolled {
@@ -1206,9 +1187,8 @@ pub fn render_orthographic_rubbing_rgba_with_params(
         let y0 = cy.saturating_sub(radius);
         let x1 = (cx + radius + 1).min(w);
         let y1 = (cy + radius + 1).min(h);
-        let cnt = sat_c[y1 * sw + x1] + sat_c[y0 * sw + x0]
-            - sat_c[y0 * sw + x1]
-            - sat_c[y1 * sw + x0];
+        let cnt =
+            sat_c[y1 * sw + x1] + sat_c[y0 * sw + x0] - sat_c[y0 * sw + x1] - sat_c[y1 * sw + x0];
         if cnt > 0 {
             let sum = sat_z[y1 * sw + x1] + sat_z[y0 * sw + x0]
                 - sat_z[y0 * sw + x1]
@@ -1267,11 +1247,10 @@ pub fn render_orthographic_rubbing_rgba_with_params(
                 let curv_cancel_1_2 = ((z_c - z_r1) - 0.333_333 * (z_c - z_r2)) * 9.5;
                 let curv_cancel_2_4 = ((z_c - z_r2) - 0.20 * (z_c - z_r4)) * 5.6;
                 let curv_cancel_4_8 = ((z_c - z_r4) - 0.22 * (z_c - z_r8)) * 3.2;
-                let msii_val = ((0.46 * curv_cancel_1_2
-                    + 0.34 * curv_cancel_2_4
-                    + 0.20 * curv_cancel_4_8)
-                    * detail_boost)
-                    .clamp(-1.8, 1.8);
+                let msii_val =
+                    ((0.46 * curv_cancel_1_2 + 0.34 * curv_cancel_2_4 + 0.20 * curv_cancel_4_8)
+                        * detail_boost)
+                        .clamp(-1.8, 1.8);
 
                 // (d) 반경 제한 PCV Ambient Occlusion (타솔이 음각 홈 바닥에 닿지 못하는 차폐율)
                 let local_cavity_depth = (z_r4 - z_c).max(0.0);
@@ -1392,9 +1371,8 @@ pub fn render_orthographic_rubbing_rgba_with_params(
                     .clamp(0.0, 1.0);
 
                 // Interleaved Gradient Noise (Blue-noise profile spatial hash, raster_rubbing.rs line 210)
-                let ign = ((52.982_918_f32
-                    * ((0.06711056 * x_f + 0.00583715 * y_f).fract()))
-                .fract()
+                let ign = ((52.982_918_f32 * ((0.06711056 * x_f + 0.00583715 * y_f).fract()))
+                    .fract()
                     + 1.0)
                     .fract();
 
@@ -1465,7 +1443,9 @@ pub fn rgba_to_color_image_clipped_with_roi(
                 pixels.push(egui::Color32::TRANSPARENT);
             } else {
                 let p = src.get_pixel(x as u32, y as u32);
-                pixels.push(egui::Color32::from_rgba_unmultiplied(p[0], p[1], p[2], p[3]));
+                pixels.push(egui::Color32::from_rgba_unmultiplied(
+                    p[0], p[1], p[2], p[3],
+                ));
             }
         }
     }
@@ -1522,7 +1502,13 @@ fn draw_rubbing_fine_wheel(
             .clamp(0.0, 1.0);
         let tx = wheel_rect.left() + 7.0 + frac * (wheel_rect.width() - 14.0);
         let is_mid = ti == n_ticks / 2;
-        let th = if is_mid { 10.0 } else if ti % 4 == 0 { 7.5 } else { 5.0 };
+        let th = if is_mid {
+            10.0
+        } else if ti % 4 == 0 {
+            7.5
+        } else {
+            5.0
+        };
         painter.line_segment(
             [
                 egui::pos2(tx, wheel_rect.center().y - th * 0.5),
@@ -1563,12 +1549,8 @@ fn draw_line_style_vector_icon(
     idx: usize,
     stroke_col: egui::Color32,
 ) {
-    let bg = egui::Color32::from_rgba_unmultiplied(
-        stroke_col.r(),
-        stroke_col.g(),
-        stroke_col.b(),
-        28,
-    );
+    let bg =
+        egui::Color32::from_rgba_unmultiplied(stroke_col.r(), stroke_col.g(), stroke_col.b(), 28);
     painter.rect_filled(icon_rect, 3.5, bg);
     painter.rect_stroke(
         icon_rect,
@@ -1680,16 +1662,10 @@ fn draw_individual_view_flip_controls(
     );
     let terra = egui::Color32::from_rgb(ACTION.rgb[0], ACTION.rgb[1], ACTION.rgb[2]);
     let ink = egui::Color32::from_rgb(INK.rgb[0], INK.rgb[1], INK.rgb[2]);
-    let select_blue = egui::Color32::from_rgb(
-        SELECT_BLUE.rgb[0],
-        SELECT_BLUE.rgb[1],
-        SELECT_BLUE.rgb[2],
-    );
-    let profile_red = egui::Color32::from_rgb(
-        PROFILE_RED.rgb[0],
-        PROFILE_RED.rgb[1],
-        PROFILE_RED.rgb[2],
-    );
+    let select_blue =
+        egui::Color32::from_rgb(SELECT_BLUE.rgb[0], SELECT_BLUE.rgb[1], SELECT_BLUE.rgb[2]);
+    let profile_red =
+        egui::Color32::from_rgb(PROFILE_RED.rgb[0], PROFILE_RED.rgb[1], PROFILE_RED.rgb[2]);
     painter.rect_filled(
         bar_rect,
         3.5,
@@ -1740,7 +1716,11 @@ fn draw_individual_view_flip_controls(
         egui::Align2::CENTER_CENTER,
         "✥",
         egui::FontId::proportional(9.0),
-        if is_selected { egui::Color32::WHITE } else { ink },
+        if is_selected {
+            egui::Color32::WHITE
+        } else {
+            ink
+        },
     );
 
     let specs = [
@@ -1829,16 +1809,10 @@ pub fn render_sheet_pane_egui(
     let ink = egui::Color32::from_rgb(INK.rgb[0], INK.rgb[1], INK.rgb[2]);
     let muted = egui::Color32::from_rgb(MUTED.rgb[0], MUTED.rgb[1], MUTED.rgb[2]);
     let terra = egui::Color32::from_rgb(ACTION.rgb[0], ACTION.rgb[1], ACTION.rgb[2]);
-    let profile_red = egui::Color32::from_rgb(
-        PROFILE_RED.rgb[0],
-        PROFILE_RED.rgb[1],
-        PROFILE_RED.rgb[2],
-    );
-    let select_blue = egui::Color32::from_rgb(
-        SELECT_BLUE.rgb[0],
-        SELECT_BLUE.rgb[1],
-        SELECT_BLUE.rgb[2],
-    );
+    let profile_red =
+        egui::Color32::from_rgb(PROFILE_RED.rgb[0], PROFILE_RED.rgb[1], PROFILE_RED.rgb[2]);
+    let select_blue =
+        egui::Color32::from_rgb(SELECT_BLUE.rgb[0], SELECT_BLUE.rgb[1], SELECT_BLUE.rgb[2]);
     let _done_bg = egui::Color32::from_rgb(DONE_BG.rgb[0], DONE_BG.rgb[1], DONE_BG.rgb[2]);
     let _done_fg = egui::Color32::from_rgb(DONE_INK.rgb[0], DONE_INK.rgb[1], DONE_INK.rgb[2]);
 
@@ -3581,8 +3555,11 @@ pub fn render_full_workspace_offscreen_png(
 ) -> RgbaImage {
     let w = 1440u32;
     let h = 900u32;
-    let mut img =
-        RgbaImage::from_pixel(w, h, Rgba([GROUND.rgb[0], GROUND.rgb[1], GROUND.rgb[2], 255]));
+    let mut img = RgbaImage::from_pixel(
+        w,
+        h,
+        Rgba([GROUND.rgb[0], GROUND.rgb[1], GROUND.rgb[2], 255]),
+    );
 
     let fill_rect = |img: &mut RgbaImage, x0: u32, y0: u32, rw: u32, rh: u32, col: Rgba<u8>| {
         let x1 = (x0 + rw).min(w);
@@ -3714,18 +3691,9 @@ pub fn render_full_workspace_offscreen_png(
                 let c = elem.points_mm[tri[2]];
                 fill_tri(
                     &mut img,
-                    [
-                        (ox + a[0] * p_scale) as f32,
-                        (oy - a[1] * p_scale) as f32,
-                    ],
-                    [
-                        (ox + b[0] * p_scale) as f32,
-                        (oy - b[1] * p_scale) as f32,
-                    ],
-                    [
-                        (ox + c[0] * p_scale) as f32,
-                        (oy - c[1] * p_scale) as f32,
-                    ],
+                    [(ox + a[0] * p_scale) as f32, (oy - a[1] * p_scale) as f32],
+                    [(ox + b[0] * p_scale) as f32, (oy - b[1] * p_scale) as f32],
+                    [(ox + c[0] * p_scale) as f32, (oy - c[1] * p_scale) as f32],
                     col,
                 );
             }
@@ -3740,14 +3708,7 @@ pub fn render_full_workspace_offscreen_png(
     }
 
     if let Some(first_reg) = plate.raster_regions.first() {
-        let rub_img = render_orthographic_rubbing_rgba(
-            mesh,
-            first_reg.kind,
-            0.0,
-            76.0,
-            180,
-            180,
-        );
+        let rub_img = render_orthographic_rubbing_rgba(mesh, first_reg.kind, 0.0, 76.0, 180, 180);
         let rx0 = (ox + first_reg.rect_mm[0].min(first_reg.rect_mm[2]) * p_scale).round() as i32;
         let rx1 = (ox + first_reg.rect_mm[0].max(first_reg.rect_mm[2]) * p_scale).round() as i32;
         let ry0 = (oy - first_reg.rect_mm[1].max(first_reg.rect_mm[3]) * p_scale).round() as i32;
@@ -3872,7 +3833,11 @@ mod tests {
     fn test_rubbing_params_hash_tracks_every_field() {
         let base = AcademicRubbingParams::default();
         let h0 = rubbing_params_hash(&base);
-        assert_eq!(h0, rubbing_params_hash(&base.clone()), "해시가 결정론적이어야 함");
+        assert_eq!(
+            h0,
+            rubbing_params_hash(&base.clone()),
+            "해시가 결정론적이어야 함"
+        );
 
         let mut ink = base.clone();
         ink.ink_density_pct = 79.0;
@@ -3903,7 +3868,12 @@ mod tests {
             "전개=평면",
             "투영=직교",
         ] {
-            assert!(line.contains(token), "출처 문자열에 '{}' 없음: {}", token, line);
+            assert!(
+                line.contains(token),
+                "출처 문자열에 '{}' 없음: {}",
+                token,
+                line
+            );
         }
         let unrolled = AcademicRubbingParams {
             unroll_mode: Some(strata_shade::UnrollMode::Cylindrical),
@@ -3934,7 +3904,11 @@ mod tests {
             160,
             160,
         );
-        assert_eq!(a.as_raw(), b.as_raw(), "같은 입력인데 렌더 결과가 다름(비결정적)");
+        assert_eq!(
+            a.as_raw(),
+            b.as_raw(),
+            "같은 입력인데 렌더 결과가 다름(비결정적)"
+        );
     }
 
     #[test]
@@ -4103,8 +4077,11 @@ mod tests {
     fn test_chs_plate_title_block_and_no_overlapping_aux_views() {
         let mesh = make_patterned_bowl_mesh();
         let report = compute_artifact_measurements(&mesh, ArtifactCategory::CompleteVessel);
-        let (left_c, center_t, center_s, right_c) =
-            build_chs_plate_title_block("7지구 9호-7 (완형 토기)", "① 완형 토기 표준 도판", &report);
+        let (left_c, center_t, center_s, right_c) = build_chs_plate_title_block(
+            "7지구 9호-7 (완형 토기)",
+            "① 완형 토기 표준 도판",
+            &report,
+        );
         assert!(left_c.contains("유적명"));
         assert!(center_t.contains("圖版"));
         assert!(center_s.contains("Plate."));
@@ -4115,7 +4092,8 @@ mod tests {
     fn test_tdd5_full_bleed_archaeological_millimeter_graph_paper_grid() {
         let sheet_rect =
             egui::Rect::from_min_size(egui::pos2(400.0, 34.0), egui::vec2(1040.0, 866.0));
-        let spec = compute_full_bleed_graph_paper_spec(sheet_rect, 210.0, 140.0, 1.0, egui::Vec2::ZERO);
+        let spec =
+            compute_full_bleed_graph_paper_spec(sheet_rect, 210.0, 140.0, 1.0, egui::Vec2::ZERO);
         assert_eq!(spec.paper_rect, sheet_rect);
         assert!(spec.lines_10mm_x.len() >= 12);
         assert!(spec.lines_10mm_y.len() >= 10);
@@ -4175,12 +4153,8 @@ mod tests {
             200,
             200,
         );
-        let full_cimg = rgba_to_color_image_clipped_with_roi(
-            &src,
-            [10.0, 10.0, 110.0, 80.0],
-            Some(-1),
-            None,
-        );
+        let full_cimg =
+            rgba_to_color_image_clipped_with_roi(&src, [10.0, 10.0, 110.0, 80.0], Some(-1), None);
         let roi_cimg = rgba_to_color_image_clipped_with_roi(
             &src,
             [10.0, 10.0, 110.0, 80.0],
@@ -4222,21 +4196,22 @@ mod tests {
             20.0,
             0.25,
         );
-        let plate = strata_export::compose_archaeological_plate(&strata_export::PlateComposeInput {
-            title: "테스트 완형 토기",
-            measurements: &m,
-            vertical_section: &vsec,
-            horizontal_sections: &[hsec],
-            occluded_spans: &[],
-            sherd_subtype: None,
-            sherd_strategy: None,
-            handle_attachment: None,
-            bead_subtype: None,
-            bead_drill_type: None,
-            wado_cut_ratio: None,
-            hemp_density_label: None,
-            flip_exterior_right: false,
-        });
+        let plate =
+            strata_export::compose_archaeological_plate(&strata_export::PlateComposeInput {
+                title: "테스트 완형 토기",
+                measurements: &m,
+                vertical_section: &vsec,
+                horizontal_sections: &[hsec],
+                occluded_spans: &[],
+                sherd_subtype: None,
+                sherd_strategy: None,
+                handle_attachment: None,
+                bead_subtype: None,
+                bead_drill_type: None,
+                wado_cut_ratio: None,
+                hemp_density_label: None,
+                flip_exterior_right: false,
+            });
         let vessel_right_x = plate.raster_regions[0].rect_mm[2];
         let vessel_top_y = plate.raster_regions[0].rect_mm[3];
         let hsec_ring = plate
@@ -4295,8 +4270,13 @@ mod tests {
             "must generate 5cm (50mm) thin red grid lines"
         );
         assert!(
-            spec.lines_10mm_x.iter().any(|&gx| gx < spec.paper_bounds_rect.left() - 2.0)
-                && spec.lines_10mm_x.iter().any(|&gx| gx > spec.paper_bounds_rect.right() + 2.0),
+            spec.lines_10mm_x
+                .iter()
+                .any(|&gx| gx < spec.paper_bounds_rect.left() - 2.0)
+                && spec
+                    .lines_10mm_x
+                    .iter()
+                    .any(|&gx| gx > spec.paper_bounds_rect.right() + 2.0),
             "infinite graph paper grid lines must extend into the margin beyond paper_bounds_rect"
         );
 
@@ -4309,7 +4289,11 @@ mod tests {
                 [0.0, 118.0, 26.0],
                 sheet_rect,
             );
-            assert_eq!(rects.len(), 4, "exact 4 line widgets (단면선, 외곽선, 횡단면, 치수선)");
+            assert_eq!(
+                rects.len(),
+                4,
+                "exact 4 line widgets (단면선, 외곽선, 횡단면, 치수선)"
+            );
             for i in 0..rects.len() {
                 for j in (i + 1)..rects.len() {
                     assert!(
@@ -4351,23 +4335,27 @@ mod tests {
             24.0,
             0.25,
         );
-        let plate = strata_export::compose_archaeological_plate(&strata_export::PlateComposeInput {
-            title: "테스트 완형 토기",
-            measurements: &m,
-            vertical_section: &vsec,
-            horizontal_sections: &[hsec],
-            occluded_spans: &[],
-            sherd_subtype: None,
-            sherd_strategy: None,
-            handle_attachment: None,
-            bead_subtype: None,
-            bead_drill_type: None,
-            wado_cut_ratio: None,
-            hemp_density_label: None,
-            flip_exterior_right: false,
-        });
+        let plate =
+            strata_export::compose_archaeological_plate(&strata_export::PlateComposeInput {
+                title: "테스트 완형 토기",
+                measurements: &m,
+                vertical_section: &vsec,
+                horizontal_sections: &[hsec],
+                occluded_spans: &[],
+                sherd_subtype: None,
+                sherd_strategy: None,
+                handle_attachment: None,
+                bead_subtype: None,
+                bead_drill_type: None,
+                wado_cut_ratio: None,
+                hemp_density_label: None,
+                flip_exterior_right: false,
+            });
         assert!(
-            plate.paths.iter().any(|p| p.layer_id == "평면도_구연내경선"),
+            plate
+                .paths
+                .iter()
+                .any(|p| p.layer_id == "평면도_구연내경선"),
             "1:1 plan view must contain Illustrator concentric vector lines"
         );
         assert!(
@@ -4432,21 +4420,22 @@ mod tests {
         let custom_sec = crate::view3d_pane::slice_custom_line_section_2d(&mesh, &v3d)
             .expect("custom section A-A' must be extracted");
 
-        let plate = strata_export::compose_archaeological_plate(&strata_export::PlateComposeInput {
-            title: "결손 구연 완형 토기",
-            measurements: &m,
-            vertical_section: &vsec,
-            horizontal_sections: &[hsec, top_plan, custom_sec],
-            occluded_spans: &[],
-            sherd_subtype: None,
-            sherd_strategy: None,
-            handle_attachment: None,
-            bead_subtype: None,
-            bead_drill_type: None,
-            wado_cut_ratio: None,
-            hemp_density_label: None,
-            flip_exterior_right: false,
-        });
+        let plate =
+            strata_export::compose_archaeological_plate(&strata_export::PlateComposeInput {
+                title: "결손 구연 완형 토기",
+                measurements: &m,
+                vertical_section: &vsec,
+                horizontal_sections: &[hsec, top_plan, custom_sec],
+                occluded_spans: &[],
+                sherd_subtype: None,
+                sherd_strategy: None,
+                handle_attachment: None,
+                bead_subtype: None,
+                bead_drill_type: None,
+                wado_cut_ratio: None,
+                hemp_density_label: None,
+                flip_exterior_right: false,
+            });
         assert!(
             plate
                 .paths
@@ -4455,7 +4444,10 @@ mod tests {
             "chipped/broken rim segment in 1:1 plan view must be rendered as a dashed reconstruction line"
         );
         assert!(
-            plate.paths.iter().any(|p| p.layer_id.starts_with("추가단면_")),
+            plate
+                .paths
+                .iter()
+                .any(|p| p.layer_id.starts_with("추가단면_")),
             "custom section A-A' must be placed in its dedicated layer"
         );
 

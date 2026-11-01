@@ -1,5 +1,5 @@
-use strata_core::{StacklessLbvh, TriMesh};
 use serde::{Deserialize, Serialize};
+use strata_core::{StacklessLbvh, TriMesh};
 
 /// 월드 고정 절단틀(`P_cut`) 방향 종류.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -112,10 +112,7 @@ pub fn slice_mesh_with_fixed_plane(
     }
 }
 
-fn chain_segments_into_polylines(
-    segments: &[[[f64; 2]; 2]],
-    tol_mm: f64,
-) -> Vec<Vec<[f64; 2]>> {
+fn chain_segments_into_polylines(segments: &[[[f64; 2]; 2]], tol_mm: f64) -> Vec<Vec<[f64; 2]>> {
     let mut used = vec![false; segments.len()];
     let tol2 = tol_mm * tol_mm;
     let mut polylines: Vec<Vec<[f64; 2]>> = Vec::new();
@@ -201,8 +198,7 @@ fn chain_segments_into_polylines(
         merged = false;
         'outer: for a in 0..polylines.len() {
             for b in (a + 1)..polylines.len() {
-                let (Some(&a_tail), Some(&b_tail)) =
-                    (polylines[a].last(), polylines[b].last())
+                let (Some(&a_tail), Some(&b_tail)) = (polylines[a].last(), polylines[b].last())
                 else {
                     continue;
                 };

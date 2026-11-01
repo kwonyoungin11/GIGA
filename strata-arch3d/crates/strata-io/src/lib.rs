@@ -8,8 +8,8 @@ pub use darch_codec::DarchProject;
 pub use obj_loader::{load_obj_file, LoadedObjBundle};
 pub use ply_stl::load_ply_or_stl_file;
 
-use strata_core::{StrataError, TriMesh};
 use std::path::Path;
+use strata_core::{StrataError, TriMesh};
 
 /// 확장자(`.obj`, `.ply`, `.stl`)를 자동 감지하여 3D 유물 메쉬를 로드한다.
 /// - `.obj` 로드 시 동일 폴더에 같은 이름의 `.ap2` 프로젝트 파일이 존재하면,

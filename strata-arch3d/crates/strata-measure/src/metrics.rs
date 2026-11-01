@@ -1,3 +1,4 @@
+use serde::{Deserialize, Serialize};
 use strata_core::{
     ArtifactCategory, BeadDrillType, BeadSubtype, ScalePreset, SherdPlateStrategy, TriMesh,
 };
@@ -5,7 +6,6 @@ use strata_orient::{
     analyze_bead_mesh_perforation, fit_rim_arc_unbiased, segment_sherd_three_regions,
     BeadPerforationAnalysis, RimCircleFitResult,
 };
-use serde::{Deserialize, Serialize};
 
 /// 6대 유물군 통합 정밀 치수 계측 보고서 (`DESIGN_SPEC.md` 3.5 상단 `28px` 치수 대장 띠 & CSV/한글 표 출력용).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -293,12 +293,7 @@ pub fn compute_artifact_measurements(
 
 /// 중간 높이 띠(`40~60%`)에서 방위각별 `외벽 반경 - 내벽 반경` 의 중앙값으로 기벽 두께를 실측한다.
 /// 내벽이 스캔되지 않은 단일 껍질 메쉬는 `None` 을 돌려 호출측이 추정값으로 되돌아가게 한다.
-fn measure_radial_wall_thickness(
-    mesh: &TriMesh,
-    cx: f64,
-    cy: f64,
-    height_z: f64,
-) -> Option<f64> {
+fn measure_radial_wall_thickness(mesh: &TriMesh, cx: f64, cy: f64, height_z: f64) -> Option<f64> {
     const BINS: usize = 36;
     if height_z <= 0.0 || mesh.positions.len() < BINS * 2 {
         return None;

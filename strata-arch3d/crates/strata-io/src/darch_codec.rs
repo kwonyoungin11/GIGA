@@ -1,9 +1,9 @@
-use strata_core::{
-    StrataError, ArtifactCategory, BeadDrillType, BeadSubtype, Mat4, ScalePreset, SherdSubtype,
-};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
+use strata_core::{
+    ArtifactCategory, BeadDrillType, BeadSubtype, Mat4, ScalePreset, SherdSubtype, StrataError,
+};
 
 /// `STRATA · 동국유물실측` 전용 `.darch` 프로젝트 작업 기록 구조체.
 /// 손상된 외부 JSON 입력에 대비해 모든 수치 필드를 안전 범위로 클램핑(`sanitize_clamped`)한다.
@@ -72,8 +72,7 @@ impl DarchProject {
         } else {
             self.rubbing_radius_mm = self.rubbing_radius_mm.clamp(0.1, 15.0);
         }
-        self.extra_section_angles_deg
-            .retain(|a| a.is_finite());
+        self.extra_section_angles_deg.retain(|a| a.is_finite());
         for a in &mut self.extra_section_angles_deg {
             *a = a.rem_euclid(360.0);
         }
@@ -88,10 +87,9 @@ impl DarchProject {
             path: path_ref.display().to_string(),
             message: e.to_string(),
         })?;
-        let parsed: Self =
-            serde_json::from_str(&raw).map_err(|e| StrataError::ProjectFormat {
-                reason: format!(".darch JSON 파싱 오류: {e}"),
-            })?;
+        let parsed: Self = serde_json::from_str(&raw).map_err(|e| StrataError::ProjectFormat {
+            reason: format!(".darch JSON 파싱 오류: {e}"),
+        })?;
         Ok(parsed.sanitize_clamped())
     }
 

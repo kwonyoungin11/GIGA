@@ -1,6 +1,6 @@
 use crate::plate_composer::ComposedPlate2D;
-use strata_measure::ArtifactMeasurementReport;
 use std::fmt::Write as _;
+use strata_measure::ArtifactMeasurementReport;
 
 /// 합성된 2D 도판(`ComposedPlate2D`)을 AutoCAD 호환 `DXF R12` 텍스트 포맷으로 변환한다.
 pub fn export_plate_to_dxf_r12(plate: &ComposedPlate2D) -> String {

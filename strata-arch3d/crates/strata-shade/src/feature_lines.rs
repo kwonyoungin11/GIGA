@@ -1,5 +1,5 @@
-use strata_core::TriMesh;
 use serde::{Deserialize, Serialize};
+use strata_core::TriMesh;
 
 /// 5대 미분기하 특징선 연산자 (`DESIGN_SPEC.md` 1.2:
 /// `Silhouette`, `Suggestive Contours`, `Crest Lines`, `Apparent Ridges`, `Demarcating Curves`).
@@ -26,10 +26,7 @@ pub struct FeatureSegment2D {
 }
 
 /// 3D 메쉬와 시선 벡터(`view_dir`)로부터 5대 미분기하 특징선 세그먼트를 정사투영 평면 `(X, Z)`로 추출한다.
-pub fn extract_five_feature_lines(
-    mesh: &TriMesh,
-    view_dir: [f64; 3],
-) -> Vec<FeatureSegment2D> {
+pub fn extract_five_feature_lines(mesh: &TriMesh, view_dir: [f64; 3]) -> Vec<FeatureSegment2D> {
     let mut segments = Vec::new();
     let n_verts = mesh.positions.len();
     if n_verts < 3 {

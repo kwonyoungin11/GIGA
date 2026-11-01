@@ -1,3 +1,4 @@
+use eframe::egui;
 use strata_core::strata_tokens::{
     metrics::{
         DIALOG_L_PRINT_H, DIALOG_L_VERIFY_H, DIALOG_L_W, DIALOG_M_SETTINGS_W, DIALOG_PROGRESS_W,
@@ -7,7 +8,6 @@ use strata_core::strata_tokens::{
 };
 use strata_core::ThreePartErrorInfo;
 use strata_export::TiledPrintPlan;
-use eframe::egui;
 
 /// STRATA 5종 표준 대화상자 열거형 (`DESIGN_SPEC.md` 1.3).
 #[derive(Debug, Clone)]
@@ -23,17 +23,11 @@ pub enum ActiveStrataDialog {
     /// `M` (`520 × 440 px`): 환경 및 선 굵기·탁본 기본값 설정 모달
     SettingsM,
     /// `L` (`860 × 720 px`): 내보내기 전 `V1~V8` 품질·스케일·앵커 사전 검증 리포트 모달
-    PreExportVerifyL {
-        checks: Vec<(String, bool, String)>,
-    },
+    PreExportVerifyL { checks: Vec<(String, bool, String)> },
     /// `L` (`860 × 560 px`): 대형 유물 1:1 다중 시트 분할 인쇄 미리보기 모달
-    TiledPrintPreviewL {
-        plan: TiledPrintPlan,
-    },
+    TiledPrintPreviewL { plan: TiledPrintPlan },
     /// `XL` (`1280 × 860 px`): 다중 유물 보고서 합본 도판 편집기 모달
-    MultiArtifactPlateComposerXL {
-        slot_titles: Vec<String>,
-    },
+    MultiArtifactPlateComposerXL { slot_titles: Vec<String> },
 }
 
 impl ActiveStrataDialog {
@@ -100,10 +94,7 @@ pub fn show_active_dialog(ctx: &egui::Context, dialog: &mut Option<ActiveStrataD
                                 format!("② 왜 그런가: {}", info.why_it_happened),
                             );
                             ui.add_space(6.0);
-                            ui.colored_label(
-                                jade,
-                                format!("③ 어떻게 하나: {}", info.how_to_fix),
-                            );
+                            ui.colored_label(jade, format!("③ 어떻게 하나: {}", info.how_to_fix));
                         });
                 }
                 ActiveStrataDialog::BatchProgress {
@@ -141,8 +132,14 @@ pub fn show_active_dialog(ctx: &egui::Context, dialog: &mut Option<ActiveStrataD
                 ActiveStrataDialog::SettingsM => {
                     ui.colored_label(ink, "• 단면 외곽 실선 두께: 0.35 mm (구슬 확대 시 0.25 mm)");
                     ui.colored_label(ink, "• 내부 박리 능선 / 보조선 두께: 0.20 mm");
-                    ui.colored_label(ink, "• 추정 복원선 / 천공 내벽 파선: 0.25 mm (dash 2.0, 1.5 mm)");
-                    ui.colored_label(ink, "• SVG / PNG 출력 스케일 고정: 1 mm = 5.0 px (600 DPI 급)");
+                    ui.colored_label(
+                        ink,
+                        "• 추정 복원선 / 천공 내벽 파선: 0.25 mm (dash 2.0, 1.5 mm)",
+                    );
+                    ui.colored_label(
+                        ink,
+                        "• SVG / PNG 출력 스케일 고정: 1 mm = 5.0 px (600 DPI 급)",
+                    );
                     ui.colored_label(ink, "• 한지(Hanji #FAF9F5) 손탁본 미세 섬유 결: 사용");
                 }
                 ActiveStrataDialog::PreExportVerifyL { checks } => {
@@ -153,7 +150,11 @@ pub fn show_active_dialog(ctx: &egui::Context, dialog: &mut Option<ActiveStrataD
                     ui.add_space(6.0);
                     for (code, pass, detail) in checks {
                         let col = if *pass { jade } else { crimson };
-                        let badge = if *pass { "[통과 ✓]" } else { "[점검 필요 !]" };
+                        let badge = if *pass {
+                            "[통과 ✓]"
+                        } else {
+                            "[점검 필요 !]"
+                        };
                         ui.colored_label(col, format!("{badge} {code}: {detail}"));
                     }
                 }

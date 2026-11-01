@@ -4,9 +4,7 @@ pub mod plane_slicer;
 
 pub use bezier_fit::{fit_polyline_to_cubic_bezier, CubicBezierSegment2D, FittedSectionCurve};
 pub use occluded_repair::{infer_occluded_dashed_spans, OccludedDashedSpan};
-pub use plane_slicer::{
-    slice_mesh_with_fixed_plane, CutPlaneOrientation, PlaneSliceResult,
-};
+pub use plane_slicer::{slice_mesh_with_fixed_plane, CutPlaneOrientation, PlaneSliceResult};
 
 #[cfg(test)]
 mod tests {

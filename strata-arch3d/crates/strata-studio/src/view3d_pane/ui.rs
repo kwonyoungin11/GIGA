@@ -1,10 +1,10 @@
+use eframe::egui;
 use strata_core::strata_tokens::tokens::{
     ACTION, CLAY_FOCUS, CLAY_INK, CLAY_WASH, EDGE, GROUND, INK, MUTED, PROFILE_RED, SELECT_BLUE,
     SURFACE,
 };
 use strata_core::{SurfaceRegion, TriMesh};
 use strata_orient::RimGapChart360;
-use eframe::egui;
 
 use super::geometry::*;
 use super::raster::*;
@@ -42,16 +42,10 @@ pub fn render_view3d_pane_egui(
     let terra = egui::Color32::from_rgb(ACTION.rgb[0], ACTION.rgb[1], ACTION.rgb[2]);
     let clay_focus =
         egui::Color32::from_rgb(CLAY_FOCUS.rgb[0], CLAY_FOCUS.rgb[1], CLAY_FOCUS.rgb[2]);
-    let profile_red = egui::Color32::from_rgb(
-        PROFILE_RED.rgb[0],
-        PROFILE_RED.rgb[1],
-        PROFILE_RED.rgb[2],
-    );
-    let select_blue = egui::Color32::from_rgb(
-        SELECT_BLUE.rgb[0],
-        SELECT_BLUE.rgb[1],
-        SELECT_BLUE.rgb[2],
-    );
+    let profile_red =
+        egui::Color32::from_rgb(PROFILE_RED.rgb[0], PROFILE_RED.rgb[1], PROFILE_RED.rgb[2]);
+    let select_blue =
+        egui::Color32::from_rgb(SELECT_BLUE.rgb[0], SELECT_BLUE.rgb[1], SELECT_BLUE.rgb[2]);
 
     // 방향키(←/→/↑/↓)로도 유물 이동 및 수평횡단면(Alt+↑/↓) 미세이동 가능 (<USER_REQUEST>)
     ui.input(|i| {

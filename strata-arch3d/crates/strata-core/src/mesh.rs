@@ -355,7 +355,8 @@ impl TriMesh {
                 if len2 > 1e-12 {
                     let nu = normals[u];
                     let nv = normals[v];
-                    let dn_dot_dp = (nv[0] - nu[0]) * dx + (nv[1] - nu[1]) * dy + (nv[2] - nu[2]) * dz;
+                    let dn_dot_dp =
+                        (nv[0] - nu[0]) * dx + (nv[1] - nu[1]) * dy + (nv[2] - nu[2]) * dz;
                     let edge_k = dn_dot_dp / len2;
                     curv_sum[u] += edge_k;
                     weight_sum[u] += 1.0;

@@ -1,6 +1,6 @@
-use strata_core::TriMesh;
 use eframe::egui;
 use rayon::prelude::*;
+use strata_core::TriMesh;
 
 use super::state::*;
 
@@ -174,9 +174,7 @@ pub fn slice_custom_line_section_2d(
             (w1[0] - mx) * nx + (w1[1] - my) * ny,
             (w2[0] - mx) * nx + (w2[1] - my) * ny,
         ];
-        if (d[0] > 0.0 && d[1] > 0.0 && d[2] > 0.0)
-            || (d[0] < 0.0 && d[1] < 0.0 && d[2] < 0.0)
-        {
+        if (d[0] > 0.0 && d[1] > 0.0 && d[2] > 0.0) || (d[0] < 0.0 && d[1] < 0.0 && d[2] < 0.0) {
             continue;
         }
         let mut hits = Vec::with_capacity(3);
@@ -195,10 +193,7 @@ pub fn slice_custom_line_section_2d(
                 hits.push([u, hz]);
             }
         }
-        if hits.len() >= 2
-            && hits[0][0].abs() <= half_span
-            && hits[1][0].abs() <= half_span
-        {
+        if hits.len() >= 2 && hits[0][0].abs() <= half_span && hits[1][0].abs() <= half_span {
             segments_2d.push([hits[0], hits[1]]);
         }
     }
@@ -303,10 +298,15 @@ pub fn extract_topdown_plan_slice_2d(
 
     let mut sorted_r = outer_r.to_vec();
     sorted_r.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    let recon_outer_r = sorted_r[(sorted_r.len() * 4 / 5).min(sorted_r.len().saturating_sub(1))].max(10.0);
+    let recon_outer_r =
+        sorted_r[(sorted_r.len() * 4 / 5).min(sorted_r.len().saturating_sub(1))].max(10.0);
     let recon_inner_r = (recon_outer_r - wall_t).max(4.0);
 
-    let mut valid_zs: Vec<f64> = bin_rim_z.iter().copied().filter(|z| z.is_finite()).collect();
+    let mut valid_zs: Vec<f64> = bin_rim_z
+        .iter()
+        .copied()
+        .filter(|z| z.is_finite())
+        .collect();
     valid_zs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let ref_rim_z = if valid_zs.is_empty() {
         height_mm
@@ -320,8 +320,7 @@ pub fn extract_topdown_plan_slice_2d(
     for k in 0..N_SECTORS {
         if !bin_has[k]
             || outer_r[k] < recon_outer_r - (recon_outer_r * 0.035).max(1.4)
-            || (bin_rim_z[k].is_finite()
-                && bin_rim_z[k] < ref_rim_z - (height_mm * 0.038).max(1.4))
+            || (bin_rim_z[k].is_finite() && bin_rim_z[k] < ref_rim_z - (height_mm * 0.038).max(1.4))
         {
             is_broken[k] = true;
         }
@@ -461,7 +460,11 @@ pub(crate) fn chain_2d_segments_into_polylines(
             }
             if let Some(j) = best_front_j {
                 used[j] = true;
-                let prev_pt = if best_front_rev { segs[j][1] } else { segs[j][0] };
+                let prev_pt = if best_front_rev {
+                    segs[j][1]
+                } else {
+                    segs[j][0]
+                };
                 chain.insert(0, prev_pt);
                 extended = true;
             }
@@ -490,8 +493,16 @@ pub fn extract_3d_plane_intersection_segments(
     let state = View3DPaneState {
         active_section_angle_deg: psi_deg,
         tilt_deg,
-        cut_y_mm: if is_vertical_y_plane { plane_val_mm } else { 0.0 },
-        top_cut_z_mm: if is_vertical_y_plane { 18.0 } else { plane_val_mm },
+        cut_y_mm: if is_vertical_y_plane {
+            plane_val_mm
+        } else {
+            0.0
+        },
+        top_cut_z_mm: if is_vertical_y_plane {
+            18.0
+        } else {
+            plane_val_mm
+        },
         ..Default::default()
     };
     extract_3d_plane_intersection_segments_full(mesh, &state, is_vertical_y_plane)
@@ -552,9 +563,7 @@ pub fn extract_3d_plane_intersection_segments_full(
             ]
         };
 
-        if (d[0] > 0.0 && d[1] > 0.0 && d[2] > 0.0)
-            || (d[0] < 0.0 && d[1] < 0.0 && d[2] < 0.0)
-        {
+        if (d[0] > 0.0 && d[1] > 0.0 && d[2] > 0.0) || (d[0] < 0.0 && d[1] < 0.0 && d[2] < 0.0) {
             continue;
         }
 

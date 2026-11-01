@@ -1,6 +1,6 @@
 use crate::fracture_seg::SherdSegmentation;
-use strata_core::{SurfaceRegion, TriMesh};
 use serde::{Deserialize, Serialize};
+use strata_core::{SurfaceRegion, TriMesh};
 
 /// `BAISER (2024)` 회전축 정렬 기반 파단선 디스크립터 (`Axis-based Edgeline Descriptor`).
 /// 동일 유구 출토 편조각 간의 가상 접합(Virtual Refitting) 적합도를 계산한다.

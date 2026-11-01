@@ -30,7 +30,10 @@ pub fn render_plate_to_illustrator_svg_with_options(
     let h_px = (plate.canvas_height_mm * PX_PER_MM_1TO1).round().max(50.0);
 
     let mut svg = String::with_capacity(8192);
-    let _ = writeln!(svg, r#"<?xml version="1.0" encoding="UTF-8" standalone="no"?>"#);
+    let _ = writeln!(
+        svg,
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="no"?>"#
+    );
     let _ = writeln!(
         svg,
         r#"<svg xmlns="http://www.w3.org/2000/svg" width="{w_px:.0}px" height="{h_px:.0}px" viewBox="0 0 {w_px:.0} {h_px:.0}" data-scale-px-per-mm="{PX_PER_MM_1TO1:.1}" data-plate-mode="{:?}">"#,
@@ -40,12 +43,18 @@ pub fn render_plate_to_illustrator_svg_with_options(
         let _ = writeln!(
             svg,
             "  <metadata id=\"STRATA_PROVENANCE\">{}</metadata>",
-            provenance.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+            provenance
+                .replace('&', "&amp;")
+                .replace('<', "&lt;")
+                .replace('>', "&gt;")
         );
         let _ = writeln!(
             svg,
             r#"  <g id="출처_비인쇄" display="none"><text x="0" y="0" font-size="1">{}</text></g>"#,
-            provenance.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+            provenance
+                .replace('&', "&amp;")
+                .replace('<', "&lt;")
+                .replace('>', "&gt;")
         );
     }
     let _ = writeln!(

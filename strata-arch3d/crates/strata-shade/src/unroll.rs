@@ -1,5 +1,5 @@
-use strata_core::TriMesh;
 use serde::{Deserialize, Serialize};
+use strata_core::TriMesh;
 
 /// 3D 곡면 문양(`타날문·인화문·연판문·각목문`) 무왜곡 `0° ~ 360°` 전개(Rollout / Unroll) 투영 방식.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -69,7 +69,10 @@ pub fn unroll_mesh_surface(mesh: &TriMesh, mode: UnrollMode) -> UnrollResult {
                 let z_rel = p[2] - center[2];
                 let rho = (r * r + z_rel * z_rel).sqrt().max(1.0);
                 let phi = (z_rel / rho).clamp(-1.0, 1.0).asin();
-                (mean_radius_mm * phi.cos() * theta, mean_radius_mm * (phi + std::f64::consts::FRAC_PI_2))
+                (
+                    mean_radius_mm * phi.cos() * theta,
+                    mean_radius_mm * (phi + std::f64::consts::FRAC_PI_2),
+                )
             }
         };
 

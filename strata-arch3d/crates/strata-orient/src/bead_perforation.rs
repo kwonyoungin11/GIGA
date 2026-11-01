@@ -1,5 +1,5 @@
-use strata_core::{BeadDrillType, BeadFabricationKind, BeadSubtype, TriMesh};
 use serde::{Deserialize, Serialize};
+use strata_core::{BeadDrillType, BeadFabricationKind, BeadSubtype, TriMesh};
 
 /// 구슬·옥류(`BeadJade`) 관통공(천공) 기하 분석 및 한국 고고학 4대 천공 단면 유형 판별 결과 (`V5`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

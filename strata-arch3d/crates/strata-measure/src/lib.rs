@@ -9,13 +9,7 @@ mod tests {
 
     /// 합성 중공(中空) 항아리 메쉬: 높이별 반경 프로파일을 회전시켜 외벽·내벽 두 겹을 만든다.
     /// 반환값은 `(메쉬, 외벽 최대 반경)` — 최대복경은 중앙 높이에서 발생한다.
-    fn hollow_jar_mesh(
-        height: f64,
-        r_top: f64,
-        r_belly: f64,
-        r_base: f64,
-        wall: f64,
-    ) -> TriMesh {
+    fn hollow_jar_mesh(height: f64, r_top: f64, r_belly: f64, r_base: f64, wall: f64) -> TriMesh {
         const RING: usize = 48;
         let t_levels = [0.0_f64, 0.25, 0.5, 0.75, 1.0];
         let radii = [
@@ -46,14 +40,27 @@ mod tests {
         let mut triangles = Vec::new();
         for level in 0..t_levels.len() - 1 {
             for j in 0..RING {
-                triangles.push([outer(level, j), outer(level, j + 1), outer(level + 1, j + 1)]);
-                triangles.push([outer(level, j), outer(level + 1, j + 1), outer(level + 1, j)]);
+                triangles.push([
+                    outer(level, j),
+                    outer(level, j + 1),
+                    outer(level + 1, j + 1),
+                ]);
+                triangles.push([
+                    outer(level, j),
+                    outer(level + 1, j + 1),
+                    outer(level + 1, j),
+                ]);
                 triangles.push([inner(level, j + 1), inner(level, j), inner(level + 1, j)]);
-                triangles.push([inner(level, j + 1), inner(level + 1, j), inner(level + 1, j + 1)]);
+                triangles.push([
+                    inner(level, j + 1),
+                    inner(level + 1, j),
+                    inner(level + 1, j + 1),
+                ]);
             }
         }
 
-        TriMesh::from_positions_and_triangles("합성_중공_항아리", positions, triangles).expect("valid")
+        TriMesh::from_positions_and_triangles("합성_중공_항아리", positions, triangles)
+            .expect("valid")
     }
 
     /// 프리셋(`main.rs::make_preset_slot`)과 동일한 **단일 껍질** 회전체: 내벽이 없다.

@@ -1,5 +1,5 @@
-use strata_core::{StrataError, SherdPlateStrategy};
 use serde::{Deserialize, Serialize};
+use strata_core::{SherdPlateStrategy, StrataError};
 
 /// 소각도 편조각($\Delta\theta < 30^\circ$) 바이어스 제거 원호 피팅 결과 (`Pratt/Taubin + Huber IRLS`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -9,9 +9,8 @@ pub use error::{StrataError, ThreePartErrorInfo};
 pub use mesh::{CompressedCornerTable, GpuVertex16, MeshTextureRgba, OctahedralNormal16, TriMesh};
 pub use strata_tokens::{metrics, tokens, ColorToken};
 pub use types::{
-    Aabb3, ArtifactCategory, BeadDrillType, BeadFabricationKind, BeadSubtype,
-    HandleAttachmentKind, Mat4, MetalSectionLayer, ScalePreset, SherdPlateStrategy, SherdSubtype,
-    SurfaceRegion,
+    Aabb3, ArtifactCategory, BeadDrillType, BeadFabricationKind, BeadSubtype, HandleAttachmentKind,
+    Mat4, MetalSectionLayer, ScalePreset, SherdPlateStrategy, SherdSubtype, SurfaceRegion,
 };
 
 #[cfg(test)]

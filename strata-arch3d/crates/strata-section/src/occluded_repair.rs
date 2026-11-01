@@ -39,8 +39,8 @@ pub fn infer_occluded_dashed_spans(
                 continue;
             }
             for &candidate in &[poly_b[0], poly_b[poly_b.len() - 1]] {
-                let d = ((candidate[0] - end_a[0]).powi(2) + (candidate[1] - end_a[1]).powi(2))
-                    .sqrt();
+                let d =
+                    ((candidate[0] - end_a[0]).powi(2) + (candidate[1] - end_a[1]).powi(2)).sqrt();
                 if d >= min_gap_mm
                     && d <= max_gap_mm
                     && best_match.is_none_or(|(_, best_d)| d < best_d)

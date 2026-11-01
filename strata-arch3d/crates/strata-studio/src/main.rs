@@ -9,35 +9,6 @@ pub mod sheet_pane;
 pub mod splash;
 pub mod view3d_pane;
 
-use strata_core::strata_tokens::{
-    metrics::{
-        CTX_BAR_HEIGHT, RIBBON_HEIGHT, RIBBON_TILE_SIZE, STATUS_BAR_HEIGHT, TAB_BAR_HEIGHT,
-    },
-    tokens::{
-        ACTION, CLAY_INK, CLAY_WASH, DESK, EDGE, GROUND, INK, LINE, MUTED, SURFACE, WASH,
-    },
-};
-use strata_core::{
-    ArtifactCategory, BeadDrillType, BeadSubtype, HandleAttachmentKind, ScalePreset, SherdSubtype,
-    StacklessLbvh, TriMesh,
-};
-use strata_export::{
-    compose_archaeological_plate, compose_archaeological_plate_with_mode, compute_tiled_print_plan,
-    export_ret_folder_package, append_artifact_label_block, append_section_hatching,
-    render_plate_to_illustrator_svg_with_options, render_plate_to_pdf_bytes,
-    ComposedPlate2D, PaperSheetSize, PlateComposeInput, PlateLayoutMode,
-};
-use strata_io::{load_any_mesh, Ap2Project, DarchProject};
-use strata_measure::{compute_artifact_measurements, ArtifactMeasurementReport};
-use strata_orient::{
-    compute_rim_gap_chart_360, evaluate_section_angles_parallel, segment_sherd_three_regions,
-    RimGapChart360, SherdSegmentation,
-};
-use strata_section::{
-    infer_occluded_dashed_spans, slice_mesh_with_fixed_plane, CutPlaneOrientation,
-    OccludedDashedSpan, PlaneSliceResult,
-};
-use strata_shade::RubbingRenderParams;
 use dialogs::{show_active_dialog, ActiveStrataDialog};
 use eframe::egui;
 use gpu_backend::{
@@ -54,6 +25,31 @@ use layout_r1::{
 use sheet_pane::{render_sheet_pane_egui, SheetPaneState};
 use splash::SplashState;
 use std::path::{Path, PathBuf};
+use strata_core::strata_tokens::{
+    metrics::{CTX_BAR_HEIGHT, RIBBON_HEIGHT, RIBBON_TILE_SIZE, STATUS_BAR_HEIGHT, TAB_BAR_HEIGHT},
+    tokens::{ACTION, CLAY_INK, CLAY_WASH, DESK, EDGE, GROUND, INK, LINE, MUTED, SURFACE, WASH},
+};
+use strata_core::{
+    ArtifactCategory, BeadDrillType, BeadSubtype, HandleAttachmentKind, ScalePreset, SherdSubtype,
+    StacklessLbvh, TriMesh,
+};
+use strata_export::{
+    append_artifact_label_block, append_section_hatching, compose_archaeological_plate,
+    compose_archaeological_plate_with_mode, compute_tiled_print_plan, export_ret_folder_package,
+    render_plate_to_illustrator_svg_with_options, render_plate_to_pdf_bytes, ComposedPlate2D,
+    PaperSheetSize, PlateComposeInput, PlateLayoutMode,
+};
+use strata_io::{load_any_mesh, Ap2Project, DarchProject};
+use strata_measure::{compute_artifact_measurements, ArtifactMeasurementReport};
+use strata_orient::{
+    compute_rim_gap_chart_360, evaluate_section_angles_parallel, segment_sherd_three_regions,
+    RimGapChart360, SherdSegmentation,
+};
+use strata_section::{
+    infer_occluded_dashed_spans, slice_mesh_with_fixed_plane, CutPlaneOrientation,
+    OccludedDashedSpan, PlaneSliceResult,
+};
+use strata_shade::RubbingRenderParams;
 use view3d_pane::{render_view3d_pane_egui, View3DPaneState};
 
 #[derive(Debug)]
@@ -168,11 +164,7 @@ impl ArtifactSlotEntry {
         }
     }
 
-    fn rebuild_plate(
-        &mut self,
-        flip_exterior_right: bool,
-        view3d_state: &View3DPaneState,
-    ) {
+    fn rebuild_plate(&mut self, flip_exterior_right: bool, view3d_state: &View3DPaneState) {
         let mut v_sec =
             crate::view3d_pane::slice_transformed_mesh_world_locked(&self.mesh, view3d_state, true);
         if v_sec.polylines_2d.is_empty() {
@@ -187,8 +179,11 @@ impl ArtifactSlotEntry {
         }
         self.vertical_section = v_sec;
 
-        let mut h_sec =
-            crate::view3d_pane::slice_transformed_mesh_world_locked(&self.mesh, view3d_state, false);
+        let mut h_sec = crate::view3d_pane::slice_transformed_mesh_world_locked(
+            &self.mesh,
+            view3d_state,
+            false,
+        );
         if h_sec.polylines_2d.is_empty() {
             h_sec = slice_mesh_with_fixed_plane(
                 &self.mesh,
@@ -397,16 +392,15 @@ impl StrataStudioApp {
             splash.elapsed_sec = splash.duration_sec;
         }
 
-        let selected_slot_idx = initial_slot
-            .unwrap_or(0)
-            .min(slots.len().saturating_sub(1));
+        let selected_slot_idx = initial_slot.unwrap_or(0).min(slots.len().saturating_sub(1));
         let initial_chs = if selected_slot_idx == 1 {
             ChsReportTemplate::VesselRimBaseReconstruct
         } else {
             ChsReportTemplate::VesselCompleteStandard
         };
 
-        let detected_gpus: Vec<HardwareGpuAdapterInfo> = primary_hardware_gpu().clone().into_iter().collect();
+        let detected_gpus: Vec<HardwareGpuAdapterInfo> =
+            primary_hardware_gpu().clone().into_iter().collect();
         let gpu_label = detected_gpus
             .first()
             .map(HardwareGpuAdapterInfo::short_badge_text)
@@ -585,10 +579,7 @@ impl StrataStudioApp {
                 }
             }
             slot.measurements = compute_artifact_measurements(&slot.mesh, slot.category);
-            slot.rebuild_plate(
-                self.flip_exterior_right,
-                &self.view3d_state,
-            );
+            slot.rebuild_plate(self.flip_exterior_right, &self.view3d_state);
             self.status_message = format!(
                 "문화재청 보고서 도면양식 적용: [{}] — {}",
                 tpl.label_kr(),
@@ -751,8 +742,7 @@ impl StrataStudioApp {
                                 );
                                 self.slots.push(slot);
                                 self.selected_slot_idx = self.slots.len() - 1;
-                                self.status_message =
-                                    format!("파일 로드 완료: {}", path.display());
+                                self.status_message = format!("파일 로드 완료: {}", path.display());
                             }
                             Err(err) => {
                                 self.active_dialog =
@@ -774,10 +764,7 @@ impl StrataStudioApp {
                                 slot.mesh = slot.mesh.transformed(&ap2.transform_matrix);
                                 slot.mesh.ap2_cut_offset_mm = Some(ap2.rc.plane_positions[0]);
                                 self.view3d_state.top_cut_z_mm = ap2.rc.plane_positions[0];
-                                slot.rebuild_plate(
-                                    self.flip_exterior_right,
-                                    &self.view3d_state,
-                                );
+                                slot.rebuild_plate(self.flip_exterior_right, &self.view3d_state);
                                 self.status_message = format!(
                                     ".ap2 정위치 행렬 및 절단면({:.1}mm) 연동 완료: {}",
                                     ap2.rc.plane_positions[0],
@@ -800,10 +787,7 @@ impl StrataStudioApp {
                 if let Some(slot) = self.slots.get_mut(self.selected_slot_idx) {
                     let best = slot.recommended_best_angle_deg;
                     self.view3d_state.active_section_angle_deg = best;
-                    slot.rebuild_plate(
-                        self.flip_exterior_right,
-                        &self.view3d_state,
-                    );
+                    slot.rebuild_plate(self.flip_exterior_right, &self.view3d_state);
                 }
             }
             "BEAD_BORE" => {
@@ -823,7 +807,11 @@ impl StrataStudioApp {
                 self.view3d_state.cutaway_open = !self.view3d_state.cutaway_open;
                 self.status_message = format!(
                     "전방 좌측 1/4 절개 단면: {}",
-                    if self.view3d_state.cutaway_open { "ON" } else { "OFF" }
+                    if self.view3d_state.cutaway_open {
+                        "ON"
+                    } else {
+                        "OFF"
+                    }
                 );
             }
             "SLICE_H" => {
@@ -833,10 +821,7 @@ impl StrataStudioApp {
                         .ap2_cut_offset_mm
                         .unwrap_or(self.view3d_state.top_cut_z_mm);
                     self.view3d_state.top_cut_z_mm = z;
-                    slot.rebuild_plate(
-                        self.flip_exterior_right,
-                        &self.view3d_state,
-                    );
+                    slot.rebuild_plate(self.flip_exterior_right, &self.view3d_state);
                     self.status_message = format!("수평 횡단면(Top Cut Z = {z:.1}mm) 갱신 완료");
                 }
             }
@@ -868,10 +853,7 @@ impl StrataStudioApp {
             "FLIP_R" => {
                 self.flip_exterior_right = !self.flip_exterior_right;
                 if let Some(slot) = self.slots.get_mut(self.selected_slot_idx) {
-                    slot.rebuild_plate(
-                        self.flip_exterior_right,
-                        &self.view3d_state,
-                    );
+                    slot.rebuild_plate(self.flip_exterior_right, &self.view3d_state);
                 }
             }
             "FULL_TAB" => {
@@ -903,8 +885,9 @@ impl StrataStudioApp {
                 if let Some(slot) = self.slots.get(self.selected_slot_idx) {
                     let out_path = std::env::temp_dir().join("strata_cutline_rc0.svg");
                     // 탁본 출처(광원·파라미터·전개모드)를 SVG 메타데이터에 각인해 재현 근거를 남긴다.
-                    let provenance =
-                        crate::sheet_pane::rubbing_provenance_line(&self.sheet_state.rubbing_params);
+                    let provenance = crate::sheet_pane::rubbing_provenance_line(
+                        &self.sheet_state.rubbing_params,
+                    );
                     let svg = render_plate_to_illustrator_svg_with_options(
                         &slot.composed_plate,
                         &provenance,
@@ -978,13 +961,17 @@ impl eframe::App for StrataStudioApp {
         if self.capture_window_path.is_none() && self.capture_frames_rendered < 4 {
             self.capture_frames_rendered += 1;
             ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
-            ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(egui::WindowLevel::Normal));
+            ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(
+                egui::WindowLevel::Normal,
+            ));
             ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
             ctx.request_repaint();
             if self.capture_frames_rendered >= 2 && self.deferred_startup_load {
                 self.deferred_startup_load = false;
                 Self::load_real_or_preset_slots(&mut self.slots);
-                self.selected_slot_idx = self.selected_slot_idx.min(self.slots.len().saturating_sub(1));
+                self.selected_slot_idx = self
+                    .selected_slot_idx
+                    .min(self.slots.len().saturating_sub(1));
                 ctx.request_repaint();
             }
         }
@@ -1001,10 +988,7 @@ impl eframe::App for StrataStudioApp {
         if ctx.input(|i| i.key_pressed(egui::Key::R)) {
             self.flip_exterior_right = !self.flip_exterior_right;
             if let Some(slot) = self.slots.get_mut(self.selected_slot_idx) {
-                slot.rebuild_plate(
-                    self.flip_exterior_right,
-                    &self.view3d_state,
-                );
+                slot.rebuild_plate(self.flip_exterior_right, &self.view3d_state);
             }
         }
 
@@ -1014,7 +998,8 @@ impl eframe::App for StrataStudioApp {
         let hanji = egui::Color32::from_rgb(GROUND.rgb[0], GROUND.rgb[1], GROUND.rgb[2]);
         let surface = egui::Color32::from_rgb(SURFACE.rgb[0], SURFACE.rgb[1], SURFACE.rgb[2]);
         let _desk = egui::Color32::from_rgb(DESK.rgb[0], DESK.rgb[1], DESK.rgb[2]);
-        let clay_wash = egui::Color32::from_rgb(CLAY_WASH.rgb[0], CLAY_WASH.rgb[1], CLAY_WASH.rgb[2]);
+        let clay_wash =
+            egui::Color32::from_rgb(CLAY_WASH.rgb[0], CLAY_WASH.rgb[1], CLAY_WASH.rgb[2]);
         let _clay_ink = egui::Color32::from_rgb(CLAY_INK.rgb[0], CLAY_INK.rgb[1], CLAY_INK.rgb[2]);
         let line_col = egui::Color32::from_rgb(LINE.rgb[0], LINE.rgb[1], LINE.rgb[2]);
         let edge_col = egui::Color32::from_rgb(EDGE.rgb[0], EDGE.rgb[1], EDGE.rgb[2]);
@@ -1022,7 +1007,12 @@ impl eframe::App for StrataStudioApp {
         let muted = egui::Color32::from_rgb(MUTED.rgb[0], MUTED.rgb[1], MUTED.rgb[2]);
         let terra = egui::Color32::from_rgb(ACTION.rgb[0], ACTION.rgb[1], ACTION.rgb[2]);
 
-        let _ = (RIBBON_TILE_SIZE, RIBBON_HEIGHT, CTX_BAR_HEIGHT, STATUS_BAR_HEIGHT);
+        let _ = (
+            RIBBON_TILE_SIZE,
+            RIBBON_HEIGHT,
+            CTX_BAR_HEIGHT,
+            STATUS_BAR_HEIGHT,
+        );
         let _ = (unified_studio_ribbon_tiles, draw_ribbon_tile_vector_icon);
 
         // Image 3 & Image 4 피드백 반영:
@@ -1265,7 +1255,10 @@ impl eframe::App for StrataStudioApp {
                             sp.line_segment(
                                 [
                                     egui::pos2(splitter_rect.center().x, splitter_rect.top() + 4.0),
-                                    egui::pos2(splitter_rect.center().x, splitter_rect.bottom() - 4.0),
+                                    egui::pos2(
+                                        splitter_rect.center().x,
+                                        splitter_rect.bottom() - 4.0,
+                                    ),
                                 ],
                                 egui::Stroke::new(
                                     if sp_active { 2.0_f32 } else { 1.2_f32 },
@@ -1334,19 +1327,23 @@ impl eframe::App for StrataStudioApp {
                     // Image 2: 수평횡단면 그리기 휠(top_cut_z_mm) 및 5대 휠/뒤집기 조작 시 드래그 중에도 즉시 2D 실측 단면·수평횡단면 도판을 실시간 갱신!
                     let top_z_changed =
                         (self.view3d_state.top_cut_z_mm - self.last_rebuilt_top_z_mm).abs() > 1e-4;
-                    let pose_changed =
-                        (self.view3d_state.active_section_angle_deg - self.last_rebuilt_angle_deg).abs() > 1e-4
-                            || (self.view3d_state.cut_y_mm - self.last_rebuilt_cut_y_mm).abs() > 1e-4
-                            || (self.view3d_state.tilt_deg - self.last_rebuilt_tilt_deg).abs() > 1e-4
-                            || (self.view3d_state.roll_deg - self.last_rebuilt_roll_deg).abs() > 1e-4
-                            || (self.view3d_state.inner_level_deg - self.last_rebuilt_inner_level_deg).abs() > 1e-4
-                            || (self.view3d_state.artifact_offset_x_mm - self.last_rebuilt_offset_x_mm).abs() > 1e-4
-                            || self.view3d_state.custom_section_line_mm != self.last_rebuilt_custom_line;
+                    let pose_changed = (self.view3d_state.active_section_angle_deg
+                        - self.last_rebuilt_angle_deg)
+                        .abs()
+                        > 1e-4
+                        || (self.view3d_state.cut_y_mm - self.last_rebuilt_cut_y_mm).abs() > 1e-4
+                        || (self.view3d_state.tilt_deg - self.last_rebuilt_tilt_deg).abs() > 1e-4
+                        || (self.view3d_state.roll_deg - self.last_rebuilt_roll_deg).abs() > 1e-4
+                        || (self.view3d_state.inner_level_deg - self.last_rebuilt_inner_level_deg)
+                            .abs()
+                            > 1e-4
+                        || (self.view3d_state.artifact_offset_x_mm - self.last_rebuilt_offset_x_mm)
+                            .abs()
+                            > 1e-4
+                        || self.view3d_state.custom_section_line_mm
+                            != self.last_rebuilt_custom_line;
                     if top_z_changed || (!self.view3d_state.is_interacting && pose_changed) {
-                        slot.rebuild_plate(
-                            self.flip_exterior_right,
-                            &self.view3d_state,
-                        );
+                        slot.rebuild_plate(self.flip_exterior_right, &self.view3d_state);
                         self.last_rebuilt_angle_deg = self.view3d_state.active_section_angle_deg;
                         self.last_rebuilt_cut_y_mm = self.view3d_state.cut_y_mm;
                         self.last_rebuilt_top_z_mm = self.view3d_state.top_cut_z_mm;
@@ -1501,7 +1498,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_title("STRATA · 동국유물실측 (Rust Archaeological 3D Studio v2.0 · NVIDIA/AMD GPU 가속)")
+            .with_title(
+                "STRATA · 동국유물실측 (Rust Archaeological 3D Studio v2.0 · NVIDIA/AMD GPU 가속)",
+            )
             .with_inner_size([1440.0, 900.0])
             .with_min_inner_size([1180.0, 760.0])
             .with_visible(true)

@@ -1,6 +1,6 @@
-use strata_core::TriMesh;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
+use strata_core::TriMesh;
 
 /// C++ `ArtifactDoc.cpp:2721` 결함(`112°` 하드코딩 절단)을 해결한
 /// **`0° ~ 360°` 전 구간(2° 간격 180빈) 구연·바닥 접지 오차 차트** (`V3` 검증 대상).
@@ -27,19 +27,17 @@ pub fn compute_rim_gap_chart_360(mesh: &TriMesh, measure_top_rim: bool) -> RimGa
     let z_max = mesh.bbox.max[2];
 
     let mut sector_extreme_z = vec![None::<f64>; NUM_BINS];
-    let mut update_bin = |bin: usize, z: f64| {
-        match &mut sector_extreme_z[bin] {
-            Some(cur) => {
-                if measure_top_rim {
-                    if z > *cur {
-                        *cur = z;
-                    }
-                } else if z < *cur {
+    let mut update_bin = |bin: usize, z: f64| match &mut sector_extreme_z[bin] {
+        Some(cur) => {
+            if measure_top_rim {
+                if z > *cur {
                     *cur = z;
                 }
+            } else if z < *cur {
+                *cur = z;
             }
-            None => sector_extreme_z[bin] = Some(z),
         }
+        None => sector_extreme_z[bin] = Some(z),
     };
 
     for tri in &mesh.triangles {
@@ -115,10 +113,7 @@ pub struct SectionAngleScore {
 
 /// `rayon` 병렬 스트리밍으로 후보 각도(`0°..360°`)들의 실제 단면 슬라이스 품질을 평가하고,
 /// 결함이 가장 적은 순서로 정렬된 추천 단면 각도 목록을 반환한다.
-pub fn evaluate_section_angles_parallel(
-    mesh: &TriMesh,
-    step_deg: usize,
-) -> Vec<SectionAngleScore> {
+pub fn evaluate_section_angles_parallel(mesh: &TriMesh, step_deg: usize) -> Vec<SectionAngleScore> {
     let step = step_deg.clamp(1, 90);
     let candidate_angles: Vec<f64> = (0..360).step_by(step).map(|a| a as f64).collect();
     let center = mesh.bbox.center();

@@ -1,6 +1,6 @@
 use crate::fracture_seg::SherdSegmentation;
-use strata_core::{HandleAttachmentKind, SurfaceRegion, TriMesh};
 use serde::{Deserialize, Serialize};
+use strata_core::{HandleAttachmentKind, SurfaceRegion, TriMesh};
 
 /// Huber IRLS 법선 공면성 기반 회전축 및 물레속선(`Rills`) 경사각 복원 결과.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -202,11 +202,7 @@ pub struct SpecialPartDiagnostics {
 
 pub fn analyze_special_vessel_part(mesh: &TriMesh) -> SpecialPartDiagnostics {
     // 내부로 돌출된 촉(Tenon) 곡률 급변부가 있으면 삽입식(InsertedTenonJoint), 없으면 부착식(SurfaceButtJoint)
-    let min_k = mesh
-        .mean_curvatures
-        .iter()
-        .copied()
-        .fold(0.0f64, f64::min);
+    let min_k = mesh.mean_curvatures.iter().copied().fold(0.0f64, f64::min);
     let handle_attachment = if min_k < -0.35 {
         HandleAttachmentKind::InsertedTenonJoint
     } else {

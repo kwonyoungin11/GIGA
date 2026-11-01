@@ -26,10 +26,7 @@ impl HempThreadCountResult {
 
 /// `10 mm × 10 mm` (`1 × 1 cm`) 격자 영역의 높이/곡률 맵 `grid` (`grid_size × grid_size`)에 대해
 /// X/Y 방향 1D 이산 푸리에 스펙트럼(DFT) 주파수 피크를 검출하여 `1 cm`당 마포 경·위사 올수를 자동 산출한다.
-pub fn measure_hemp_cloth_threads_per_cm(
-    grid: &[f64],
-    grid_size: usize,
-) -> HempThreadCountResult {
+pub fn measure_hemp_cloth_threads_per_cm(grid: &[f64], grid_size: usize) -> HempThreadCountResult {
     if grid_size < 16 || grid.len() < grid_size * grid_size {
         return HempThreadCountResult {
             warp_threads_per_cm: 8,

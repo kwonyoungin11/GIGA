@@ -213,10 +213,7 @@ impl TopologicalDdgMesh {
     }
 
     /// Nelson Max (1999) 가중 정점 법선 계산
-    pub fn compute_nelson_max_normals(
-        positions: &[[f64; 3]],
-        faces: &[[u32; 3]],
-    ) -> Vec<[f64; 3]> {
+    pub fn compute_nelson_max_normals(positions: &[[f64; 3]], faces: &[[u32; 3]]) -> Vec<[f64; 3]> {
         let mut accum = vec![[0.0_f64; 3]; positions.len()];
         for &[i0, i1, i2] in faces {
             let (u0, u1, u2) = (i0 as usize, i1 as usize, i2 as usize);
@@ -376,12 +373,7 @@ impl TopologicalDdgMesh {
 }
 
 /// 분리형(Separable) 1D×1D 가우시안 블러 (`imageproc::filter::gaussian_blur_f32` 동치 구현)
-pub fn gaussian_blur_separable_f32(
-    buf: &[f32],
-    width: u32,
-    height: u32,
-    sigma: f32,
-) -> Vec<f32> {
+pub fn gaussian_blur_separable_f32(buf: &[f32], width: u32, height: u32, sigma: f32) -> Vec<f32> {
     let w = width as usize;
     let h = height as usize;
     if w == 0 || h == 0 || sigma <= 0.05 {
@@ -402,36 +394,32 @@ pub fn gaussian_blur_separable_f32(
 
     // 수평 패스
     let mut tmp = vec![0.0_f32; w * h];
-    tmp.par_chunks_mut(w)
-        .enumerate()
-        .for_each(|(y, out_row)| {
-            let in_row = &buf[y * w..(y + 1) * w];
-            for (x, out_val) in out_row.iter_mut().enumerate().take(w) {
-                let mut acc = 0.0_f32;
-                for (ki, &kw) in kernel.iter().enumerate() {
-                    let dx = (ki as isize) - radius;
-                    let sx = (x as isize + dx).clamp(0, (w - 1) as isize) as usize;
-                    acc += in_row[sx] * kw;
-                }
-                *out_val = acc;
+    tmp.par_chunks_mut(w).enumerate().for_each(|(y, out_row)| {
+        let in_row = &buf[y * w..(y + 1) * w];
+        for (x, out_val) in out_row.iter_mut().enumerate().take(w) {
+            let mut acc = 0.0_f32;
+            for (ki, &kw) in kernel.iter().enumerate() {
+                let dx = (ki as isize) - radius;
+                let sx = (x as isize + dx).clamp(0, (w - 1) as isize) as usize;
+                acc += in_row[sx] * kw;
             }
-        });
+            *out_val = acc;
+        }
+    });
 
     // 수직 패스
     let mut out = vec![0.0_f32; w * h];
-    out.par_chunks_mut(w)
-        .enumerate()
-        .for_each(|(y, out_row)| {
-            for (x, out_val) in out_row.iter_mut().enumerate().take(w) {
-                let mut acc = 0.0_f32;
-                for (ki, &kw) in kernel.iter().enumerate() {
-                    let dy = (ki as isize) - radius;
-                    let sy = (y as isize + dy).clamp(0, (h - 1) as isize) as usize;
-                    acc += tmp[sy * w + x] * kw;
-                }
-                *out_val = acc;
+    out.par_chunks_mut(w).enumerate().for_each(|(y, out_row)| {
+        for (x, out_val) in out_row.iter_mut().enumerate().take(w) {
+            let mut acc = 0.0_f32;
+            for (ki, &kw) in kernel.iter().enumerate() {
+                let dy = (ki as isize) - radius;
+                let sy = (y as isize + dy).clamp(0, (h - 1) as isize) as usize;
+                acc += tmp[sy * w + x] * kw;
             }
-        });
+            *out_val = acc;
+        }
+    });
 
     out
 }
@@ -530,12 +518,7 @@ pub fn msii_radii_for_extent(extent_mm: f32) -> ([f32; 4], f32) {
         1.0
     };
     (
-        [
-            0.8 * scale,
-            1.6 * scale,
-            3.2 * scale,
-            6.0 * scale,
-        ],
+        [0.8 * scale, 1.6 * scale, 3.2 * scale, 6.0 * scale],
         4.0 * scale,
     )
 }
@@ -588,7 +571,10 @@ where
     let px_per_mm = 0.5 * (scale_x + scale_y);
 
     let to_screen = |x: f32, y: f32| -> (f32, f32) {
-        (pad + (x - min_x) * scale_x, (h as f32) - pad - (y - min_y) * scale_y)
+        (
+            pad + (x - min_x) * scale_x,
+            (h as f32) - pad - (y - min_y) * scale_y,
+        )
     };
 
     // 2. 정사투영 다중 채널 G-Buffer 래스터화 (Z, Normal, Cotangent H, Frangi Vesselness)
@@ -743,8 +729,10 @@ where
                     let mut signed_h_acc = 0.0_f32;
                     let mut valid_cnt = 0.0_f32;
                     for &(dx_u, dy_u) in &dirs_12 {
-                        let sx = (px + (dx_u * r_px).round() as isize).clamp(0, w_isize - 1) as usize;
-                        let sy = (py - (dy_u * r_px).round() as isize).clamp(0, h_isize - 1) as usize;
+                        let sx =
+                            (px + (dx_u * r_px).round() as isize).clamp(0, w_isize - 1) as usize;
+                        let sy =
+                            (py - (dy_u * r_px).round() as isize).clamp(0, h_isize - 1) as usize;
                         let s_idx = sy * w_usize + sx;
                         if mask_buf[s_idx] != 0 {
                             let dx_mm = dx_u * r_mm;
@@ -768,8 +756,10 @@ where
                 for &(dx_u, dy_u) in &dirs_12 {
                     for step_r in [1.0_f32, 2.2_f32, ao_max_r_mm] {
                         let r_px = (step_r * px_per_mm).clamp(1.0, 24.0);
-                        let sx = (px + (dx_u * r_px).round() as isize).clamp(0, w_isize - 1) as usize;
-                        let sy = (py - (dy_u * r_px).round() as isize).clamp(0, h_isize - 1) as usize;
+                        let sx =
+                            (px + (dx_u * r_px).round() as isize).clamp(0, w_isize - 1) as usize;
+                        let sy =
+                            (py - (dy_u * r_px).round() as isize).clamp(0, h_isize - 1) as usize;
                         let s_idx = sy * w_usize + sx;
                         total_rays += 1.0;
                         if mask_buf[s_idx] == 0 {
@@ -790,7 +780,11 @@ where
                 // (d) raster_rubbing.rs lines 132-142: 곡률 + MSII + Radiance Scaling + Frangi 융합 및 타솔 접촉 확률
                 let curv = curv_buf[idx];
                 let frangi = frangi_buf[idx] * curv.signum();
-                let polarity = if cfg.invert_polarity { -1.0_f32 } else { 1.0_f32 };
+                let polarity = if cfg.invert_polarity {
+                    -1.0_f32
+                } else {
+                    1.0_f32
+                };
                 let combined = polarity
                     * ((1.0 - cfg.msii_weight) * curv
                         + cfg.msii_weight * m_val
@@ -862,9 +856,8 @@ where
                     .clamp(0.0, 1.0);
 
                 // Interleaved Gradient Noise (Blue-noise profile spatial hash, raster_rubbing.rs line 210)
-                let ign = ((52.982_918_f32
-                    * ((0.06711056 * x_f + 0.00583715 * y_f).fract()))
-                .fract()
+                let ign = ((52.982_918_f32 * ((0.06711056 * x_f + 0.00583715 * y_f).fract()))
+                    .fract()
                     + 1.0)
                     .fract();
 
@@ -911,7 +904,11 @@ mod tests {
 
         // 400mm 기와: 반경이 너무 작으면 문양이 사라진다.
         let (large, large_ao) = msii_radii_for_extent(400.0);
-        assert!(large[3] > 12.0, "400mm 유물에 MSII 반경 {:.2}mm 는 과소", large[3]);
+        assert!(
+            large[3] > 12.0,
+            "400mm 유물에 MSII 반경 {:.2}mm 는 과소",
+            large[3]
+        );
         assert!(large_ao > 8.0);
 
         // 크기에 대해 단조 증가해야 한다.
@@ -961,7 +958,10 @@ mod tests {
         assert!(!ddg.mean_curvature.is_empty());
         let pos_h = ddg.mean_curvature.iter().filter(|&&h| h > 0.02).count();
         let neg_h = ddg.mean_curvature.iter().filter(|&&h| h < -0.02).count();
-        assert!(pos_h > 50 && neg_h > 50, "must detect both convex ridges (H>0) and concave grooves (H<0)");
+        assert!(
+            pos_h > 50 && neg_h > 50,
+            "must detect both convex ridges (H>0) and concave grooves (H<0)"
+        );
 
         let cfg = RubbingPipelineConfig {
             width: 320,
@@ -984,7 +984,13 @@ mod tests {
                 }
             }
         }
-        assert!(dark_ink > 400, "must deposit dark charcoal ink on ridges: dark_ink={dark_ink}");
-        assert!(white_paper > 400, "must preserve uninked Hanji white paper in grooves: white_paper={white_paper}");
+        assert!(
+            dark_ink > 400,
+            "must deposit dark charcoal ink on ridges: dark_ink={dark_ink}"
+        );
+        assert!(
+            white_paper > 400,
+            "must preserve uninked Hanji white paper in grooves: white_paper={white_paper}"
+        );
     }
 }

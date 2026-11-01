@@ -141,11 +141,7 @@ mod tests {
         assert!((res_iib.meeting_step_offset_mm - 0.35).abs() < 0.02);
 
         // 2. Type Ia: Cylindrical tubular drill
-        let samples_ia = vec![
-            [0.0, 1.20, 0.0],
-            [3.0, 1.20, 0.0],
-            [6.0, 1.21, 0.0],
-        ];
+        let samples_ia = vec![[0.0, 1.20, 0.0], [3.0, 1.20, 0.0], [6.0, 1.21, 0.0]];
         let res_ia = classify_bead_and_perforation(6.0, 6.2, false, 0, &samples_ia);
         assert_eq!(res_ia.subtype, BeadSubtype::AnnularBead);
         assert_eq!(res_ia.drill_type, BeadDrillType::TypeIa);

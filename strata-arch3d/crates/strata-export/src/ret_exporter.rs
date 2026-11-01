@@ -1,9 +1,9 @@
 use crate::plate_composer::ComposedPlate2D;
 use crate::svg_illustrator::render_plate_to_illustrator_svg;
-use strata_core::{StrataError, StacklessLbvh, TriMesh};
-use strata_shade::{render_orthographic_rubbing_image, RubbingRenderParams};
 use std::fs;
 use std::path::{Path, PathBuf};
+use strata_core::{StacklessLbvh, StrataError, TriMesh};
+use strata_shade::{render_orthographic_rubbing_image, RubbingRenderParams};
 
 #[derive(Debug, Clone)]
 pub struct RetPackageManifest {

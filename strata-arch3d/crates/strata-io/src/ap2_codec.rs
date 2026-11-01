@@ -1,8 +1,8 @@
-use strata_core::{StrataError, Mat4};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::fs;
 use std::path::Path;
+use strata_core::{Mat4, StrataError};
 
 /// `STRATA Liner` `.ap2` 파일 내 `fc`(정면), `rc`(우측면), `tc`(상면) 5슬롯 절단면 설정.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -92,10 +92,9 @@ impl Ap2Project {
     }
 
     pub fn from_json_str(text: &str) -> Result<Self, StrataError> {
-        let root: Value =
-            serde_json::from_str(text).map_err(|e| StrataError::ProjectFormat {
-                reason: format!(".ap2 JSON 구문 오류: {e}"),
-            })?;
+        let root: Value = serde_json::from_str(text).map_err(|e| StrataError::ProjectFormat {
+            reason: format!(".ap2 JSON 구문 오류: {e}"),
+        })?;
 
         let pinfo = extract_qvariant_map(&root, "project_info")?;
         let bb_length_x = qv_f64(pinfo, "BBLengthX", 0.0);
@@ -216,20 +215,22 @@ fn extract_qvariant_map<'a>(
     root: &'a Value,
     key: &str,
 ) -> Result<&'a serde_json::Map<String, Value>, StrataError> {
-    let arr = root
-        .get(key)
-        .and_then(Value::as_array)
-        .ok_or_else(|| StrataError::ProjectFormat {
-            reason: format!("최상위 키 '{key}' [8, {{...}}] 누락"),
-        })?;
+    let arr =
+        root.get(key)
+            .and_then(Value::as_array)
+            .ok_or_else(|| StrataError::ProjectFormat {
+                reason: format!("최상위 키 '{key}' [8, {{...}}] 누락"),
+            })?;
     if arr.len() < 2 {
         return Err(StrataError::ProjectFormat {
             reason: format!("키 '{key}' 배열 길이 부족"),
         });
     }
-    arr[1].as_object().ok_or_else(|| StrataError::ProjectFormat {
-        reason: format!("키 '{key}' QVariantMap 객체 아님"),
-    })
+    arr[1]
+        .as_object()
+        .ok_or_else(|| StrataError::ProjectFormat {
+            reason: format!("키 '{key}' QVariantMap 객체 아님"),
+        })
 }
 
 fn parse_cut_plane_group(map: &serde_json::Map<String, Value>) -> Ap2CutPlaneGroup {

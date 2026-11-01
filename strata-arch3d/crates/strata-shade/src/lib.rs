@@ -3,9 +3,7 @@ pub mod hemp_fft;
 pub mod rubbing_engine;
 pub mod unroll;
 
-pub use feature_lines::{
-    extract_five_feature_lines, FeatureLineKind, FeatureSegment2D,
-};
+pub use feature_lines::{extract_five_feature_lines, FeatureLineKind, FeatureSegment2D};
 pub use hemp_fft::{measure_hemp_cloth_threads_per_cm, HempThreadCountResult};
 pub use rubbing_engine::{
     compute_vertex_rubbing_ink_weights, render_orthographic_rubbing_image, RubbingAlgorithm,
@@ -29,8 +27,8 @@ mod tests {
             [20.0, 0.0, 30.0],
         ];
         let triangles = vec![[0, 1, 4], [0, 4, 3], [1, 2, 5], [1, 5, 4]];
-        let mesh =
-            TriMesh::from_positions_and_triangles("relief_patch", positions, triangles).expect("ok");
+        let mesh = TriMesh::from_positions_and_triangles("relief_patch", positions, triangles)
+            .expect("ok");
         let bvh = StacklessLbvh::build(&mesh);
 
         for alg in [

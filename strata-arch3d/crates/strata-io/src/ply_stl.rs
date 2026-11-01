@@ -1,7 +1,7 @@
-use strata_core::{StrataError, TriMesh};
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
+use strata_core::{StrataError, TriMesh};
 
 /// ASCII `.ply` 및 ASCII `.stl` 스캔 파일을 로드한다.
 pub fn load_ply_or_stl_file(path: impl AsRef<Path>) -> Result<TriMesh, StrataError> {

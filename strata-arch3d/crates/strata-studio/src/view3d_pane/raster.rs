@@ -1,7 +1,7 @@
-use strata_core::strata_tokens::tokens::SURFACE;
-use strata_core::{SurfaceRegion, TriMesh};
 use image::{Rgba, RgbaImage};
 use rayon::prelude::*;
+use strata_core::strata_tokens::tokens::SURFACE;
+use strata_core::{SurfaceRegion, TriMesh};
 
 use super::geometry::*;
 use super::state::*;
@@ -76,12 +76,7 @@ pub(crate) fn draw_background_millimeter_grid_rgba(
 /// 상단 직상방 동심원 평면도와 하단 수평 정면 입면도가 **1:1 동일한 스케일(`px/mm`)**을 공유하도록 산출한다.
 /// 가로 폭(`width_px`)에만 1차 동차(`homogeneous of degree 1`)로 비례하므로 상·하 뷰의 유물 가로 폭과 방안지 격자, 수직 점선 정렬이 100% 1:1 일치한다!
 #[inline]
-pub fn compute_shared_ortho_scale(
-    width_px: f64,
-    grid_r_mm: f64,
-    height_mm: f64,
-    zoom: f32,
-) -> f64 {
+pub fn compute_shared_ortho_scale(width_px: f64, grid_r_mm: f64, height_mm: f64, zoom: f32) -> f64 {
     let fit_r = (width_px * 0.25) / grid_r_mm.max(1.0);
     let fit_h = (width_px * 0.44) / height_mm.max(10.0);
     fit_r.min(fit_h) * f64::from(zoom)
@@ -159,17 +154,9 @@ pub fn render_topdown_concentric_plan_rgba(
         let p2 = screen_verts[i2];
 
         let min_x = p0[0].min(p1[0]).min(p2[0]).floor().max(0.0) as usize;
-        let max_x = p0[0]
-            .max(p1[0])
-            .max(p2[0])
-            .ceil()
-            .min((w_usize - 1) as f64) as usize;
+        let max_x = p0[0].max(p1[0]).max(p2[0]).ceil().min((w_usize - 1) as f64) as usize;
         let min_y = p0[1].min(p1[1]).min(p2[1]).floor().max(0.0) as usize;
-        let max_y = p0[1]
-            .max(p1[1])
-            .max(p2[1])
-            .ceil()
-            .min((h_usize - 1) as f64) as usize;
+        let max_y = p0[1].max(p1[1]).max(p2[1]).ceil().min((h_usize - 1) as f64) as usize;
         if min_x > max_x || min_y > max_y {
             continue;
         }
@@ -190,8 +177,8 @@ pub fn render_topdown_concentric_plan_rgba(
         );
         let ldir = state.compute_light_direction_vector();
         let ndotl_td = (wn[0] * ldir[0] + wn[1] * ldir[1] + wn[2].abs() * ldir[2]).abs();
-        let light_gain = ((0.76 + 0.28 * ndotl_td) * f64::from(state.light_intensity))
-            .clamp(0.55, 1.38) as f32;
+        let light_gain =
+            ((0.76 + 0.28 * ndotl_td) * f64::from(state.light_intensity)).clamp(0.55, 1.38) as f32;
         let uvs = if has_uvs {
             mesh.triangle_uvs[t_idx]
         } else {
@@ -203,10 +190,10 @@ pub fn render_topdown_concentric_plan_rgba(
             let fy = py as f64 + 0.5;
             for px in min_x..=max_x {
                 let fx = px as f64 + 0.5;
-                let b0 = ((p1[1] - p2[1]) * (fx - p2[0]) + (p2[0] - p1[0]) * (fy - p2[1]))
-                    * inv_denom;
-                let b1 = ((p2[1] - p0[1]) * (fx - p2[0]) + (p0[0] - p2[0]) * (fy - p2[1]))
-                    * inv_denom;
+                let b0 =
+                    ((p1[1] - p2[1]) * (fx - p2[0]) + (p2[0] - p1[0]) * (fy - p2[1])) * inv_denom;
+                let b1 =
+                    ((p2[1] - p0[1]) * (fx - p2[0]) + (p0[0] - p2[0]) * (fy - p2[1])) * inv_denom;
                 let b2 = 1.0 - b0 - b1;
                 if b0 < edge_pad || b1 < edge_pad || b2 < edge_pad {
                     continue;
@@ -343,17 +330,9 @@ pub fn render_mesh_zbuffer_rgba(
         }
 
         let min_x = p0[0].min(p1[0]).min(p2[0]).floor().max(0.0) as usize;
-        let max_x = p0[0]
-            .max(p1[0])
-            .max(p2[0])
-            .ceil()
-            .min((w_usize - 1) as f64) as usize;
+        let max_x = p0[0].max(p1[0]).max(p2[0]).ceil().min((w_usize - 1) as f64) as usize;
         let min_y = p0[1].min(p1[1]).min(p2[1]).floor().max(0.0) as usize;
-        let max_y = p0[1]
-            .max(p1[1])
-            .max(p2[1])
-            .ceil()
-            .min((h_usize - 1) as f64) as usize;
+        let max_y = p0[1].max(p1[1]).max(p2[1]).ceil().min((h_usize - 1) as f64) as usize;
 
         if min_x > max_x || min_y > max_y {
             continue;
@@ -406,10 +385,10 @@ pub fn render_mesh_zbuffer_rgba(
             let fy = py as f64 + 0.5;
             for px in min_x..=max_x {
                 let fx = px as f64 + 0.5;
-                let b0 = ((p1[1] - p2[1]) * (fx - p2[0]) + (p2[0] - p1[0]) * (fy - p2[1]))
-                    * inv_denom;
-                let b1 = ((p2[1] - p0[1]) * (fx - p2[0]) + (p0[0] - p2[0]) * (fy - p2[1]))
-                    * inv_denom;
+                let b0 =
+                    ((p1[1] - p2[1]) * (fx - p2[0]) + (p2[0] - p1[0]) * (fy - p2[1])) * inv_denom;
+                let b1 =
+                    ((p2[1] - p0[1]) * (fx - p2[0]) + (p0[0] - p2[0]) * (fy - p2[1])) * inv_denom;
                 let b2 = 1.0 - b0 - b1;
                 if b0 < edge_pad || b1 < edge_pad || b2 < edge_pad {
                     continue;
@@ -547,9 +526,8 @@ pub fn render_mesh_zbuffer_rgba(
                 let contact = (1.0 - (c - lap * 1.65)).clamp(0.0, 1.0);
                 let x_f = x as f32;
                 let y_f = y as f32;
-                let ign = ((52.982_918_f32
-                    * ((0.06711056 * x_f + 0.00583715 * y_f).fract()))
-                .fract()
+                let ign = ((52.982_918_f32 * ((0.06711056 * x_f + 0.00583715 * y_f).fract()))
+                    .fract()
                     + 1.0)
                     .fract();
                 let target_whiteness = 1.0 - (contact * 0.90).clamp(0.0, 0.96);

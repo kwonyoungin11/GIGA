@@ -369,8 +369,8 @@ fn test_tdd14_topdown_fixed_center_section_and_vertical_dashed_link() {
 
     // 유물을 좌우(+12.5mm) 이동시켰을 때 3D 단면 교차선도 정확히 +12.5mm 이동하여 상하 뷰 점선 연결 위치가 일치해야 함
     let segs = extract_3d_plane_intersection_segments_full(&mesh, &state, true);
-    let mean_x: f64 = segs.iter().map(|s| 0.5 * (s[0][0] + s[1][0])).sum::<f64>()
-        / (segs.len().max(1) as f64);
+    let mean_x: f64 =
+        segs.iter().map(|s| 0.5 * (s[0][0] + s[1][0])).sum::<f64>() / (segs.len().max(1) as f64);
     assert!(
         (mean_x - 12.5).abs() < 1.5,
         "translated artifact section center X must shift by +12.5mm, got {mean_x:.2}"
@@ -433,7 +433,9 @@ fn test_tdd19_custom_section_line_single_endpoint_move_and_2d_profile() {
     let mesh = make_test_bowl_mesh();
     let mut state = View3DPaneState::default();
     state.add_default_custom_section_line(55.0);
-    let line0 = state.custom_section_line_mm.expect("custom section line must exist");
+    let line0 = state
+        .custom_section_line_mm
+        .expect("custom section line must exist");
     let p0_before = line0[0];
     let p1_before = line0[1];
 
@@ -441,7 +443,10 @@ fn test_tdd19_custom_section_line_single_endpoint_move_and_2d_profile() {
     state.move_custom_section_endpoint(0, [-38.0, 22.0]);
     let line1 = state.custom_section_line_mm.expect("custom line 1");
     assert_eq!(line1[0], [-38.0, 22.0], "dragged endpoint 0 must move");
-    assert_eq!(line1[1], p1_before, "other endpoint 1 must remain 100% fixed");
+    assert_eq!(
+        line1[1], p1_before,
+        "other endpoint 1 must remain 100% fixed"
+    );
 
     // 반대로 1번 끝점을 이동하면 0번 끝점은 고정되고 1번 끝점만 이동해야 함!
     state.move_custom_section_endpoint(1, [42.0, -16.0]);

@@ -13,9 +13,20 @@ pub enum GpuVendorKind {
 impl GpuVendorKind {
     pub fn from_vendor_id_and_name(vendor_id: u32, name: &str) -> Self {
         let lower = name.to_ascii_lowercase();
-        if vendor_id == 0x10DE || lower.contains("nvidia") || lower.contains("geforce") || lower.contains("quadro") || lower.contains("rtx") || lower.contains("gtx") {
+        if vendor_id == 0x10DE
+            || lower.contains("nvidia")
+            || lower.contains("geforce")
+            || lower.contains("quadro")
+            || lower.contains("rtx")
+            || lower.contains("gtx")
+        {
             Self::Nvidia
-        } else if vendor_id == 0x1002 || vendor_id == 0x1022 || lower.contains("amd") || lower.contains("radeon") || lower.contains("firepro") {
+        } else if vendor_id == 0x1002
+            || vendor_id == 0x1022
+            || lower.contains("amd")
+            || lower.contains("radeon")
+            || lower.contains("firepro")
+        {
             Self::Amd
         } else if vendor_id == 0x8086 || lower.contains("intel") {
             Self::Intel
@@ -50,7 +61,10 @@ pub struct HardwareGpuAdapterInfo {
 impl HardwareGpuAdapterInfo {
     pub fn short_badge_text(&self) -> String {
         let kind_tag = if self.is_discrete { "외장" } else { "내장" };
-        format!("⚡ GPU: {} ({} · {})", self.name, self.backend_name, kind_tag)
+        format!(
+            "⚡ GPU: {} ({} · {})",
+            self.name, self.backend_name, kind_tag
+        )
     }
 }
 
@@ -132,10 +146,14 @@ pub fn primary_hardware_gpu() -> &'static Option<HardwareGpuAdapterInfo> {
 }
 
 /// `eframe` `wgpu` 렌더러에서 NVIDIA / AMD 고성능 외장 GPU(`HighPerformance`)를 강제 선택하는 설정 생성
-pub fn build_high_performance_wgpu_config(preferred_gpu_name: Option<String>) -> egui_wgpu::WgpuConfiguration {
+pub fn build_high_performance_wgpu_config(
+    preferred_gpu_name: Option<String>,
+) -> egui_wgpu::WgpuConfiguration {
     let selector: egui_wgpu::NativeAdapterSelectorMethod = Arc::new(move |adapters, _surface| {
         if adapters.is_empty() {
-            return Err(String::from("사용 가능한 하드웨어 GPU 어댑터를 찾을 수 없습니다."));
+            return Err(String::from(
+                "사용 가능한 하드웨어 GPU 어댑터를 찾을 수 없습니다.",
+            ));
         }
         if let Some(ref pref_name) = preferred_gpu_name {
             if let Some(matched) = adapters
@@ -211,10 +229,19 @@ mod tests {
         let s_amd = score_gpu_adapter(&amd_info);
         let s_igpu = score_gpu_adapter(&igpu_info);
 
-        assert!(s_nv > s_igpu + 8_000, "NVIDIA discrete GPU must strongly outscore integrated GPU");
-        assert!(s_amd > s_igpu + 8_000, "AMD discrete GPU must strongly outscore integrated GPU");
+        assert!(
+            s_nv > s_igpu + 8_000,
+            "NVIDIA discrete GPU must strongly outscore integrated GPU"
+        );
+        assert!(
+            s_amd > s_igpu + 8_000,
+            "AMD discrete GPU must strongly outscore integrated GPU"
+        );
 
         let gpus = discover_hardware_gpus();
-        assert!(!gpus.is_empty(), "must detect at least one GPU adapter on this machine");
+        assert!(
+            !gpus.is_empty(),
+            "must detect at least one GPU adapter on this machine"
+        );
     }
 }

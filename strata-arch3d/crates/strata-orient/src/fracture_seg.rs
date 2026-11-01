@@ -1,5 +1,5 @@
-use strata_core::{SurfaceRegion, TriMesh};
 use serde::{Deserialize, Serialize};
+use strata_core::{SurfaceRegion, TriMesh};
 
 /// `Structure-from-Sherds++` (Yao & Zhou 2023 + 이면각 능선 그래프) 기반
 /// 편조각 3영역 분할 결과 (`외벽 OuterWall` / `내벽 InnerWall` / `파단면 FractureZone`).
