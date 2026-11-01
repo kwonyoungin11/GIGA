@@ -816,6 +816,7 @@ fn get_or_build_ddg_mesh(
 /// 3) Mara et al. (2010) 다중 스케일 구면 적분 불변량(MSII) + 반경 제한 PCV AO + Vergne et al. (2010) Radiance Scaling
 /// 4) Winnemöller et al. (2012) XDoG (`σ_fine = 0.8`, `σ_coarse = 14.0`) 대역통과 필터링
 /// 5) 5-Octave FBM Perlin 한지 섬유 + Cellular Worley 암석 입자 + Interleaved Gradient Noise (Blue-Noise) 다계조 점묘 합성
+///
 /// 도판 캔버스가 용지 안에 들어가는 **가장 큰 축척**을 고른다(1:1 우선, 안 되면 1:2 → 1:3 → 1:4).
 /// 대형 유물에서 1:1 을 고집해 도판이 종이 밖으로 잘리는 문제를 막는다.
 pub fn fit_scale_preset(
@@ -3904,8 +3905,10 @@ mod tests {
         ] {
             assert!(line.contains(token), "출처 문자열에 '{}' 없음: {}", token, line);
         }
-        let mut unrolled = AcademicRubbingParams::default();
-        unrolled.unroll_mode = Some(strata_shade::UnrollMode::Cylindrical);
+        let unrolled = AcademicRubbingParams {
+            unroll_mode: Some(strata_shade::UnrollMode::Cylindrical),
+            ..Default::default()
+        };
         let u_line = rubbing_provenance_line(&unrolled);
         assert!(u_line.contains("전개=원통"));
         assert!(u_line.contains("투영=원통전개"));
@@ -4048,8 +4051,10 @@ mod tests {
     fn test_unrolled_cylindrical_rubbing_differs_from_plan_and_has_ink() {
         let mesh = make_patterned_bowl_mesh();
         let planar = AcademicRubbingParams::default();
-        let mut unrolled = AcademicRubbingParams::default();
-        unrolled.unroll_mode = Some(strata_shade::UnrollMode::Cylindrical);
+        let unrolled = AcademicRubbingParams {
+            unroll_mode: Some(strata_shade::UnrollMode::Cylindrical),
+            ..Default::default()
+        };
 
         let img_plan = render_orthographic_rubbing_rgba_with_params(
             &mesh,

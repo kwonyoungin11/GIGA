@@ -47,12 +47,15 @@ pub enum DragMode3D {
     /// 기본값: 절단틀(`P_cut`)은 월드 중앙에 고정하고 유물만 회전축 둘레로 회전(`ψ`)
     TurntableArtifact,
     /// 카메라 궤도 회전 (`cam_yaw_deg`, `cam_pitch_deg`)
+    #[allow(dead_code)] // ui.rs 드래그 match 는 처리하지만 선택 UI 가 아직 없어 생성 지점이 없다(향후 배선용).
     CameraOrbit,
     /// 바닥·천공축 미세 기울기 조절 (`0.1°` 단위)
+    #[allow(dead_code)] // ui.rs 드래그 match 는 처리하지만 선택 UI 가 아직 없어 생성 지점이 없다(향후 배선용).
     AxisTilt,
 }
 
 /// 기존 호환용 4방향 미세 다이얼 열거형 (`test_tdd9` 호환 유지).
+#[allow(dead_code)] // 테스트(test_tdd9)가 4방향 다이얼 스텝을 검증한다(테스트 전용 API).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CardinalDialDir {
     Up,
@@ -73,6 +76,7 @@ pub enum PrecisionWheelKind {
     /// Image 4 (좌측 세로 휠): 유물의 아래위를 회전하는 휠 — 올리면 위로 회전, 내리면 아래로 회전 (`tilt_deg`, `0.1°` 스텝, 휠 옆 설명)
     LeftPitchUpDown,
     /// <USER_REQUEST> (상하좌우 안쪽 제5휠 호환): 내부 수평 미세정합 휠 (`inner_level_deg`, `0.05°` 스텝)
+    #[allow(dead_code)] // 테스트(test_tdd13)가 5번째 휠을 생성해 검증한다(테스트 전용 조작 경로).
     InnerHorizontalLevel,
     /// Image 0 (수평횡단면 전용 휠): 유물은 고정하고 수평횡단면 절단선(`top_cut_z_mm`)만 아래위로 이동시켜 수평횡단면 도면을 그리는 휠 (`0.1mm` 스텝)
     InnerHorizSectionZ,
@@ -80,6 +84,7 @@ pub enum PrecisionWheelKind {
 
 impl PrecisionWheelKind {
     /// 각 휠의 사용자 인터페이스 설명 문구 (`Image 0 ~ 4` 및 `<USER_REQUEST>` 반영).
+    #[allow(dead_code)] // 테스트(test_tdd13)가 UI 문구를 검증한다(테스트 전용 조회 API).
     pub fn description_label_kr(self) -> &'static str {
         match self {
             Self::TopTurnCwCcw => "↻ 유물 시계·반시계 회전 휠 [0.1°]",
@@ -113,27 +118,6 @@ pub fn compute_isotropic_render_dimensions(
 #[inline]
 pub fn compute_concentric_grid_radius_mm(artifact_radius_mm: f64) -> f64 {
     artifact_radius_mm * 1.20
-}
-
-/// 상단 직상방 동심원 뷰와 하단 정면 입면 뷰가 가로 X축(`mm -> px`)을 100% 동일하게 공유하여
-/// 위 단면선과 아래 단면선이 수직 점선으로 오차 없이 연결되도록 공통 가로 스케일(`px/mm`)을 계산한다 (`Image 7`).
-#[inline]
-pub fn compute_shared_horizontal_scale_px_per_mm(
-    pane_width_px: f32,
-    top_height_px: f32,
-    front_height_px: f32,
-    grid_r_mm: f64,
-    height_mm: f64,
-    zoom: f32,
-) -> f64 {
-    let w = f64::from(pane_width_px.max(120.0));
-    let th = f64::from(top_height_px.max(120.0));
-    let fh = f64::from(front_height_px.max(140.0));
-    // 상단 동심원 지름(2 * grid_r_mm)과 하단 유물 높이(height_mm)가 모두 여유 있게 들어오는 단일 등방성 스케일
-    let by_top_w = (w * 0.42) / grid_r_mm.max(1.0);
-    let by_top_h = (th * 0.43) / grid_r_mm.max(1.0);
-    let by_front_h = (fh * 0.50) / height_mm.max(10.0);
-    by_top_w.min(by_top_h).min(by_front_h).max(0.8) * f64::from(zoom)
 }
 
 /// 3D Z-버퍼 프레임 더티 캐시 키.
@@ -210,9 +194,6 @@ pub struct View3DPaneState {
     pub cached_topdown_key: Option<View3DRenderCacheKey>,
     pub cached_topdown_rgba: Option<RgbaImage>,
     pub cached_topdown_tex: Option<egui::TextureHandle>,
-    pub cached_fixed_hsec_key: Option<(String, u32, u32, View3DShaderMode)>,
-    pub cached_fixed_hsec_rgba: Option<RgbaImage>,
-    pub cached_fixed_hsec_tex: Option<egui::TextureHandle>,
     pub cached_curves_key: Option<CurvesCacheKey>,
     pub cached_v_segs: Vec<[[f64; 3]; 2]>,
     pub cached_h_segs: Vec<[[f64; 3]; 2]>,
@@ -275,9 +256,6 @@ impl Default for View3DPaneState {
             cached_topdown_key: None,
             cached_topdown_rgba: None,
             cached_topdown_tex: None,
-            cached_fixed_hsec_key: None,
-            cached_fixed_hsec_rgba: None,
-            cached_fixed_hsec_tex: None,
             cached_curves_key: None,
             cached_v_segs: Vec::new(),
             cached_h_segs: Vec::new(),
@@ -409,6 +387,7 @@ impl View3DPaneState {
     }
 
     /// 기존 4방향 미세 다이얼 스텝 적용 (`test_tdd9` 호환).
+    #[allow(dead_code)] // 테스트(test_tdd9)가 0.01mm/0.1° 스텝을 검증한다(테스트 전용 API).
     pub fn apply_cardinal_fine_dial(&mut self, dir: CardinalDialDir, steps: i32) {
         match dir {
             CardinalDialDir::Up => {
@@ -529,36 +508,8 @@ impl View3DPaneState {
         }
     }
 
-    /// Image 4: 직상방 동심원 뷰 바로 옆에 배치되는 '수평횡단면 전용 고정 유물 뷰(유물 고정 · 선만 상하조정)' 텍스처 캐시.
-    pub fn ensure_fixed_hsec_cached(
-        &mut self,
-        mesh: &TriMesh,
-        region_labels: Option<&[SurfaceRegion]>,
-        width: u32,
-        height: u32,
-    ) {
-        let w = width.clamp(80, 360);
-        let h = height.clamp(80, 360);
-        let mode = self.effective_shader_mode();
-        let key = (mesh.name.clone(), w, h, mode);
-        if self.cached_fixed_hsec_key.as_ref() == Some(&key) && self.cached_fixed_hsec_rgba.is_some()
-        {
-            return;
-        }
-        let fixed_state = View3DPaneState {
-            shader_mode: self.shader_mode,
-            show_3way_segmentation: self.show_3way_segmentation,
-            xray_inner_mode: self.xray_inner_mode,
-            zoom: 0.92,
-            ..Default::default()
-        };
-        let img = render_mesh_zbuffer_rgba(mesh, region_labels, &fixed_state, w, h);
-        self.cached_fixed_hsec_rgba = Some(img);
-        self.cached_fixed_hsec_tex = None;
-        self.cached_fixed_hsec_key = Some(key);
-    }
-
     /// 유물 상하좌우 핸드 다이얼(구면 트랙볼) 드래그 입력을 적용한다.
+    #[allow(dead_code)] // 테스트(test_tdd4)가 구면 트랙볼 드래그를 검증한다(테스트 전용 API).
     pub fn apply_hand_dial_drag(&mut self, dx_px: f32, dy_px: f32, fine_axis_tilt_mode: bool) {
         if fine_axis_tilt_mode {
             self.roll_deg =

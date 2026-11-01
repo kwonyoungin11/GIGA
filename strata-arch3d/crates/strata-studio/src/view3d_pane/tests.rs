@@ -1,14 +1,5 @@
-use strata_core::strata_tokens::tokens::{
-    ACTION, CLAY_FOCUS, CLAY_INK, CLAY_WASH, EDGE, GROUND, INK, MUTED, PROFILE_RED, SELECT_BLUE,
-    SURFACE,
-};
-use strata_core::{SurfaceRegion, TriMesh};
-use strata_orient::RimGapChart360;
-use eframe::egui;
-use image::{Rgba, RgbaImage};
-use rayon::prelude::*;
-
-use super::*;
+use strata_core::strata_tokens::tokens::SURFACE;
+use strata_core::TriMesh;
 
 use super::*;
 
@@ -146,8 +137,10 @@ fn test_transformed_horizontal_section_offset_is_relative_to_artifact_base() {
         .expect("valid offset mesh");
     assert!((mesh.bbox.min[2] - 100.0).abs() < 1e-9);
 
-    let mut state = View3DPaneState::default();
-    state.top_cut_z_mm = 12.5;
+    let state = View3DPaneState {
+        top_cut_z_mm: 12.5,
+        ..Default::default()
+    };
     let hsec = slice_transformed_mesh_world_locked(&mesh, &state, false);
     assert!(
         !hsec.polylines_2d.is_empty(),

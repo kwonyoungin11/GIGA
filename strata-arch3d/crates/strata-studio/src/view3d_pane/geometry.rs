@@ -4,34 +4,6 @@ use rayon::prelude::*;
 
 use super::state::*;
 
-/// 유물 로컬 정점을 턴테이블 회전(`psi_deg`) 및 축 기울기(`tilt_deg`)가 적용된 월드 좌표(`wx, wy, wz`)로 변환한다.
-#[inline]
-#[allow(clippy::too_many_arguments)]
-pub fn local_to_world_turntable(
-    p: [f64; 3],
-    center_xy: [f64; 2],
-    z_min: f64,
-    height_mm: f64,
-    cos_p: f64,
-    sin_p: f64,
-    cos_t: f64,
-    sin_t: f64,
-) -> [f64; 3] {
-    let lx = p[0] - center_xy[0];
-    let ly = p[1] - center_xy[1];
-    let lz = p[2] - z_min;
-    let z_mid = 0.5 * height_mm;
-
-    let rx = lx * cos_p - ly * sin_p;
-    let ry = lx * sin_p + ly * cos_p;
-    let rz = lz - z_mid;
-
-    let wx = rx * cos_t - rz * sin_t;
-    let wy = ry;
-    let wz = rx * sin_t + rz * cos_t + z_mid;
-    [wx, wy, wz]
-}
-
 /// 3D 직상방 뷰, 3D 정면 입면 뷰, 3D 적색 단면 교차선, 그리고 우측 2D 도판 단면 슬라이서가
 /// **100% 동일한 좌표 변환**을 공유하도록 통합된 정점 변환 함수 (`<USER_REQUEST>` 단면 불일치 근본 해결).
 /// - `psi_deg`(`TopTurnCwCcw`): Z축 둘레 시계/반시계 회전
@@ -507,6 +479,7 @@ pub(crate) fn chain_2d_segments_into_polylines(
 }
 
 /// 기존 시그니처 호환용 3D 교차 선분 추출 함수.
+#[allow(dead_code)] // 테스트 전용 원시 절단면 헬퍼: 앱 UI 경로는 `extract_3d_plane_intersection_segments_full` 만 쓴다.
 pub fn extract_3d_plane_intersection_segments(
     mesh: &TriMesh,
     psi_deg: f64,

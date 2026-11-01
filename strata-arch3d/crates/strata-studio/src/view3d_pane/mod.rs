@@ -6,7 +6,7 @@
 //! - [`state`]: 셰이딩·드래그 모드 열거형, `View3DPaneState`, 캐시·다이얼·자세 조작
 //! - [`geometry`]: 5휠 월드 변환, 절단면 교차 선분, 사용자 단면선, 직상방 평면 절단
 //! - [`raster`]: 소프트웨어 Z-버퍼/탑다운 래스터, 방안선 배경, 정투영 투영식
-//! - [`ui`]: `render_view3d_pane_egui` (실제 egui 패널)
+//! - `ui` 모듈: `render_view3d_pane_egui` (실제 egui 패널)
 
 mod geometry;
 mod raster;
