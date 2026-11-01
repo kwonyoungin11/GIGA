@@ -27,7 +27,7 @@ use strata_export::{
     render_plate_to_illustrator_svg_with_options, render_plate_to_pdf_bytes,
     ComposedPlate2D, PaperSheetSize, PlateComposeInput, PlateLayoutMode,
 };
-use strata_io::{load_any_mesh, Ap2Project};
+use strata_io::{load_any_mesh, Ap2Project, DarchProject};
 use strata_measure::{compute_artifact_measurements, ArtifactMeasurementReport};
 use strata_orient::{
     compute_rim_gap_chart_360, evaluate_section_angles_parallel, segment_sherd_three_regions,
@@ -254,6 +254,8 @@ impl ArtifactSlotEntry {
 #[derive(Debug)]
 pub struct StrataStudioApp {
     splash: SplashState,
+    /// 현재 작업 중인 `.darch` 프로젝트 경로 (`[저장]` 은 이 경로로 덮어쓴다. 없으면 저장 대화상자)
+    project_path: Option<PathBuf>,
     #[allow(dead_code)]
     active_tab: WorkflowTab,
     active_chs_template: ChsReportTemplate,
@@ -285,6 +287,56 @@ pub struct StrataStudioApp {
     capture_window_path: Option<PathBuf>,
     capture_frames_rendered: u32,
     screenshot_requested: bool,
+}
+
+/// `[저장]` 시점의 화면 상태를 `.darch` 프로젝트로 변환하기 위한 값 묶음.
+/// UI 와 분리된 순수 함수 [`build_darch_project`] 에 넘겨 저장 내용을 단위 테스트로 고정한다.
+#[derive(Debug)]
+pub struct ProjectSaveInput {
+    pub title: String,
+    pub mesh_path: Option<PathBuf>,
+    pub category: ArtifactCategory,
+    pub sherd_subtype: Option<SherdSubtype>,
+    pub bead_subtype: Option<BeadSubtype>,
+    pub bead_drill_type: Option<BeadDrillType>,
+    pub pose_confirmed: bool,
+    pub section_angle_deg: f64,
+    pub top_cut_z_mm: f64,
+    pub flip_exterior_right: bool,
+    pub scale_preset: ScalePreset,
+    pub ink_density_pct: f64,
+    pub rubbing_radius_mm: f64,
+    pub handprint_texture: bool,
+}
+
+/// 화면 상태를 `.darch` 프로젝트 구조체로 옮긴다.
+/// 자세 행렬은 정위치 결과가 이미 메쉬 좌표에 구워져 있으므로 항등행렬을 쓴다.
+pub fn build_darch_project(input: &ProjectSaveInput) -> DarchProject {
+    DarchProject {
+        version: 2,
+        artifact_title: input.title.clone(),
+        site_and_feature: String::new(),
+        mesh_path: input
+            .mesh_path
+            .as_ref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_default(),
+        category: input.category,
+        sherd_subtype: input.sherd_subtype,
+        bead_subtype: input.bead_subtype,
+        bead_drill_type: input.bead_drill_type,
+        pose_matrix: strata_core::Mat4::IDENTITY,
+        pose_confirmed: input.pose_confirmed,
+        primary_section_angle_deg: input.section_angle_deg,
+        extra_section_angles_deg: Vec::new(),
+        horizontal_cut_heights_mm: vec![input.top_cut_z_mm],
+        flip_exterior_right: input.flip_exterior_right,
+        scale_preset: input.scale_preset,
+        rubbing_ink_density_pct: input.ink_density_pct,
+        rubbing_radius_mm: input.rubbing_radius_mm,
+        rubbing_handprint_texture: input.handprint_texture,
+    }
+    .sanitize_clamped()
 }
 
 impl StrataStudioApp {
@@ -362,6 +414,7 @@ impl StrataStudioApp {
 
         Self {
             splash,
+            project_path: None,
             active_tab: initial_tab.unwrap_or(WorkflowTab::Step1LoadAndClassify),
             active_chs_template: initial_chs,
             active_tile_code: initial_chs.code(),
@@ -544,6 +597,120 @@ impl StrataStudioApp {
         }
     }
 
+    /// `[저장]`: 현재 유물·자세·탁본 설정을 `.darch` 프로젝트로 저장한다.
+    /// 이미 프로젝트 경로가 있으면 그 경로에 덮어쓰고, 없으면 저장 대화상자를 띄운다.
+    fn save_darch_project(&mut self) {
+        let input = match self.slots.get(self.selected_slot_idx) {
+            Some(slot) => ProjectSaveInput {
+                title: slot.title.clone(),
+                mesh_path: slot.source_path.clone(),
+                category: slot.category,
+                sherd_subtype: slot.sherd_subtype,
+                bead_subtype: slot.bead_subtype,
+                bead_drill_type: slot.bead_drill_type,
+                pose_confirmed: self.pose_locked,
+                section_angle_deg: self.view3d_state.active_section_angle_deg,
+                top_cut_z_mm: self.view3d_state.top_cut_z_mm,
+                flip_exterior_right: self.flip_exterior_right,
+                scale_preset: self.sheet_state.active_scale_preset,
+                ink_density_pct: self.rubbing_params.ink_density_pct,
+                rubbing_radius_mm: self.rubbing_params.curv_radius_mm,
+                handprint_texture: self.rubbing_params.use_handprint_grain,
+            },
+            None => {
+                self.status_message = String::from("저장할 유물이 없습니다");
+                return;
+            }
+        };
+        let project = build_darch_project(&input);
+        let target = self.project_path.clone().or_else(|| {
+            let default_name = input
+                .mesh_path
+                .as_ref()
+                .and_then(|p| p.file_stem())
+                .map(|s| format!("{}.darch", s.to_string_lossy()))
+                .unwrap_or_else(|| String::from("무제_유물.darch"));
+            rfd::FileDialog::new()
+                .add_filter("STRATA 프로젝트 (.darch)", &["darch"])
+                .set_file_name(default_name)
+                .save_file()
+        });
+        let Some(target) = target else {
+            self.status_message = String::from("저장이 취소되었습니다");
+            return;
+        };
+        match project.save_to_file(&target) {
+            Ok(()) => {
+                self.project_path = Some(target.clone());
+                self.status_message = format!("프로젝트 저장 완료: {}", target.display());
+            }
+            Err(err) => {
+                self.active_dialog = Some(ActiveStrataDialog::Error3Part(err.to_three_part()));
+            }
+        }
+    }
+
+    /// `.darch` 프로젝트를 열어 메쉬·단면각·수평 절단 높이·탁본 설정을 되살린다.
+    fn open_darch_project(&mut self, path: &Path) {
+        let project = match DarchProject::load_from_file(path) {
+            Ok(p) => p,
+            Err(err) => {
+                self.active_dialog = Some(ActiveStrataDialog::Error3Part(err.to_three_part()));
+                return;
+            }
+        };
+        let mesh_path = if project.mesh_path.is_empty() {
+            None
+        } else {
+            Some(PathBuf::from(&project.mesh_path))
+        };
+        let Some(mesh) = mesh_path.as_ref().and_then(|p| load_any_mesh(p).ok()) else {
+            self.active_dialog = Some(ActiveStrataDialog::Error3Part(
+                strata_core::StrataError::Io {
+                    path: project.mesh_path.clone(),
+                    message: String::from(
+                        "프로젝트가 참조하는 스캔 파일을 열 수 없습니다(경로 이동·삭제).",
+                    ),
+                }
+                .to_three_part(),
+            ));
+            return;
+        };
+        let slot = ArtifactSlotEntry::from_mesh(
+            project.artifact_title.clone(),
+            mesh_path,
+            project.category,
+            project.sherd_subtype,
+            project.bead_subtype,
+            project.bead_drill_type,
+            mesh,
+        );
+        self.slots.push(slot);
+        self.selected_slot_idx = self.slots.len() - 1;
+        self.view3d_state.active_section_angle_deg = project.primary_section_angle_deg;
+        self.view3d_state.top_cut_z_mm = project
+            .horizontal_cut_heights_mm
+            .first()
+            .copied()
+            .unwrap_or(18.0);
+        if let Some(slot) = self.slots.get(self.selected_slot_idx) {
+            // 저장된 절단 높이를 기본값(기고의 절반)이 덮어쓰지 않게 초기화 표시를 맞춘다.
+            self.view3d_state.top_cut_initialized_for_mesh = slot.mesh.name.clone();
+        }
+        self.flip_exterior_right = project.flip_exterior_right;
+        self.pose_locked = project.pose_confirmed;
+        self.sheet_state.active_scale_preset = project.scale_preset;
+        self.rubbing_params.ink_density_pct = project.rubbing_ink_density_pct;
+        self.rubbing_params.curv_radius_mm = project.rubbing_radius_mm;
+        self.rubbing_params.use_handprint_grain = project.rubbing_handprint_texture;
+        self.sheet_state.rubbing_params.ink_density_pct = project.rubbing_ink_density_pct;
+        self.project_path = Some(path.to_path_buf());
+        if let Some(slot) = self.slots.get_mut(self.selected_slot_idx) {
+            slot.rebuild_plate(self.flip_exterior_right, &self.view3d_state);
+        }
+        self.status_message = format!("프로젝트 열기 완료: {}", path.display());
+    }
+
     fn handle_tile_click(&mut self, code: &'static str) {
         self.active_tile_code = code;
         for tpl in ChsReportTemplate::ALL {
@@ -555,36 +722,47 @@ impl StrataStudioApp {
         match code {
             "OPEN" => {
                 if let Some(path) = rfd::FileDialog::new()
+                    .add_filter("STRATA 프로젝트 (.darch)", &["darch"])
                     .add_filter("3D 유물 스캔 (OBJ/PLY/STL)", &["obj", "ply", "stl"])
                     .pick_file()
                 {
-                    match load_any_mesh(&path) {
-                        Ok(mesh) => {
-                            let name = path
-                                .file_stem()
-                                .and_then(|s| s.to_str())
-                                .unwrap_or("외부 스캔 유물")
-                                .to_string();
-                            let slot = ArtifactSlotEntry::from_mesh(
-                                name,
-                                Some(path.clone()),
-                                ArtifactCategory::Potsherd,
-                                Some(SherdSubtype::RimSherd),
-                                None,
-                                None,
-                                mesh,
-                            );
-                            self.slots.push(slot);
-                            self.selected_slot_idx = self.slots.len() - 1;
-                            self.status_message = format!("파일 로드 완료: {}", path.display());
-                        }
-                        Err(err) => {
-                            self.active_dialog =
-                                Some(ActiveStrataDialog::Error3Part(err.to_three_part()));
+                    let is_project = path
+                        .extension()
+                        .and_then(|e| e.to_str())
+                        .is_some_and(|e| e.eq_ignore_ascii_case("darch"));
+                    if is_project {
+                        self.open_darch_project(&path);
+                    } else {
+                        match load_any_mesh(&path) {
+                            Ok(mesh) => {
+                                let name = path
+                                    .file_stem()
+                                    .and_then(|s| s.to_str())
+                                    .unwrap_or("외부 스캔 유물")
+                                    .to_string();
+                                let slot = ArtifactSlotEntry::from_mesh(
+                                    name,
+                                    Some(path.clone()),
+                                    ArtifactCategory::Potsherd,
+                                    Some(SherdSubtype::RimSherd),
+                                    None,
+                                    None,
+                                    mesh,
+                                );
+                                self.slots.push(slot);
+                                self.selected_slot_idx = self.slots.len() - 1;
+                                self.status_message =
+                                    format!("파일 로드 완료: {}", path.display());
+                            }
+                            Err(err) => {
+                                self.active_dialog =
+                                    Some(ActiveStrataDialog::Error3Part(err.to_three_part()));
+                            }
                         }
                     }
                 }
             }
+            "SAVE" => self.save_darch_project(),
             "AP2" | "AP2_SYNC" => {
                 if let Some(ap2_path) = rfd::FileDialog::new()
                     .add_filter("STRATA Liner 프로젝트 (.ap2)", &["ap2"])
@@ -886,7 +1064,7 @@ impl eframe::App for StrataStudioApp {
                         )
                         .clicked()
                     {
-                        self.handle_tile_click("EXPORT_RET");
+                        self.handle_tile_click("SAVE");
                     }
                     ui.separator();
 
@@ -1358,6 +1536,77 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `[저장]` 이 화면 상태를 `.darch` 필드로 정확히 옮기는지 고정한다.
+    #[test]
+    fn test_build_darch_project_maps_ui_state() {
+        let input = ProjectSaveInput {
+            title: String::from("7지구 9호-7"),
+            mesh_path: Some(PathBuf::from("E:/scan/7.obj")),
+            category: ArtifactCategory::CompleteVessel,
+            sherd_subtype: None,
+            bead_subtype: None,
+            bead_drill_type: None,
+            pose_confirmed: true,
+            section_angle_deg: 123.4,
+            top_cut_z_mm: 27.5,
+            flip_exterior_right: true,
+            scale_preset: ScalePreset::Half1To2,
+            ink_density_pct: 68.0,
+            rubbing_radius_mm: 1.8,
+            handprint_texture: false,
+        };
+        let project = build_darch_project(&input);
+        assert_eq!(project.version, 2);
+        assert_eq!(project.artifact_title, "7지구 9호-7");
+        assert!(project.mesh_path.ends_with("7.obj"));
+        assert_eq!(project.category, ArtifactCategory::CompleteVessel);
+        assert!(project.pose_confirmed);
+        assert!((project.primary_section_angle_deg - 123.4).abs() < 1e-9);
+        assert_eq!(project.horizontal_cut_heights_mm, vec![27.5]);
+        assert!(project.flip_exterior_right);
+        assert_eq!(project.scale_preset, ScalePreset::Half1To2);
+        assert!((project.rubbing_ink_density_pct - 68.0).abs() < 1e-9);
+        assert!((project.rubbing_radius_mm - 1.8).abs() < 1e-9);
+        assert!(!project.rubbing_handprint_texture);
+    }
+
+    /// 저장 → 다시 열기 왕복에서 값이 그대로 살아나야 한다(저장 기능의 실질 검증).
+    #[test]
+    fn test_darch_project_roundtrip_save_and_load() {
+        let input = ProjectSaveInput {
+            title: String::from("왕복 시험 유물"),
+            mesh_path: None,
+            category: ArtifactCategory::Potsherd,
+            sherd_subtype: Some(SherdSubtype::RimSherd),
+            bead_subtype: None,
+            bead_drill_type: None,
+            pose_confirmed: false,
+            section_angle_deg: 355.0,
+            top_cut_z_mm: 12.3,
+            flip_exterior_right: false,
+            scale_preset: ScalePreset::Full1To1,
+            ink_density_pct: 80.0,
+            rubbing_radius_mm: 1.2,
+            handprint_texture: true,
+        };
+        let saved = build_darch_project(&input);
+        let path = std::env::temp_dir().join(format!(
+            "strata_darch_roundtrip_{}.darch",
+            std::process::id()
+        ));
+        saved.save_to_file(&path).expect("저장 실패");
+        assert!(path.exists(), "저장 파일이 만들어져야 함");
+        let loaded = DarchProject::load_from_file(&path).expect("다시 열기 실패");
+        let _ = std::fs::remove_file(&path);
+
+        assert_eq!(loaded.artifact_title, "왕복 시험 유물");
+        assert_eq!(loaded.category, ArtifactCategory::Potsherd);
+        assert_eq!(loaded.sherd_subtype, Some(SherdSubtype::RimSherd));
+        assert!((loaded.primary_section_angle_deg - 355.0).abs() < 1e-9);
+        assert_eq!(loaded.horizontal_cut_heights_mm, vec![12.3]);
+        assert_eq!(loaded.scale_preset, ScalePreset::Full1To1);
+    }
 
     #[test]
     fn test_v1_to_v8_harness_and_r1_layout() {
