@@ -87,10 +87,10 @@ pub fn score_gpu_adapter(info: &wgpu::AdapterInfo) -> i32 {
 /// 시스템에 장착된 모든 GPU(NVIDIA, AMD, Intel 등)를 탐지하여 우선순위 순으로 반환한다.
 pub fn discover_hardware_gpus() -> Vec<HardwareGpuAdapterInfo> {
     let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-        backends: wgpu::Backends::VULKAN | wgpu::Backends::DX12 | wgpu::Backends::GL,
+        backends: wgpu::Backends::DX12 | wgpu::Backends::VULKAN,
         ..Default::default()
     });
-    let adapters = instance.enumerate_adapters(wgpu::Backends::all());
+    let adapters = instance.enumerate_adapters(wgpu::Backends::DX12 | wgpu::Backends::VULKAN);
     let mut list: Vec<HardwareGpuAdapterInfo> = adapters
         .into_iter()
         .map(|adapter| {
@@ -162,7 +162,7 @@ pub fn build_high_performance_wgpu_config(preferred_gpu_name: Option<String>) ->
         desired_maximum_frame_latency: Some(1),
         wgpu_setup: egui_wgpu::WgpuSetup::CreateNew(egui_wgpu::WgpuSetupCreateNew {
             instance_descriptor: wgpu::InstanceDescriptor {
-                backends: wgpu::Backends::VULKAN | wgpu::Backends::DX12 | wgpu::Backends::GL,
+                backends: wgpu::Backends::DX12 | wgpu::Backends::VULKAN,
                 ..Default::default()
             },
             power_preference: wgpu::PowerPreference::HighPerformance,

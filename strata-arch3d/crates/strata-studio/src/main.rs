@@ -40,7 +40,7 @@ use strata_shade::RubbingRenderParams;
 use dialogs::{show_active_dialog, ActiveStrataDialog};
 use eframe::egui;
 use gpu_backend::{
-    build_high_performance_wgpu_config, discover_hardware_gpus, HardwareGpuAdapterInfo,
+    build_high_performance_wgpu_config, primary_hardware_gpu, HardwareGpuAdapterInfo,
 };
 use harness_runner::{
     generate_screenshot_tour_and_golden_outputs, run_v1_to_v8_verification_harness,
@@ -296,7 +296,7 @@ impl StrataStudioApp {
             ChsReportTemplate::VesselCompleteStandard
         };
 
-        let detected_gpus = discover_hardware_gpus();
+        let detected_gpus: Vec<HardwareGpuAdapterInfo> = primary_hardware_gpu().clone().into_iter().collect();
         let gpu_label = detected_gpus
             .first()
             .map(HardwareGpuAdapterInfo::short_badge_text)
