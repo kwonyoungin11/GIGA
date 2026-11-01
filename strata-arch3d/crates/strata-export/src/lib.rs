@@ -11,9 +11,9 @@ pub use pdf_tiled_print::{
     compute_tiled_print_plan, render_plate_to_pdf_bytes, PaperSheetSize, TiledPrintPlan,
 };
 pub use plate_composer::{
-    compose_archaeological_plate, triangulate_polygon_ear_clipping, ComposedPlate2D,
-    PlateComposeInput, PlateLayoutMode, PlatePathElement, PlateRasterKind, PlateRasterRegion,
-    PlateTextCallout,
+    compose_archaeological_plate, compose_archaeological_plate_with_mode,
+    triangulate_polygon_ear_clipping, ComposedPlate2D, PlateComposeInput, PlateLayoutMode,
+    PlatePathElement, PlateRasterKind, PlateRasterRegion, PlateTextCallout,
 };
 pub use ret_exporter::{export_ret_folder_package, RetPackageManifest};
 pub use svg_illustrator::render_plate_to_illustrator_svg;
@@ -148,6 +148,74 @@ mod tests {
             hsec_min_y,
             hsec_max_y
         );
+    }
+
+    #[test]
+    fn test_plate_layout_mode_all_exposes_eight_short_labels() {
+        assert_eq!(
+            PlateLayoutMode::ALL.len(),
+            8,
+            "8대 도판 모드 전체가 UI 목록에 있어야 한다"
+        );
+        for m in PlateLayoutMode::ALL {
+            let s = m.short_label_kr();
+            assert!(!s.is_empty());
+            assert!(
+                s.chars().count() <= 14,
+                "{:?} 짧은 라벨이 너무 김: {}",
+                m,
+                s
+            );
+        }
+    }
+
+    #[test]
+    fn test_plate_layout_mode_can_be_forced_from_ui() {
+        let mesh = sample_vessel_mesh();
+        let m = compute_artifact_measurements(&mesh, ArtifactCategory::CompleteVessel);
+        let vsec = slice_mesh_with_fixed_plane(
+            &mesh,
+            None,
+            CutPlaneOrientation::VerticalLongitudinal,
+            0.0,
+            0.0,
+            0.25,
+        );
+        let input = PlateComposeInput {
+            title: "강제 모드",
+            measurements: &m,
+            vertical_section: &vsec,
+            horizontal_sections: &[],
+            occluded_spans: &[],
+            sherd_subtype: None,
+            sherd_strategy: None,
+            handle_attachment: None,
+            bead_subtype: None,
+            bead_drill_type: None,
+            wado_cut_ratio: None,
+            hemp_density_label: None,
+            flip_exterior_right: false,
+        };
+
+        // 자동 판정은 완형 표준.
+        assert_eq!(
+            compose_archaeological_plate(&input).mode,
+            PlateLayoutMode::CompleteVesselStandard
+        );
+
+        // 사용자가 고른 모드가 그대로 적용되어야 한다(8대 도판 모드 UI 노출용).
+        for forced in [
+            PlateLayoutMode::RimOrBaseSherdReconstructed,
+            PlateLayoutMode::BodyOrMicroSherdThreeColumn,
+            PlateLayoutMode::HandleOrSpoutSherd,
+            PlateLayoutMode::BeadJadeMicroPlate,
+            PlateLayoutMode::CommaJadeCurvedPlate,
+            PlateLayoutMode::RoofTileAndEavesPlate,
+            PlateLayoutMode::LithicAndCorrodedMetalPlate,
+        ] {
+            let plate = compose_archaeological_plate_with_mode(&input, forced);
+            assert_eq!(plate.mode, forced);
+        }
     }
 
     #[test]

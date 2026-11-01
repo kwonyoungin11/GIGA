@@ -22,9 +22,9 @@ use strata_core::{
     StacklessLbvh, TriMesh,
 };
 use strata_export::{
-    compose_archaeological_plate, compute_tiled_print_plan, export_ret_folder_package,
-    render_plate_to_illustrator_svg, render_plate_to_pdf_bytes, ComposedPlate2D, PaperSheetSize,
-    PlateComposeInput,
+    compose_archaeological_plate, compose_archaeological_plate_with_mode, compute_tiled_print_plan,
+    export_ret_folder_package, render_plate_to_illustrator_svg, render_plate_to_pdf_bytes,
+    ComposedPlate2D, PaperSheetSize, PlateComposeInput, PlateLayoutMode,
 };
 use strata_io::{load_any_mesh, Ap2Project};
 use strata_measure::{compute_artifact_measurements, ArtifactMeasurementReport};
@@ -74,6 +74,8 @@ struct ArtifactSlotEntry {
     horizontal_section: PlaneSliceResult,
     occluded_spans: Vec<OccludedDashedSpan>,
     composed_plate: ComposedPlate2D,
+    /// 사용자가 상단 드롭다운에서 강제 지정한 도판 모드 (`None` 이면 유물 분류로 자동 판정)
+    layout_mode_override: Option<PlateLayoutMode>,
 }
 
 impl ArtifactSlotEntry {
@@ -150,6 +152,7 @@ impl ArtifactSlotEntry {
             horizontal_section,
             occluded_spans,
             composed_plate,
+            layout_mode_override: None,
         }
     }
 
@@ -205,7 +208,7 @@ impl ArtifactSlotEntry {
                 h_secs.push(custom_sec);
             }
         }
-        self.composed_plate = compose_archaeological_plate(&PlateComposeInput {
+        let plate_input = PlateComposeInput {
             title: &self.title,
             measurements: &self.measurements,
             vertical_section: &self.vertical_section,
@@ -219,7 +222,11 @@ impl ArtifactSlotEntry {
             wado_cut_ratio: Some(0.64),
             hemp_density_label: Some(String::from("포목흔 8×10올/1㎠")),
             flip_exterior_right,
-        });
+        };
+        self.composed_plate = match self.layout_mode_override {
+            Some(mode) => compose_archaeological_plate_with_mode(&plate_input, mode),
+            None => compose_archaeological_plate(&plate_input),
+        };
     }
 }
 
@@ -931,6 +938,32 @@ impl eframe::App for StrataStudioApp {
                                 )
                             };
                             ui.colored_label(muted, compact_metric);
+                        }
+
+                        // 8대 도판 모드 수동 선택 (자동 판정 / ①~⑧)
+                        let current_mode = self
+                            .slots
+                            .get(self.selected_slot_idx)
+                            .and_then(|s| s.layout_mode_override);
+                        let mut chosen = current_mode;
+                        let combo_text = match current_mode {
+                            Some(m) => m.short_label_kr(),
+                            None => "도판 자동",
+                        };
+                        egui::ComboBox::from_id_salt("plate_layout_mode_combo")
+                            .selected_text(egui::RichText::new(combo_text).size(11.0))
+                            .width(88.0)
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(&mut chosen, None, "자동 판정");
+                                for m in PlateLayoutMode::ALL {
+                                    ui.selectable_value(&mut chosen, Some(m), m.short_label_kr());
+                                }
+                            });
+                        if chosen != current_mode {
+                            if let Some(slot) = self.slots.get_mut(self.selected_slot_idx) {
+                                slot.layout_mode_override = chosen;
+                                slot.rebuild_plate(self.flip_exterior_right, &self.view3d_state);
+                            }
                         }
                     });
                 });

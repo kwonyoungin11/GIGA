@@ -28,6 +28,32 @@ pub enum PlateLayoutMode {
 }
 
 impl PlateLayoutMode {
+    /// 8대 도판 모드 전체 목록(UI 선택 목록의 단일 출처).
+    pub const ALL: [PlateLayoutMode; 8] = [
+        PlateLayoutMode::CompleteVesselStandard,
+        PlateLayoutMode::RimOrBaseSherdReconstructed,
+        PlateLayoutMode::BodyOrMicroSherdThreeColumn,
+        PlateLayoutMode::HandleOrSpoutSherd,
+        PlateLayoutMode::BeadJadeMicroPlate,
+        PlateLayoutMode::CommaJadeCurvedPlate,
+        PlateLayoutMode::RoofTileAndEavesPlate,
+        PlateLayoutMode::LithicAndCorrodedMetalPlate,
+    ];
+
+    /// 드롭다운·칩에 쓰는 짧은 한글 라벨.
+    pub fn short_label_kr(self) -> &'static str {
+        match self {
+            Self::CompleteVesselStandard => "① 완형 표준",
+            Self::RimOrBaseSherdReconstructed => "② 구연·저부 복원",
+            Self::BodyOrMicroSherdThreeColumn => "③ 동체 3단 병렬",
+            Self::HandleOrSpoutSherd => "④ 파수·주구",
+            Self::BeadJadeMicroPlate => "⑤ 구슬·옥류",
+            Self::CommaJadeCurvedPlate => "⑥ 곡옥",
+            Self::RoofTileAndEavesPlate => "⑦ 기와·막새",
+            Self::LithicAndCorrodedMetalPlate => "⑧ 석기·금속기",
+        }
+    }
+
     pub fn select_for_artifact(
         category: ArtifactCategory,
         sherd_subtype: Option<SherdSubtype>,
@@ -808,13 +834,30 @@ fn append_measured_top_plan_view_paths(
 
 /// 실측치(`ArtifactMeasurementReport`)와 단면 윤곽(`PlaneSliceResult`)으로부터 8대 유물군 맞춤형 2D 도판을 합성한다.
 pub fn compose_archaeological_plate(input: &PlateComposeInput<'_>) -> ComposedPlate2D {
+    compose_archaeological_plate_inner(input, None)
+}
+
+/// 사용자가 지정한 도판 모드로 합성한다(`PlateLayoutMode` 8종 UI 노출용).
+pub fn compose_archaeological_plate_with_mode(
+    input: &PlateComposeInput<'_>,
+    mode: PlateLayoutMode,
+) -> ComposedPlate2D {
+    compose_archaeological_plate_inner(input, Some(mode))
+}
+
+fn compose_archaeological_plate_inner(
+    input: &PlateComposeInput<'_>,
+    mode_override: Option<PlateLayoutMode>,
+) -> ComposedPlate2D {
     let m = input.measurements;
-    let mode = PlateLayoutMode::select_for_artifact(
-        m.category,
-        input.sherd_subtype,
-        input.sherd_strategy,
-        input.bead_subtype,
-    );
+    let mode = mode_override.unwrap_or_else(|| {
+        PlateLayoutMode::select_for_artifact(
+            m.category,
+            input.sherd_subtype,
+            input.sherd_strategy,
+            input.bead_subtype,
+        )
+    });
 
     let max_d = m
         .max_belly_diameter_mm
