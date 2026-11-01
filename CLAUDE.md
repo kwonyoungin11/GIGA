@@ -39,6 +39,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File factory/scripts/factory-stat
 7. 5 MB 초과 바이너리, 스캔 데이터(`*.ply/*.obj/*.stl` — `GigaMesh/testdata/`의 5개 소형 파일 제외), 독점 자료는 커밋하지 않는다.
 8. 메인 체크아웃 `D:\gigamesh`의 미커밋 변경과 `feat/dongarch-studio` 브랜치(다른 도구가 커밋 중)는 건드리지 않는다. 병합 기준 SHA는 `factory/project-profile.md`에 고정한다.
 9. **기능 추가는 반드시 기능별 브랜치를 새로 만들어 그 위에서만 한다**(2026-11-01 사용자 지시). 기준은 현재 개발선 `feat/strata-arch3d-rust`. 브랜치 이름은 `feat/<주제>-<짧은 영문 슬러그>`(예: `feat/hsec-fixed-view`), 작업 단위는 **기능 하나 = 브랜치 하나 = 커밋 묶음 하나**. `feat/strata-arch3d-rust` 에 기능 커밋을 직접 쌓지 않는다. 검증(빌드·테스트·캡처) 통과 후 사용자 지시가 있을 때만 병합한다. 리팩터링·문서·설정 변경도 각각 `refactor/…`, `docs/…`, `chore/…` 브랜치에서 하는 것을 권장한다.
+10. **CI(GitHub Actions)는 실행하지 않는다**(2026-11-01 사용자 지시). 계정 결제 잠금으로 잡이 시작되지 않아 `strata-rust-ci.yml` 의 push·pull_request 자동 트리거를 꺼 두었다(수동 `workflow_dispatch` 만 남김). 검증은 로컬에서 `cargo fmt --all -- --check` · `cargo clippy --workspace --all-targets -- -D warnings` · `cargo test --workspace` · 실제 창 캡처로 수행한다. CI 재개는 사용자가 명시적으로 지시할 때만 한다.
 
 ## 5. `/factory` 사용법 (상세: `.claude/skills/factory/SKILL.md`)
 

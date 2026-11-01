@@ -1,18 +1,10 @@
 name: STRATA DongArch3D Rust CI (V1-V8 Harness)
 
+# 2026-11-01 사용자 지시: "이제부터 CI 는 하지 않는다".
+# GitHub 계정 결제 잠금으로 잡이 시작되지 않아 push 마다 실패 기록만 쌓이므로,
+# 자동 실행(push·pull_request)을 끄고 **수동 실행(workflow_dispatch)만** 남긴다.
+# 다시 자동화하려면 아래 push/pull_request 트리거를 되살린다.
 on:
-  push:
-    branches: [master, main, "feat/**", "factory/**"]
-    paths:
-      - "strata-arch3d/**"
-      - "docs/ui/**"
-      - ".github/workflows/strata-rust-ci.yml"
-  pull_request:
-    branches: [master, main]
-    paths:
-      - "strata-arch3d/**"
-      - "docs/ui/**"
-      - ".github/workflows/strata-rust-ci.yml"
   workflow_dispatch:
 
 concurrency:
