@@ -184,98 +184,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "arch3d-core"
-version = "2.0.0"
-dependencies = [
- "rayon",
- "serde",
- "serde_json",
- "thiserror 2.0.21",
-]
-
-[[package]]
-name = "arch3d-export"
-version = "2.0.0"
-dependencies = [
- "arch3d-core",
- "arch3d-io",
- "arch3d-measure",
- "arch3d-orient",
- "arch3d-section",
- "arch3d-shade",
- "image",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "arch3d-io"
-version = "2.0.0"
-dependencies = [
- "arch3d-core",
- "image",
- "serde",
- "serde_json",
- "thiserror 2.0.21",
-]
-
-[[package]]
-name = "arch3d-measure"
-version = "2.0.0"
-dependencies = [
- "arch3d-core",
- "arch3d-orient",
- "serde",
-]
-
-[[package]]
-name = "arch3d-orient"
-version = "2.0.0"
-dependencies = [
- "arch3d-core",
- "rayon",
- "serde",
-]
-
-[[package]]
-name = "arch3d-section"
-version = "2.0.0"
-dependencies = [
- "arch3d-core",
- "kurbo",
- "serde",
-]
-
-[[package]]
-name = "arch3d-shade"
-version = "2.0.0"
-dependencies = [
- "arch3d-core",
- "image",
- "rayon",
- "serde",
-]
-
-[[package]]
-name = "arch3d-studio"
-version = "2.0.0"
-dependencies = [
- "arch3d-core",
- "arch3d-export",
- "arch3d-io",
- "arch3d-measure",
- "arch3d-orient",
- "arch3d-section",
- "arch3d-shade",
- "eframe",
- "egui",
- "image",
- "rfd",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "arrayref"
 version = "0.3.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -983,6 +891,7 @@ dependencies = [
  "objc2-foundation 0.2.2",
  "parking_lot",
  "percent-encoding",
+ "pollster",
  "profiling",
  "raw-window-handle",
  "static_assertions",
@@ -990,6 +899,7 @@ dependencies = [
  "wasm-bindgen-futures",
  "web-sys",
  "web-time",
+ "wgpu",
  "winapi",
  "windows-sys 0.59.0",
  "winit",
@@ -3074,6 +2984,100 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 
 [[package]]
+name = "strata-core"
+version = "2.0.0"
+dependencies = [
+ "rayon",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "strata-export"
+version = "2.0.0"
+dependencies = [
+ "image",
+ "serde",
+ "serde_json",
+ "strata-core",
+ "strata-io",
+ "strata-measure",
+ "strata-orient",
+ "strata-section",
+ "strata-shade",
+]
+
+[[package]]
+name = "strata-io"
+version = "2.0.0"
+dependencies = [
+ "image",
+ "serde",
+ "serde_json",
+ "strata-core",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "strata-measure"
+version = "2.0.0"
+dependencies = [
+ "serde",
+ "strata-core",
+ "strata-orient",
+]
+
+[[package]]
+name = "strata-orient"
+version = "2.0.0"
+dependencies = [
+ "rayon",
+ "serde",
+ "strata-core",
+]
+
+[[package]]
+name = "strata-section"
+version = "2.0.0"
+dependencies = [
+ "kurbo",
+ "serde",
+ "strata-core",
+]
+
+[[package]]
+name = "strata-shade"
+version = "2.0.0"
+dependencies = [
+ "image",
+ "rayon",
+ "serde",
+ "strata-core",
+]
+
+[[package]]
+name = "strata-studio"
+version = "2.0.0"
+dependencies = [
+ "eframe",
+ "egui",
+ "image",
+ "rayon",
+ "rfd",
+ "serde",
+ "serde_json",
+ "strata-core",
+ "strata-export",
+ "strata-io",
+ "strata-measure",
+ "strata-orient",
+ "strata-section",
+ "strata-shade",
+ "wgpu",
+]
+
+[[package]]
 name = "strict-num"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3692,6 +3696,7 @@ dependencies = [
  "document-features",
  "js-sys",
  "log",
+ "naga",
  "parking_lot",
  "profiling",
  "raw-window-handle",
@@ -3740,6 +3745,7 @@ dependencies = [
  "arrayvec",
  "ash",
  "bitflags 2.13.2",
+ "block",
  "bytemuck",
  "cfg_aliases",
  "core-graphics-types",

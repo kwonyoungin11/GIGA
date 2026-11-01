@@ -1,0 +1,20 @@
+[package]
+name = "strata-export"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+strata-core.workspace = true
+strata-io.workspace = true
+strata-orient.workspace = true
+strata-measure.workspace = true
+strata-section.workspace = true
+strata-shade.workspace = true
+image.workspace = true
+serde.workspace = true
+serde_json.workspace = true

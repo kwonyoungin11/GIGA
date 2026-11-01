@@ -1,30 +1,30 @@
-# STRATA · 동국유물실측 (DongArch3D) Rust 마스터 디자인 설계서 및 엔진 명세서 (v2.0 전면 개정판)
+# STRATA · 동국유물실측 (DongSTRATA) Rust 마스터 디자인 설계서 및 엔진 명세서 (v2.0 전면 개정판)
 
 > [!IMPORTANT]
 > **문서 지위 및 절대 수칙 (어기면 즉시 중단)**:
 > 1. **용어 철칙**: 문서·코드·UI·주석·식별자 어디에도 금지어 영문 축약어를 절대 쓰지 않으며, 반드시 한국 고고학 표준 용어인 **'정밀 탁본' (`rubbing` / `Rubbing`)**만 사용합니다.
-> 2. **기존 기능 보존 및 C++ 1:1 계승 철칙**: 이미 구현된 8개 크레이트(`arch3d-core`, `arch3d-io`, `arch3d-orient`, `arch3d-measure`, `arch3d-section`, `arch3d-shade`, `arch3d-export`, `arch3d-studio`)의 기하 알고리즘과 테스트를 삭제·축약하지 않으며, 현행 C++ 원본 앱([`MainWindow.cpp`](file:///D:/_dongarch_build/wt/.worktrees/JOB-010/studio/src/MainWindow.cpp), [`View3D.cpp`](file:///D:/_dongarch_build/wt/.worktrees/JOB-010/studio/src/View3D.cpp), [`MeshRaster.cpp`](file:///D:/_dongarch_build/wt/.worktrees/JOB-010/studio/src/MeshRaster.cpp), [`SheetView.cpp`](file:///D:/_dongarch_build/wt/.worktrees/JOB-010/studio/src/SheetView.cpp), [`Plate.cpp`](file:///D:/_dongarch_build/wt/.worktrees/JOB-010/studio/src/Plate.cpp), [`Rubbing.cpp`](file:///D:/_dongarch_build/wt/.worktrees/JOB-010/studio/src/Rubbing.cpp), [`Ribbon.cpp`](file:///D:/_dongarch_build/wt/.worktrees/JOB-010/studio/src/Ribbon.cpp), [`MeshIO.cpp`](file:///D:/_dongarch_build/wt/.worktrees/JOB-010/studio/src/MeshIO.cpp))의 실제 렌더링·UI 파이프라인을 1:1로 계승합니다.
-> 3. **단계별 실제 실행 창(`arch3d-studio.exe`) 캡처 검증 철칙**: 가짜 오프스크린 사각형 드로잉 함수로 검증을 대체하는 행위를 전면 금지합니다. 반드시 **1단계씩 실제 네이티브 실행 창(`arch3d-studio.exe`)의 화면을 캡처**하여 사용자 확인을 받은 뒤 다음 단계로 넘어갑니다.
+> 2. **기존 기능 보존 및 C++ 1:1 계승 철칙**: 이미 구현된 8개 크레이트(`strata-core`, `strata-io`, `strata-orient`, `strata-measure`, `strata-section`, `strata-shade`, `strata-export`, `strata-studio`)의 기하 알고리즘과 테스트를 삭제·축약하지 않으며, 현행 C++ 원본 앱([`MainWindow.cpp`](file:///D:/_dongarch_build/wt/.worktrees/JOB-010/studio/src/MainWindow.cpp), [`View3D.cpp`](file:///D:/_dongarch_build/wt/.worktrees/JOB-010/studio/src/View3D.cpp), [`MeshRaster.cpp`](file:///D:/_dongarch_build/wt/.worktrees/JOB-010/studio/src/MeshRaster.cpp), [`SheetView.cpp`](file:///D:/_dongarch_build/wt/.worktrees/JOB-010/studio/src/SheetView.cpp), [`Plate.cpp`](file:///D:/_dongarch_build/wt/.worktrees/JOB-010/studio/src/Plate.cpp), [`Rubbing.cpp`](file:///D:/_dongarch_build/wt/.worktrees/JOB-010/studio/src/Rubbing.cpp), [`Ribbon.cpp`](file:///D:/_dongarch_build/wt/.worktrees/JOB-010/studio/src/Ribbon.cpp), [`MeshIO.cpp`](file:///D:/_dongarch_build/wt/.worktrees/JOB-010/studio/src/MeshIO.cpp))의 실제 렌더링·UI 파이프라인을 1:1로 계승합니다.
+> 3. **단계별 실제 실행 창(`strata-studio.exe`) 캡처 검증 철칙**: 가짜 오프스크린 사각형 드로잉 함수로 검증을 대체하는 행위를 전면 금지합니다. 반드시 **1단계씩 실제 네이티브 실행 창(`strata-studio.exe`)의 화면을 캡처**하여 사용자 확인을 받은 뒤 다음 단계로 넘어갑니다.
 
 ---
 
 ## 0. 요청 정리 및 이전 실패 원인 진단
 
 ### 0.1 무엇을 왜 하는가
-1. **목표**: 현행 C++ 기반 [`DongArch3DStudio`](file:///D:/_dongarch_build/wt/.worktrees/JOB-010/studio/src/MainWindow.cpp)의 검증된 작업 흐름([`UI_RULES.md`](file:///D:/_dongarch_build/wt/.worktrees/JOB-010/docs/ui/UI_RULES.md) R1~R8)과 **`STRATA · 디자인 기준` (`Strata_UI·UX_개선안.pdf`)**의 시각 체계를 100% 계승하고, 실제 발굴 유물 데이터 세트인 **완형 세트([`7지구 9호-7.obj`](file:///e:/034(7-실4-4)/7지구%209호-7.obj), [`.mtl`](file:///e:/034(7-실4-4)/7지구%209호-7.mtl), [`.ap2`](file:///e:/034(7-실4-4)/7지구%209호-7.ap2), [`ret/`](file:///e:/034(7-실4-4)/ret))** 및 **편조각 세트([`1.obj`](file:///e:/1/1.obj), [`.mtl`](file:///e:/1/1.mtl), [`1_1.jpg`](file:///e:/1/1_1.jpg))**가 3D 뷰포트와 2D 실측 도판에서 완벽히 로드·렌더링·출판되는 **고고학 유물 실측 전용 Rust 네이티브 애플리케이션(`STRATA · 동국유물실측`)**을 완성합니다.
+1. **목표**: 현행 C++ 기반 [`DongSTRATAStudio`](file:///D:/_dongarch_build/wt/.worktrees/JOB-010/studio/src/MainWindow.cpp)의 검증된 작업 흐름([`UI_RULES.md`](file:///D:/_dongarch_build/wt/.worktrees/JOB-010/docs/ui/UI_RULES.md) R1~R8)과 **`STRATA · 디자인 기준` (`Strata_UI·UX_개선안.pdf`)**의 시각 체계를 100% 계승하고, 실제 발굴 유물 데이터 세트인 **완형 세트([`7지구 9호-7.obj`](file:///e:/034(7-실4-4)/7지구%209호-7.obj), [`.mtl`](file:///e:/034(7-실4-4)/7지구%209호-7.mtl), [`.ap2`](file:///e:/034(7-실4-4)/7지구%209호-7.ap2), [`ret/`](file:///e:/034(7-실4-4)/ret))** 및 **편조각 세트([`1.obj`](file:///e:/1/1.obj), [`.mtl`](file:///e:/1/1.mtl), [`1_1.jpg`](file:///e:/1/1_1.jpg))**가 3D 뷰포트와 2D 실측 도판에서 완벽히 로드·렌더링·출판되는 **고고학 유물 실측 전용 Rust 네이티브 애플리케이션(`STRATA · 동국유물실측`)**을 완성합니다.
 2. **이전 구현이 실패했던 5대 근본 원인과 본 설계서의 해결책**:
 
 | 번호 | 이전 구현의 치명적 결함 | 발생 원인 (코드 및 구 설계도 결함) | 본 개정 설계서(v2.0)의 아키텍처 해결책 |
 |---|---|---|---|
-| **1** | **우측 73% 도판 영역(`SheetPane`) 백지 버그** | [`main.rs`](file:///D:/_dongarch_build/wt/.worktrees/STRATA-RUST/strata-arch3d/crates/arch3d-studio/src/main.rs)의 `ui.horizontal_top` 내부에서 `ui.vertical` 없이 `allocate_ui`를 호출하여, [`sheet_pane.rs`](file:///D:/_dongarch_build/wt/.worktrees/STRATA-RUST/strata-arch3d/crates/arch3d-studio/src/sheet_pane.rs)의 헤더·치수띠·도판 캔버스가 가로(`left_to_right`)로 배치되면서 메인 도판이 화면 오른쪽 밖(`x > window_width`)으로 밀려남 | `View3DPane`(27%)과 `SheetPane`(73%) 컨테이너 모두 `ui.allocate_ui_with_layout(..., egui::Layout::top_down(egui::Align::Min), ...)`으로 강제하여 상단 헤더(`32px`) → 치수띠(`28px`) → 도판 캔버스(남은 높이 100%)가 수직으로 정확히 배치되도록 명세 (§3.3, §4.3) |
-| **2** | **좌측 27% `View3DPane`이 점/선 1,600개만 찍는 가짜 와이어프레임** | 구 설계도에 3D 래스터라이저 명세가 빠져 [`view3d_pane.rs`](file:///D:/_dongarch_build/wt/.worktrees/STRATA-RUST/strata-arch3d/crates/arch3d-studio/src/view3d_pane.rs)에서 `mesh.triangles.len() / 1600`으로 건너뛰며 선분 2개씩만 그림 | C++ [`MeshRaster.cpp`](file:///D:/_dongarch_build/wt/.worktrees/JOB-010/studio/src/MeshRaster.cpp) 및 [`View3D.cpp`](file:///D:/_dongarch_build/wt/.worktrees/JOB-010/studio/src/View3D.cpp)를 1:1 계승한 **멀티스레드(`rayon`) Z-버퍼 솔리드 래스터라이저(실사 UV `.jpg` 텍스처 + 양면 조명 + 실시간 정밀 탁본 셰이딩 + X-Ray + 3분류 파단면 컬러 + 상단 `PlanView` 절단선 핸들 + `Z=0` 격자 + `#FF0000` 3D 단면선)** 명세 (§4.2) |
+| **1** | **우측 73% 도판 영역(`SheetPane`) 백지 버그** | [`main.rs`](file:///D:/_dongarch_build/wt/.worktrees/STRATA-RUST/strata-strata/crates/strata-studio/src/main.rs)의 `ui.horizontal_top` 내부에서 `ui.vertical` 없이 `allocate_ui`를 호출하여, [`sheet_pane.rs`](file:///D:/_dongarch_build/wt/.worktrees/STRATA-RUST/strata-strata/crates/strata-studio/src/sheet_pane.rs)의 헤더·치수띠·도판 캔버스가 가로(`left_to_right`)로 배치되면서 메인 도판이 화면 오른쪽 밖(`x > window_width`)으로 밀려남 | `View3DPane`(27%)과 `SheetPane`(73%) 컨테이너 모두 `ui.allocate_ui_with_layout(..., egui::Layout::top_down(egui::Align::Min), ...)`으로 강제하여 상단 헤더(`32px`) → 치수띠(`28px`) → 도판 캔버스(남은 높이 100%)가 수직으로 정확히 배치되도록 명세 (§3.3, §4.3) |
+| **2** | **좌측 27% `View3DPane`이 점/선 1,600개만 찍는 가짜 와이어프레임** | 구 설계도에 3D 래스터라이저 명세가 빠져 [`view3d_pane.rs`](file:///D:/_dongarch_build/wt/.worktrees/STRATA-RUST/strata-strata/crates/strata-studio/src/view3d_pane.rs)에서 `mesh.triangles.len() / 1600`으로 건너뛰며 선분 2개씩만 그림 | C++ [`MeshRaster.cpp`](file:///D:/_dongarch_build/wt/.worktrees/JOB-010/studio/src/MeshRaster.cpp) 및 [`View3D.cpp`](file:///D:/_dongarch_build/wt/.worktrees/JOB-010/studio/src/View3D.cpp)를 1:1 계승한 **멀티스레드(`rayon`) Z-버퍼 솔리드 래스터라이저(실사 UV `.jpg` 텍스처 + 양면 조명 + 실시간 정밀 탁본 셰이딩 + X-Ray + 3분류 파단면 컬러 + 상단 `PlanView` 절단선 핸들 + `Z=0` 격자 + `#FF0000` 3D 단면선)** 명세 (§4.2) |
 | **3** | **우측 2D 도판(`SheetPane`)에 정밀 탁본 래스터 영상과 `#141413` 먹물 채움 단면 누락** | 구 설계도가 도판을 단순 선분(`PlatePathElement`) 나열로만 정의하여 래스터 합성 및 오목 다각형 삼각분할 채움이 빠짐 | C++ [`SheetView.cpp`](file:///D:/_dongarch_build/wt/.worktrees/JOB-010/studio/src/SheetView.cpp) · [`Plate.cpp`](file:///D:/_dongarch_build/wt/.worktrees/JOB-010/studio/src/Plate.cpp) 및 [`ret/`](file:///e:/034(7-실4-4)/ret) 정답처럼 **① 외면·내면·상/하면 정밀 탁본 & 실사 텍스처 래스터 이미지(`egui::TextureHandle`) 합성, ② Ear-Clipping 삼각분할 기반 `#141413` 먹물 솔리드 채움 단면 폴리곤, ③ 중심축·수평 연결선(Bridge line), ④ 다중 뷰, ⑤ 정밀 축척자 및 줌/팬/두께 풍선** 명세 (§4.3) |
-| **4** | **`.obj` 로드 시 동반 `.mtl`/`.jpg`(UV 텍스처) 및 `.ap2`(정위치·절단면) 자동 연동 누락** | [`obj_loader.rs`](file:///D:/_dongarch_build/wt/.worktrees/STRATA-RUST/strata-arch3d/crates/arch3d-io/src/obj_loader.rs)가 `f v/vt/vn`에서 정점 좌표만 읽고 `vt`와 `.mtl` 이미지를 버렸으며, 동명 `.ap2` 자동 적용 파이프라인이 없었음 | `.obj` 로드 시 `vt` UV 인덱스 및 `.mtl` `map_Kd` 텍스처([`7지구 9호-7_1.jpg`](file:///e:/034(7-실4-4)/7지구%209호-7_1.jpg), [`1_1.jpg`](file:///e:/1/1_1.jpg))를 자동 디코딩·샘플링하고, 동명의 [`.ap2`](file:///e:/034(7-실4-4)/7지구%209호-7.ap2)가 있으면 `TransfomMatrix`와 저장된 절단면(`rc.PlanePosition0 = 18.0 mm` 등)을 즉시 자동 적용하도록 명세 (§4.1) |
-| **5** | **상단 리본(`TileRibbon`) `50×50` 타일에 벡터 아이콘 누락** | [`layout_r1.rs`](file:///D:/_dongarch_build/wt/.worktrees/STRATA-RUST/strata-arch3d/crates/arch3d-studio/src/layout_r1.rs)에서 타일 안에 알파벳 약자(`O`, `S` 등)만 출력함 | `Strata_UI·UX_개선안.pdf` 및 C++ [`Ribbon.cpp`](file:///D:/_dongarch_build/wt/.worktrees/JOB-010/studio/src/Ribbon.cpp) 기준대로 모든 `50×50` 타일 안에 **`1.75px` 흑연(`#141413`) 벡터 아이콘 + `#B5573A` 테라코타 포인트 + 그룹 구분선(`1px #DEDCD1`) + 하단 묶음 이름(`11px`)**을 그리도록 전 타일 아이콘 도형 명세 (§3.4) |
+| **4** | **`.obj` 로드 시 동반 `.mtl`/`.jpg`(UV 텍스처) 및 `.ap2`(정위치·절단면) 자동 연동 누락** | [`obj_loader.rs`](file:///D:/_dongarch_build/wt/.worktrees/STRATA-RUST/strata-strata/crates/strata-io/src/obj_loader.rs)가 `f v/vt/vn`에서 정점 좌표만 읽고 `vt`와 `.mtl` 이미지를 버렸으며, 동명 `.ap2` 자동 적용 파이프라인이 없었음 | `.obj` 로드 시 `vt` UV 인덱스 및 `.mtl` `map_Kd` 텍스처([`7지구 9호-7_1.jpg`](file:///e:/034(7-실4-4)/7지구%209호-7_1.jpg), [`1_1.jpg`](file:///e:/1/1_1.jpg))를 자동 디코딩·샘플링하고, 동명의 [`.ap2`](file:///e:/034(7-실4-4)/7지구%209호-7.ap2)가 있으면 `TransfomMatrix`와 저장된 절단면(`rc.PlanePosition0 = 18.0 mm` 등)을 즉시 자동 적용하도록 명세 (§4.1) |
+| **5** | **상단 리본(`TileRibbon`) `50×50` 타일에 벡터 아이콘 누락** | [`layout_r1.rs`](file:///D:/_dongarch_build/wt/.worktrees/STRATA-RUST/strata-strata/crates/strata-studio/src/layout_r1.rs)에서 타일 안에 알파벳 약자(`O`, `S` 등)만 출력함 | `Strata_UI·UX_개선안.pdf` 및 C++ [`Ribbon.cpp`](file:///D:/_dongarch_build/wt/.worktrees/JOB-010/studio/src/Ribbon.cpp) 기준대로 모든 `50×50` 타일 안에 **`1.75px` 흑연(`#141413`) 벡터 아이콘 + `#B5573A` 테라코타 포인트 + 그룹 구분선(`1px #DEDCD1`) + 하단 묶음 이름(`11px`)**을 그리도록 전 타일 아이콘 도형 명세 (§3.4) |
 
 ---
 
-## Part 1. 기준 데이터셋(`E:\`) 및 현행 C++ `DongArch3DStudio` 계승 명세
+## Part 1. 기준 데이터셋(`E:\`) 및 현행 C++ `DongSTRATAStudio` 계승 명세
 
 ### 1.1 필수 완벽 지원 실측 유물 데이터 세트 (`E:\` Golden-Master Datasets)
 
@@ -37,21 +37,21 @@
 
 ---
 
-### 1.2 현행 C++ `DongArch3DStudio`에서 반드시 고쳐 계승하는 5대 알고리즘 개선점
+### 1.2 현행 C++ `DongSTRATAStudio`에서 반드시 고쳐 계승하는 5대 알고리즘 개선점
 
-| 번호 | 현행 C++ 코드 위치 | 현행 C++ 한계점 | Rust 엔진(`strata-arch3d`) 해결 완료 사항 |
+| 번호 | 현행 C++ 코드 위치 | 현행 C++ 한계점 | Rust 엔진(`strata-strata`) 해결 완료 사항 |
 |---|---|---|---|
-| **1** | [`ArtifactDoc.cpp:2721`](file:///D:/_dongarch_build/wt/.worktrees/JOB-010/studio/src/ArtifactDoc.cpp#L2721) | `rimGapChart()`가 `112°`까지만 하드코딩되어 112°~360° 구연 접지 오차가 잘림 | `0°~360°` 전 구간(2° 간격 180빈) 스캔 + 편조각 잔존 호 구간 $[\theta_{\min}, \theta_{\max}]$ 표시 (`arch3d-orient::defect_scan`) |
+| **1** | [`ArtifactDoc.cpp:2721`](file:///D:/_dongarch_build/wt/.worktrees/JOB-010/studio/src/ArtifactDoc.cpp#L2721) | `rimGapChart()`가 `112°`까지만 하드코딩되어 112°~360° 구연 접지 오차가 잘림 | `0°~360°` 전 구간(2° 간격 180빈) 스캔 + 편조각 잔존 호 구간 $[\theta_{\min}, \theta_{\max}]$ 표시 (`strata-orient::defect_scan`) |
 | **2** | [`ArtifactDoc.cpp:2798-2810`](file:///D:/_dongarch_build/wt/.worktrees/JOB-010/studio/src/ArtifactDoc.cpp#L2798-L2810) | `angleDefectScore()`가 각도와 무관한 고정 분산을 계산하고 72개 각도를 단일 스레드로 순회 | `rayon` 병렬 슬라이싱으로 각도별 실제 구연/바닥 도달 결손·스캔 공백률·두께 연속성을 평가하여 추천 각도 산출 |
 | **3** | [`SheetView.cpp:243-256`](file:///D:/_dongarch_build/wt/.worktrees/JOB-010/studio/src/SheetView.cpp#L243-L256) | 유물 크기와 무관하게 높이 `H = 95.0 mm`에 보라색 점(`#6b4fc0`)을 찍는 하드코딩 | 하드코딩 완전 제거, 실제 최대경 높이 또는 사용자 지정 계측 높이에서만 `STRATA` 표준 토큰(`#B5573A`)으로 표시 |
-| **4** | [`MeshSlicer.h`](file:///D:/_dongarch_build/wt/.worktrees/JOB-010/GigaMesh/gui/src/dongarch/karch/MeshSlicer.h) | 편조각 파단면과 원래 내·외벽을 분리하지 않아 원 피팅 시 복원구경이 왜곡됨 | 이면각($>35^\circ$) 능선 + 곡률 거칠기 기반 **3분류(`외면` / `내면` / `파단면`)** 및 `Pratt + Taubin + Huber IRLS` 원호 피팅 |
+| **4** | [`MeshSlicer.h`](file:///D:/_dongarch_build/wt/.worktrees/JOB-010/다중스케일/gui/src/dongarch/karch/MeshSlicer.h) | 편조각 파단면과 원래 내·외벽을 분리하지 않아 원 피팅 시 복원구경이 왜곡됨 | 이면각($>35^\circ$) 능선 + 곡률 거칠기 기반 **3분류(`외면` / `내면` / `파단면`)** 및 `Pratt + Taubin + Huber IRLS` 원호 피팅 |
 | **5** | [`Plate.cpp`](file:///D:/_dongarch_build/wt/.worktrees/JOB-010/studio/src/Plate.cpp) | 구슬·옥류(`Ⅰa·Ⅰb·Ⅰb'·Ⅱb` 4대 천공, `2:1~10:1` 초확대 축척) 및 동체편 3단 병렬 도판 미지원 | **6대 유물군 전용 기하 엔진 + 8종 표준 보고서 도판 조판기** 탑재 |
 
 ---
 
 ## Part 2. 전 유물군(완형·편조각 5종·구슬/옥류 4종·기와·석기·금속) 기하·도판 엔진 명세
 
-### 2.1 편조각(Potsherds) 파단면 3분할 및 복원 엔진 (`arch3d-orient` & `arch3d-section`)
+### 2.1 편조각(Potsherds) 파단면 3분할 및 복원 엔진 (`strata-orient` & `strata-section`)
 1. **파단면(Fracture Surface) 3분할 (`fracture_seg.rs`)**:
    - 인접 삼각형 법선 이면각($> 35^\circ$) 능선 그래프와 정점 곡률 거칠기($\sigma_\kappa$), 두께 방향 법선 부호를 결합하여 모든 메쉬 삼각형과 정점을 **`외면(Outer)`**, **`내면(Inner)`**, **`파단면(Fracture)`** 3개 영역으로 자동 분할합니다.
    - 3D 뷰포트(`View3DPane`)에서 `파단면 표시`를 켜면 외면(청록/점토), 내면(황토), 파단면(테라코타 적갈색 `#B5573A`)이 즉시 구분 렌더링되며, 회전축 및 복원구경 계산 시 파단면은 100% 배제됩니다.
@@ -158,7 +158,7 @@
 | 아이콘 종류 (`TileIconKind`) | 적용 타일 | 벡터 드로잉 기하 명세 (`1.75px #141413` 주 선 + `#B5573A` 강조) |
 |---|---|---|
 | **`FolderOpen`** | `열기`, `폴더 일괄실측` | 열린 폴더 탭 윤곽(`#141413`) + 폴더 위로 올라오는 테라코타 화살표(`#B5573A`) |
-| **`SaveDisk`** | `저장`, `Arch3D 호환 저장` | 플로피/문서 외곽 사각형 + 상단 라벨 셔터(`#141413`) + 하단 완료 체크/원점(`#B5573A`) |
+| **`SaveDisk`** | `저장`, `STRATA 호환 저장` | 플로피/문서 외곽 사각형 + 상단 라벨 셔터(`#141413`) + 하단 완료 체크/원점(`#B5573A`) |
 | **`ArtifactKindCube`** | `유물 종류`, `완형/편/구슬` | 토기 단면 실루엣과 편조각 격자 외곽(`#141413`) + 중심 회전축 수직 점선(`#B5573A`) |
 | **`AutoUprightAxis`** | `자동 세우기`, `중심축 맞춤` | 수평 바닥 기준선(`#141413`) + 수직 중심축 화살표(`#B5573A`) + 좌우 대칭 유물 윤곽선 |
 | **`RimOrBaseLevel`** | `바닥 수평`, `구연 수평`, `3점 찍기` | 유물 구연/바닥 수평선(`#141413`) + 수평선 위의 3개 정합 기준점 원(`#B5573A` 솔리드 반경 `2.5px`) |
@@ -174,7 +174,7 @@
 
 ## Part 4. 핵심 I/O · 3D Z-버퍼 뷰포트 · 2D 실측 도판 상세 기술 명세
 
-### 4.1 `.obj` + `.mtl`/`.jpg`(UV 텍스처) 및 `.ap2`(정위치·절단면) 자동 연동 파이프라인 (`arch3d-io`)
+### 4.1 `.obj` + `.mtl`/`.jpg`(UV 텍스처) 및 `.ap2`(정위치·절단면) 자동 연동 파이프라인 (`strata-io`)
 
 1. **UV 좌표(`vt`) 및 `.mtl` 실사 텍스처(`.jpg`/`.png`) 자동 로더 (`obj_loader.rs`)**:
    - `.obj` 파싱 시 `v x y z`, `vt u v`, `vn nx ny nz`와 면 정의 `f v1/vt1/vn1 v2/vt2/vn2 v3/vt3/vn3`를 모두 파싱하여 `TriMesh`에 다음 데이터를 저장합니다:
@@ -192,7 +192,7 @@
 
 ### 4.2 좌측 27% `View3DPane` — 월드 고정 레이저 절단틀 · 1/4 유물 절개(Cutaway) · 턴테이블 회전 & Z-버퍼 3D 렌더러 (`view3d_pane.rs`)
 
-사용자가 지정한 [`archaeo3d_rs_gigamesh_arch3d_rust_gate_1 (1).html`](file:///c:/Users/kyi25/Downloads/archaeo3d_rs_gigamesh_arch3d_rust_gate_1%20(1).html)의 **3D 단면 생성 방식 · 유물 턴테이블 회전 방식 · 유물 절개(Cutaway) 방식**과 기존 C++ [`MeshRaster.cpp`](file:///D:/_dongarch_build/wt/.worktrees/JOB-010/studio/src/MeshRaster.cpp)의 Z-버퍼/UV 텍스처/정밀 탁본 셰이딩을 결합하여 구현합니다. (전체 화면 디자인과 5단 레이아웃은 원래 계획인 `STRATA · 디자인 기준`을 그대로 유지합니다.)
+STRATA · 동국유물실측 고유의 **3D 단면 생성 방식 · 유물 턴테이블 회전 방식 · 유물 절개(Cutaway) 방식**과 Z-버퍼/UV 텍스처/정밀 탁본 셰이딩을 결합하여 구현합니다. (전체 화면 디자인과 5단 레이아웃은 원래 계획인 `STRATA · 디자인 기준`을 그대로 유지합니다.)
 
 1. **월드 고정 레이저 절단틀(`P_cut: Y = ΔY`) + 유물 턴테이블 회전(`ψ`) + 미세 기울기(`tilt`) 좌표 변환 (`local_to_world`)**:
    - 절단 평면(`P_cut: Y = cut_y_mm`)은 월드 공간에 **고정**되어 있고, 유물 메쉬 정점 $(l_x, l_y, l_z)$만 수직 회전축 둘레로 $\psi \in [0^\circ, 359^\circ]$ 턴테이블 회전하며 바닥/천공축 기울기 $\text{tilt} \in [-25.0^\circ, +25.0^\circ]$ (`0.1°` 단위)가 적용됩니다:
@@ -245,16 +245,16 @@
 
 ---
 
-## Part 5. 5단계 점진적 구현 및 실제 실행 창(`arch3d-studio.exe`) 캡처 검증 게이트
+## Part 5. 5단계 점진적 구현 및 실제 실행 창(`strata-studio.exe`) 캡처 검증 게이트
 
 > [!IMPORTANT]
 > **한 번에 다 짜지 말고 1단계씩 실제 실행 창 캡처로 검증받을 것**:
-> 코드는 아래 5단계로 나누어 진행하며, **각 단계가 끝날 때마다 실제 `arch3d-studio.exe` 네이티브 창을 실행하여 스왑체인 프레임버퍼(`egui::ViewportCommand::Screenshot`)를 캡처한 실제 창 이미지를 사용자에게 제시하고 승인을 받은 뒤에만 다음 단계로 진행**합니다.
+> 코드는 아래 5단계로 나누어 진행하며, **각 단계가 끝날 때마다 실제 `strata-studio.exe` 네이티브 창을 실행하여 스왑체인 프레임버퍼(`egui::ViewportCommand::Screenshot`)를 캡처한 실제 창 이미지를 사용자에게 제시하고 승인을 받은 뒤에만 다음 단계로 진행**합니다.
 
 | 단계 | 구현 대상 및 핵심 작업 내용 | 완료 기준 및 검증 방법 (실제 창 캡처 필수) |
 |---|---|---|
-| **Step 1** | **우측 73% `SheetPane` 백지 버그 해결 + 상단 리본 `50×50` 벡터 아이콘 구현**<br>• [`main.rs`](file:///D:/_dongarch_build/wt/.worktrees/STRATA-RUST/strata-arch3d/crates/arch3d-studio/src/main.rs), [`view3d_pane.rs`](file:///D:/_dongarch_build/wt/.worktrees/STRATA-RUST/strata-arch3d/crates/arch3d-studio/src/view3d_pane.rs), [`sheet_pane.rs`](file:///D:/_dongarch_build/wt/.worktrees/STRATA-RUST/strata-arch3d/crates/arch3d-studio/src/sheet_pane.rs)의 패널 컨테이너를 `Layout::top_down`으로 수정하여 우측 73% 도판 정상 표시<br>• [`layout_r1.rs`](file:///D:/_dongarch_build/wt/.worktrees/STRATA-RUST/strata-arch3d/crates/arch3d-studio/src/layout_r1.rs)의 모든 `50×50` 리본 타일에 `1.75px` `#141413` 흑연 + `#B5573A` 테라코타 전용 벡터 아이콘 및 그룹 구분선/묶음명 구현<br>• `arch3d-studio.exe` 실제 네이티브 창 프레임버퍼 캡처 기능(`--capture-window <path.png>`) 연결 | • `cargo test -p arch3d-studio`<br>• **실제 실행된 `arch3d-studio.exe` 창 캡처 이미지에서 ① 우측 73% 도판 용지가 정상 표시되고 ② 상단 리본 `50×50` 타일에 벡터 아이콘이 그려진 것을 사용자에게 확인받음** |
-| **Step 2** | **`.obj` + `.mtl`/`.jpg` (UV 텍스처) 및 `.ap2` (정위치·절단면) 자동 연동**<br>• [`mesh.rs`](file:///D:/_dongarch_build/wt/.worktrees/STRATA-RUST/strata-arch3d/crates/arch3d-core/src/mesh.rs) 및 [`obj_loader.rs`](file:///D:/_dongarch_build/wt/.worktrees/STRATA-RUST/strata-arch3d/crates/arch3d-io/src/obj_loader.rs)에서 `vt` UV 좌표와 `.mtl` `map_Kd` 이미지(`7지구 9호-7_1.jpg`, `1_1.jpg`) 로드 및 UV 컬러 샘플링<br>• 동명 `.ap2`(`7지구 9호-7.ap2`) 자동 감지, `TransfomMatrix` 정위치 변환 및 `rc.PlanePosition0 = 18.0 mm` 절단면 자동 적용<br>• 스튜디오 시작 시 슬롯 1에 `7지구 9호-7.obj`(완형 세트), 슬롯 2에 `1.obj`(편조각 세트) 자동 로드 | • `cargo test -p arch3d-io`<br>• **실제 실행된 `arch3d-studio.exe` 창 캡처 이미지에서 `7지구 9호-7`과 `1.obj`의 `.ap2` 정위치 치수(`125.2 × 123.9 × 63.1 mm`) 및 `.jpg` 텍스처/절단면(`18.0 mm`) 연동 상태를 사용자에게 확인받음** |
-| **Step 3** | **좌측 27% `View3DPane` 진짜 3D Z-버퍼 렌더러 구현**<br>• [`view3d_pane.rs`](file:///D:/_dongarch_build/wt/.worktrees/STRATA-RUST/strata-arch3d/crates/arch3d-studio/src/view3d_pane.rs)의 가짜 선분 샘플링을 제거하고 `rayon` 멀티스레드 Z-버퍼 삼각형 래스터라이저 구현<br>• ① 실사 UV `.jpg` 텍스처 매핑, ② 솔리드 양면 조명, ③ 실시간 정밀 탁본 셰이딩, ④ X-Ray, ⑤ 3분류 파단면 컬러 오버레이<br>• 상단 `PlanView` 절단선 핸들 + `Z=0` 바닥 격자 + 3D `A–A'` 절단면 및 `#FF0000` 단면선 + 마우스 회전/줌/팬 | • `cargo test -p arch3d-studio`<br>• **실제 실행된 `arch3d-studio.exe` 창 캡처 이미지에서 좌측 27% 3D 뷰포트에 진짜 Z-버퍼 솔리드/UV 텍스처/실시간 정밀 탁본/파단면 3분류가 렌더링된 것을 사용자에게 확인받음** |
-| **Step 4** | **우측 73% `SheetPane` 정밀 탁본 래스터 영상 + `#141413` 먹물 솔리드 채움 단면 + 다중 뷰 합성**<br>• [`plate_composer.rs`](file:///D:/_dongarch_build/wt/.worktrees/STRATA-RUST/strata-arch3d/crates/arch3d-export/src/plate_composer.rs) 및 [`sheet_pane.rs`](file:///D:/_dongarch_build/wt/.worktrees/STRATA-RUST/strata-arch3d/crates/arch3d-studio/src/sheet_pane.rs)에서 외면·내면·외저면 고해상도 정밀 탁본(`Rubbing`) 및 실사 텍스처 래스터 이미지를 생성하여 도판 용지 위에 `TextureHandle`로 합성<br>• 닫힌 단면 루프 Ear-Clipping 삼각분할 기반 **`#141413` 먹물 솔리드 채움 단면 폴리곤** 렌더링<br>• 중심축선·구연/저부 수평 연결선(Bridge line)·다중 뷰(`ret/` 호환 정면+저면 / 편조각 3단 병렬)·교차 흑백 축척자·마우스 줌/팬/두께 풍선 구현 | • `cargo test -p arch3d-export -p arch3d-studio`<br>• **실제 실행된 `arch3d-studio.exe` 창 캡처 이미지에서 우측 73% 도판 용지 위에 정밀 탁본 래스터 영상과 `#141413` 먹물 채움 단면, 중심축/연결선, 다중 뷰, 축척자가 합성된 것을 사용자에게 확인받음** |
+| **Step 1** | **우측 73% `SheetPane` 백지 버그 해결 + 상단 리본 `50×50` 벡터 아이콘 구현**<br>• [`main.rs`](file:///D:/_dongarch_build/wt/.worktrees/STRATA-RUST/strata-strata/crates/strata-studio/src/main.rs), [`view3d_pane.rs`](file:///D:/_dongarch_build/wt/.worktrees/STRATA-RUST/strata-strata/crates/strata-studio/src/view3d_pane.rs), [`sheet_pane.rs`](file:///D:/_dongarch_build/wt/.worktrees/STRATA-RUST/strata-strata/crates/strata-studio/src/sheet_pane.rs)의 패널 컨테이너를 `Layout::top_down`으로 수정하여 우측 73% 도판 정상 표시<br>• [`layout_r1.rs`](file:///D:/_dongarch_build/wt/.worktrees/STRATA-RUST/strata-strata/crates/strata-studio/src/layout_r1.rs)의 모든 `50×50` 리본 타일에 `1.75px` `#141413` 흑연 + `#B5573A` 테라코타 전용 벡터 아이콘 및 그룹 구분선/묶음명 구현<br>• `strata-studio.exe` 실제 네이티브 창 프레임버퍼 캡처 기능(`--capture-window <path.png>`) 연결 | • `cargo test -p strata-studio`<br>• **실제 실행된 `strata-studio.exe` 창 캡처 이미지에서 ① 우측 73% 도판 용지가 정상 표시되고 ② 상단 리본 `50×50` 타일에 벡터 아이콘이 그려진 것을 사용자에게 확인받음** |
+| **Step 2** | **`.obj` + `.mtl`/`.jpg` (UV 텍스처) 및 `.ap2` (정위치·절단면) 자동 연동**<br>• [`mesh.rs`](file:///D:/_dongarch_build/wt/.worktrees/STRATA-RUST/strata-strata/crates/strata-core/src/mesh.rs) 및 [`obj_loader.rs`](file:///D:/_dongarch_build/wt/.worktrees/STRATA-RUST/strata-strata/crates/strata-io/src/obj_loader.rs)에서 `vt` UV 좌표와 `.mtl` `map_Kd` 이미지(`7지구 9호-7_1.jpg`, `1_1.jpg`) 로드 및 UV 컬러 샘플링<br>• 동명 `.ap2`(`7지구 9호-7.ap2`) 자동 감지, `TransfomMatrix` 정위치 변환 및 `rc.PlanePosition0 = 18.0 mm` 절단면 자동 적용<br>• 스튜디오 시작 시 슬롯 1에 `7지구 9호-7.obj`(완형 세트), 슬롯 2에 `1.obj`(편조각 세트) 자동 로드 | • `cargo test -p strata-io`<br>• **실제 실행된 `strata-studio.exe` 창 캡처 이미지에서 `7지구 9호-7`과 `1.obj`의 `.ap2` 정위치 치수(`125.2 × 123.9 × 63.1 mm`) 및 `.jpg` 텍스처/절단면(`18.0 mm`) 연동 상태를 사용자에게 확인받음** |
+| **Step 3** | **좌측 27% `View3DPane` 진짜 3D Z-버퍼 렌더러 구현**<br>• [`view3d_pane.rs`](file:///D:/_dongarch_build/wt/.worktrees/STRATA-RUST/strata-strata/crates/strata-studio/src/view3d_pane.rs)의 가짜 선분 샘플링을 제거하고 `rayon` 멀티스레드 Z-버퍼 삼각형 래스터라이저 구현<br>• ① 실사 UV `.jpg` 텍스처 매핑, ② 솔리드 양면 조명, ③ 실시간 정밀 탁본 셰이딩, ④ X-Ray, ⑤ 3분류 파단면 컬러 오버레이<br>• 상단 `PlanView` 절단선 핸들 + `Z=0` 바닥 격자 + 3D `A–A'` 절단면 및 `#FF0000` 단면선 + 마우스 회전/줌/팬 | • `cargo test -p strata-studio`<br>• **실제 실행된 `strata-studio.exe` 창 캡처 이미지에서 좌측 27% 3D 뷰포트에 진짜 Z-버퍼 솔리드/UV 텍스처/실시간 정밀 탁본/파단면 3분류가 렌더링된 것을 사용자에게 확인받음** |
+| **Step 4** | **우측 73% `SheetPane` 정밀 탁본 래스터 영상 + `#141413` 먹물 솔리드 채움 단면 + 다중 뷰 합성**<br>• [`plate_composer.rs`](file:///D:/_dongarch_build/wt/.worktrees/STRATA-RUST/strata-strata/crates/strata-export/src/plate_composer.rs) 및 [`sheet_pane.rs`](file:///D:/_dongarch_build/wt/.worktrees/STRATA-RUST/strata-strata/crates/strata-studio/src/sheet_pane.rs)에서 외면·내면·외저면 고해상도 정밀 탁본(`Rubbing`) 및 실사 텍스처 래스터 이미지를 생성하여 도판 용지 위에 `TextureHandle`로 합성<br>• 닫힌 단면 루프 Ear-Clipping 삼각분할 기반 **`#141413` 먹물 솔리드 채움 단면 폴리곤** 렌더링<br>• 중심축선·구연/저부 수평 연결선(Bridge line)·다중 뷰(`ret/` 호환 정면+저면 / 편조각 3단 병렬)·교차 흑백 축척자·마우스 줌/팬/두께 풍선 구현 | • `cargo test -p strata-export -p strata-studio`<br>• **실제 실행된 `strata-studio.exe` 창 캡처 이미지에서 우측 73% 도판 용지 위에 정밀 탁본 래스터 영상과 `#141413` 먹물 채움 단면, 중심축/연결선, 다중 뷰, 축척자가 합성된 것을 사용자에게 확인받음** |
 | **Step 5** | **SVG / PDF / DXF / `ret/` 출력 정합 및 전체 하네스·독립 Diff 감사**<br>• `ret/cutline_rc0.svg` 호환 3차 베지어 SVG·래스터 출력 정합 확인<br>• `cargo clippy --workspace --all-targets -- -D warnings` (경고 0건) 및 `cargo test --workspace` 전수 통과<br>• 독립 `research` 서브에이전트 `git diff` 교차 검토(`X1~X4`) 및 최종 보고 | • `cargo clippy --workspace --all-targets -- -D warnings` (종료 코드 `0`)<br>• `cargo test --workspace` (종료 코드 `0`)<br>• 금지어 영문 축약어 전수 검사 **0건** |

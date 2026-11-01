@@ -1,14 +1,14 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/arch3d-core",
-    "crates/arch3d-io",
-    "crates/arch3d-orient",
-    "crates/arch3d-measure",
-    "crates/arch3d-section",
-    "crates/arch3d-shade",
-    "crates/arch3d-export",
-    "crates/arch3d-studio",
+    "crates/strata-core",
+    "crates/strata-io",
+    "crates/strata-orient",
+    "crates/strata-measure",
+    "crates/strata-section",
+    "crates/strata-shade",
+    "crates/strata-export",
+    "crates/strata-studio",
 ]
 
 [workspace.package]
@@ -32,13 +32,14 @@ thiserror = "2.0"
 rayon = "1.10"
 kurbo = "0.11"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
-eframe = "0.31"
+eframe = { version = "0.31", features = ["wgpu", "glow"] }
 egui = "0.31"
+wgpu = { version = "24.0.5", default-features = false, features = ["wgsl"] }
 rfd = "0.15"
-arch3d-core = { path = "crates/arch3d-core" }
-arch3d-io = { path = "crates/arch3d-io" }
-arch3d-orient = { path = "crates/arch3d-orient" }
-arch3d-measure = { path = "crates/arch3d-measure" }
-arch3d-section = { path = "crates/arch3d-section" }
-arch3d-shade = { path = "crates/arch3d-shade" }
-arch3d-export = { path = "crates/arch3d-export" }
+strata-core = { path = "crates/strata-core" }
+strata-io = { path = "crates/strata-io" }
+strata-orient = { path = "crates/strata-orient" }
+strata-measure = { path = "crates/strata-measure" }
+strata-section = { path = "crates/strata-section" }
+strata-shade = { path = "crates/strata-shade" }
+strata-export = { path = "crates/strata-export" }
