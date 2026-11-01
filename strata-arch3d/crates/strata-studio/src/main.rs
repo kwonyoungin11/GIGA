@@ -1,3 +1,5 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 pub mod dialogs;
 pub mod gpu_backend;
 pub mod harness_runner;
@@ -246,6 +248,7 @@ pub struct StrataStudioApp {
     last_rebuilt_custom_line: Option<[[f64; 2]; 2]>,
     active_dialog: Option<ActiveStrataDialog>,
     status_message: String,
+    deferred_startup_load: bool,
     capture_window_path: Option<PathBuf>,
     capture_frames_rendered: u32,
     screenshot_requested: bool,
@@ -261,39 +264,14 @@ impl StrataStudioApp {
         configure_korean_fonts_and_strata_theme(&cc.egui_ctx);
 
         let mut slots = Vec::new();
-        let p_7obj = Path::new(r"E:\034(7-실4-4)\7지구 9호-7.obj");
-        if p_7obj.exists() {
-            if let Ok(aligned) = load_any_mesh(p_7obj) {
-                slots.push(ArtifactSlotEntry::from_mesh(
-                    "7지구 9호-7 (완형 토기 세트)",
-                    Some(p_7obj.to_path_buf()),
-                    ArtifactCategory::CompleteVessel,
-                    None,
-                    None,
-                    None,
-                    aligned,
-                ));
-            }
-        }
-
-        let p_1obj = Path::new(r"E:\1\1.obj");
-        if p_1obj.exists() {
-            if let Ok(m1) = load_any_mesh(p_1obj) {
-                slots.push(ArtifactSlotEntry::from_mesh(
-                    "1.obj (구연·저부 편조각 세트)",
-                    Some(p_1obj.to_path_buf()),
-                    ArtifactCategory::Potsherd,
-                    Some(SherdSubtype::RimSherd),
-                    None,
-                    None,
-                    m1,
-                ));
-            }
-        }
-
-        if slots.is_empty() {
+        let deferred_startup_load = if capture_window_path.is_some() {
+            Self::load_real_or_preset_slots(&mut slots);
+            false
+        } else {
+            // 창을 0.1초 만에 즉시 띄우기 위해 첫 프레임에서는 경량 프리셋 슬롯을 먼저 넣고,
+            // 창이 화면에 그려진 직후(frame >= 2) 실제 고용량 스캔 OBJ 유물을 로드한다!
             slots.push(Self::make_preset_slot(
-                "표준 발굴 유물 (기본 실측 샘플)",
+                "실측 스캔 유물 불러오는 중...",
                 ArtifactCategory::CompleteVessel,
                 None,
                 None,
@@ -301,7 +279,8 @@ impl StrataStudioApp {
                 58.0,
                 64.0,
             ));
-        }
+            true
+        };
 
         let mut splash = SplashState::default();
         if capture_window_path.is_some() {
@@ -352,9 +331,55 @@ impl StrataStudioApp {
             status_message: format!(
                 "{gpu_label} · 국가유산청 발굴조사보고서 실측도면 표준 양식 · 1:1 정밀 방안지"
             ),
+            deferred_startup_load,
             capture_window_path,
             capture_frames_rendered: 0,
             screenshot_requested: false,
+        }
+    }
+
+    fn load_real_or_preset_slots(slots: &mut Vec<ArtifactSlotEntry>) {
+        slots.clear();
+        let p_7obj = Path::new(r"E:\034(7-실4-4)\7지구 9호-7.obj");
+        if p_7obj.exists() {
+            if let Ok(aligned) = load_any_mesh(p_7obj) {
+                slots.push(ArtifactSlotEntry::from_mesh(
+                    "7지구 9호-7 (완형 토기 세트)",
+                    Some(p_7obj.to_path_buf()),
+                    ArtifactCategory::CompleteVessel,
+                    None,
+                    None,
+                    None,
+                    aligned,
+                ));
+            }
+        }
+
+        let p_1obj = Path::new(r"E:\1\1.obj");
+        if p_1obj.exists() {
+            if let Ok(m1) = load_any_mesh(p_1obj) {
+                slots.push(ArtifactSlotEntry::from_mesh(
+                    "1.obj (구연·저부 편조각 세트)",
+                    Some(p_1obj.to_path_buf()),
+                    ArtifactCategory::Potsherd,
+                    Some(SherdSubtype::RimSherd),
+                    None,
+                    None,
+                    m1,
+                ));
+            }
+        }
+
+        if slots.is_empty() {
+            slots.push(Self::make_preset_slot(
+                "표준 발굴 유물 (기본 실측 샘플)",
+                ArtifactCategory::CompleteVessel,
+                None,
+                None,
+                None,
+                58.0,
+                64.0,
+            ));
         }
     }
 
@@ -703,11 +728,18 @@ impl eframe::App for StrataStudioApp {
             }
         }
 
-        if self.capture_window_path.is_none() && self.capture_frames_rendered < 3 {
+        if self.capture_window_path.is_none() && self.capture_frames_rendered < 4 {
             self.capture_frames_rendered += 1;
             ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
             ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(egui::WindowLevel::Normal));
             ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+            ctx.request_repaint();
+            if self.capture_frames_rendered >= 2 && self.deferred_startup_load {
+                self.deferred_startup_load = false;
+                Self::load_real_or_preset_slots(&mut self.slots);
+                self.selected_slot_idx = self.selected_slot_idx.min(self.slots.len().saturating_sub(1));
+                ctx.request_repaint();
+            }
         }
 
         if !self.splash.is_finished() {
@@ -1169,7 +1201,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .with_visible(true)
             .with_active(true),
         renderer: eframe::Renderer::Wgpu,
-        hardware_acceleration: eframe::HardwareAcceleration::Required,
+        hardware_acceleration: eframe::HardwareAcceleration::Preferred,
         wgpu_options: build_high_performance_wgpu_config(None),
         ..Default::default()
     };
