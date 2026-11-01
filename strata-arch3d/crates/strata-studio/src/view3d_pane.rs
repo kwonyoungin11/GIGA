@@ -498,6 +498,20 @@ impl View3DPaneState {
         }
     }
 
+    /// 새 유물을 열 때 수평횡단면 절단선의 기본 높이를 잡는다.
+    /// `.ap2` 절단면이 있으면 그 값을, 없으면 기고의 절반을 쓴다.
+    /// **높이가 2mm 미만인 편평 유물(석기·소편)에서도 경계가 뒤집히지 않아야 한다.**
+    pub fn initialize_top_cut_for_mesh(&mut self, mesh: &TriMesh) {
+        if self.top_cut_initialized_for_mesh == mesh.name {
+            return;
+        }
+        let height_mm = mesh.bbox.extents()[2].max(1.0);
+        self.top_cut_initialized_for_mesh = mesh.name.clone();
+        self.top_cut_z_mm = mesh
+            .ap2_cut_offset_mm
+            .unwrap_or_else(|| clamp_ordered(height_mm * 0.50, 2.0, height_mm));
+    }
+
     /// Image 5: 직상방 뷰 좌측 상단 `[+ 단면추가]` 버튼 클릭 시 초기 사용자 단면선(`A — A'`)을 생성한다.
     pub fn add_default_custom_section_line(&mut self, radius_mm: f64) {
         let span = (radius_mm * 0.92).max(18.0);
@@ -729,7 +743,10 @@ pub fn slice_transformed_mesh_world_locked(
         offset_mm: if is_vertical_y_plane {
             state.cut_y_mm
         } else {
-            mesh.bbox.min[2] + state.top_cut_z_mm
+            // 변환된 월드 좌표는 `z = 0`(유물 바닥) 기준이므로, 절단면 높이도 그 기준값을 그대로 쓴다.
+            // (예전에는 `bbox.min[2]` 를 더해 100mm 이상 어긋난 값이 우측 도판 `수평 횡단면 (Z=…)`
+            //  라벨·절단 위치선에 찍혔다.)
+            state.top_cut_z_mm
         },
         segments_2d,
         polylines_2d,
@@ -1761,6 +1778,16 @@ pub fn extract_3d_plane_intersection_segments_full(
     segs
 }
 
+/// 경계가 뒤집힌 경우에도 패닉 없이 `[a, b]`(순서 보정) 범위로 클램프한다.
+/// 편평하거나 아주 얇은 유물(석기·소편)에서 `min > max` 로 `f64::clamp` 가 패닉하는 것을 막는다.
+fn clamp_ordered(value: f64, a: f64, b: f64) -> f64 {
+    if value.is_nan() {
+        return a.min(b);
+    }
+    let (lo, hi) = if a <= b { (a, b) } else { (b, a) };
+    value.clamp(lo, hi)
+}
+
 fn draw_vertical_dashed_line(
     painter: &egui::Painter,
     x: f32,
@@ -1795,12 +1822,8 @@ pub fn render_view3d_pane_egui(
     let radius_mm = (0.5 * ext[0].max(ext[1])).max(5.0);
     let grid_r_mm = compute_concentric_grid_radius_mm(radius_mm);
 
-    if state.top_cut_initialized_for_mesh != mesh.name {
-        state.top_cut_initialized_for_mesh = mesh.name.clone();
-        state.top_cut_z_mm = mesh
-            .ap2_cut_offset_mm
-            .unwrap_or_else(|| (height_mm * 0.50).clamp(2.0, height_mm));
-    }
+    // 새 유물을 열면 수평횡단면 기본 높이를 잡는다(높이 2mm 미만 유물에서도 패닉 없음).
+    state.initialize_top_cut_for_mesh(mesh);
 
     let avail = ui.available_size();
     let top_plan_h = (avail.y * 0.37).clamp(180.0, 340.0);
@@ -2476,7 +2499,7 @@ pub fn render_view3d_pane_egui(
             }
 
             // Image 0 & Image 1: 수평횡단면 절단선이 유물에 절대 가려지지 않도록 전체 가로지르는 기준선 + 교차선 최상단 렌더링
-            let hz = state.top_cut_z_mm.clamp(0.5, height_mm);
+            let hz = clamp_ordered(state.top_cut_z_mm, 0.5, height_mm);
             let h_left = proj_pos2([-hw * 0.96, y_cut, hz]);
             let h_right = proj_pos2([hw * 0.96, y_cut, hz]);
             painter.line_segment(
@@ -3236,6 +3259,82 @@ mod tests {
         assert!(
             !h_segs.is_empty(),
             "horizontal Z=18mm plane intersection must produce 3D segments"
+        );
+    }
+
+    #[test]
+    fn test_flat_artifact_under_2mm_height_initializes_top_cut_without_panic() {
+        // 1.63mm 두께의 편평 유물(석기·소편) — 예전에는 `.clamp(2.0, height_mm)` 가
+        // `min > max` 로 패닉해 창이 뜨자마자 죽었다.
+        let positions = vec![
+            [0.0, 0.0, 0.0],
+            [40.0, 0.0, 0.0],
+            [40.0, 30.0, 1.63],
+            [0.0, 30.0, 1.63],
+        ];
+        let triangles = vec![[0_u32, 1, 2], [0, 2, 3]];
+        let mesh = TriMesh::from_positions_and_triangles("flat_sherd", positions, triangles)
+            .expect("valid flat mesh");
+        assert!((mesh.bbox.extents()[2] - 1.63).abs() < 1e-9);
+
+        let mut state = View3DPaneState::default();
+        state.initialize_top_cut_for_mesh(&mesh);
+        assert!(
+            state.top_cut_z_mm >= 0.0 && state.top_cut_z_mm <= 1.63 + 1e-9,
+            "수평횡단면 기본 높이가 유물 높이 범위를 벗어남: {}",
+            state.top_cut_z_mm
+        );
+        // 같은 메쉬를 다시 열면 초기화를 반복하지 않는다.
+        state.top_cut_z_mm = 0.2;
+        state.initialize_top_cut_for_mesh(&mesh);
+        assert!((state.top_cut_z_mm - 0.2).abs() < 1e-12);
+
+        // 경계가 뒤집힌 클램프도 패닉 없이 순서를 보정해야 한다.
+        assert!((clamp_ordered(-5.0, 2.0, 1.63) - 1.63).abs() < 1e-12);
+        assert!((clamp_ordered(5.0, 2.0, 1.63) - 2.0).abs() < 1e-12);
+        assert!((clamp_ordered(0.4, 0.5, 1.63) - 0.5).abs() < 1e-12);
+    }
+
+    #[test]
+    fn test_transformed_horizontal_section_offset_is_relative_to_artifact_base() {
+        // 유물이 월드 원점에서 100mm 떨어져 있어도(스캔 좌표는 제각각) 절단면 오프셋은
+        // 유물 바닥 기준 `top_cut_z_mm` 그대로여야 한다. 예전에는 `bbox.min[2]` 를 더해
+        // 우측 도판 라벨이 `Z=9.0mm`(클램프된 상한)처럼 어긋났다.
+        let mut positions = Vec::new();
+        let mut triangles = Vec::new();
+        let nu = 24usize;
+        let nv = 12usize;
+        for iv in 0..=nv {
+            let z = 100.0 + (iv as f64 / nv as f64) * 60.0;
+            let r = 30.0 + 25.0 * (iv as f64 / nv as f64).powf(0.8);
+            for iu in 0..=nu {
+                let theta = (iu as f64 / nu as f64) * std::f64::consts::TAU;
+                positions.push([r * theta.cos(), r * theta.sin(), z]);
+            }
+        }
+        let stride = (nu + 1) as u32;
+        for iv in 0..(nv as u32) {
+            for iu in 0..(nu as u32) {
+                let a = iv * stride + iu;
+                triangles.push([a, a + 1, a + stride + 1]);
+                triangles.push([a, a + stride + 1, a + stride]);
+            }
+        }
+        let mesh = TriMesh::from_positions_and_triangles("offset_bowl", positions, triangles)
+            .expect("valid offset mesh");
+        assert!((mesh.bbox.min[2] - 100.0).abs() < 1e-9);
+
+        let mut state = View3DPaneState::default();
+        state.top_cut_z_mm = 12.5;
+        let hsec = slice_transformed_mesh_world_locked(&mesh, &state, false);
+        assert!(
+            !hsec.polylines_2d.is_empty(),
+            "수평 횡단면 폴리라인이 비어 있음"
+        );
+        assert!(
+            (hsec.offset_mm - 12.5).abs() < 1e-9,
+            "절단면 오프셋은 바닥 기준이어야 함(기대 12.5, 실제 {})",
+            hsec.offset_mm
         );
     }
 
