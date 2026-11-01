@@ -23,8 +23,8 @@ use strata_core::{
 };
 use strata_export::{
     compose_archaeological_plate, compose_archaeological_plate_with_mode, compute_tiled_print_plan,
-    export_ret_folder_package, render_plate_to_illustrator_svg_with_meta,
-    render_plate_to_pdf_bytes,
+    export_ret_folder_package, append_artifact_label_block,
+    render_plate_to_illustrator_svg_with_options, render_plate_to_pdf_bytes,
     ComposedPlate2D, PaperSheetSize, PlateComposeInput, PlateLayoutMode,
 };
 use strata_io::{load_any_mesh, Ap2Project};
@@ -135,6 +135,15 @@ impl ArtifactSlotEntry {
             hemp_density_label: Some(String::from("포목흔 8×10올/1㎠")),
             flip_exterior_right: false,
         });
+        // 「유물 편집판」 규격: 판 하단에 유물번호(파일명 기반) + 캡션 블록을 넣는다.
+        let mut composed_plate = composed_plate;
+        if let Some(stem) = source_path
+            .as_ref()
+            .and_then(|p| p.file_stem())
+            .and_then(|s| s.to_str())
+        {
+            append_artifact_label_block(&mut composed_plate, stem, "");
+        }
 
         Self {
             title: title_str,
@@ -228,6 +237,14 @@ impl ArtifactSlotEntry {
             Some(mode) => compose_archaeological_plate_with_mode(&plate_input, mode),
             None => compose_archaeological_plate(&plate_input),
         };
+        if let Some(stem) = self
+            .source_path
+            .as_ref()
+            .and_then(|p| p.file_stem())
+            .and_then(|s| s.to_str())
+        {
+            append_artifact_label_block(&mut self.composed_plate, stem, "");
+        }
     }
 }
 
@@ -707,9 +724,10 @@ impl StrataStudioApp {
                     // 탁본 출처(광원·파라미터·전개모드)를 SVG 메타데이터에 각인해 재현 근거를 남긴다.
                     let provenance =
                         crate::sheet_pane::rubbing_provenance_line(&self.sheet_state.rubbing_params);
-                    let svg = render_plate_to_illustrator_svg_with_meta(
+                    let svg = render_plate_to_illustrator_svg_with_options(
                         &slot.composed_plate,
                         &provenance,
+                        true,
                     );
                     if std::fs::write(&out_path, svg.as_bytes()).is_ok() {
                         self.status_message =

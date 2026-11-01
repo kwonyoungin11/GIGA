@@ -157,16 +157,34 @@ impl Default for PlateLineStyleConfig {
     fn default() -> Self {
         Self {
             fill_section_solid: false, // Image 11: "검게 나오게 하지말고 선으로 나와야한다" -> 기본값 선(Outline) 모드!
+            // 「유물제도선.ai」 규격(0.12/0.15/0.2/0.3/0.4/0.5/0.8)에 맞춘 기본 위계
             section_width_mm: 0.40,
             section_color_rgb: [20, 20, 19],
-            outer_width_mm: 0.35,
+            outer_width_mm: 0.50,
             outer_color_rgb: [20, 20, 19],
-            aux_width_mm: 0.26,
+            aux_width_mm: 0.20,
             aux_color_rgb: [181, 87, 58],
-            dim_width_mm: 0.22,
+            dim_width_mm: 0.15,
             dim_color_rgb: [42, 42, 40],
         }
     }
+}
+
+/// 실무 규격 선 굵기(mm) 프리셋 — 「유물제도선.ai」 기준.
+pub const STANDARD_LINE_WEIGHTS_MM: [f32; 7] = [0.12, 0.15, 0.20, 0.30, 0.40, 0.50, 0.80];
+
+/// 임의의 굵기를 규격값 중 가장 가까운 값으로 스냅한다.
+pub fn snap_to_standard_weight_mm(w: f32) -> f32 {
+    let mut best = STANDARD_LINE_WEIGHTS_MM[0];
+    let mut best_d = f32::INFINITY;
+    for &cand in &STANDARD_LINE_WEIGHTS_MM {
+        let d = (cand - w).abs();
+        if d < best_d {
+            best_d = d;
+            best = cand;
+        }
+    }
+    best
 }
 
 /// 조판(Publication Page Layout) 용지 규격 프리셋 (`Image 3: 용지설정을 할수있게하고 용지안에만 방안선을 하라 5cm마다 얇은빨간색선`).
@@ -624,6 +642,8 @@ pub struct SheetPaneState {
     pub rubbing_params: AcademicRubbingParams,
     /// Image 11 & Image 15: 모든 제도선의 색상 및 `mm` 두께 즉시 조정 상태
     pub line_style: PlateLineStyleConfig,
+    /// 사용자가 하단 축척 버튼으로 직접 고른 경우 자동 축척 보정을 끈다.
+    pub scale_locked: bool,
     cached_key: Option<SheetRubbingCacheKey>,
     cached_front_img: Option<RgbaImage>,
     cached_back_img: Option<RgbaImage>,
@@ -674,6 +694,7 @@ impl Default for SheetPaneState {
             show_layer_panel: true,
             rubbing_params: AcademicRubbingParams::default(),
             line_style: PlateLineStyleConfig::default(),
+            scale_locked: false,
             cached_key: None,
             cached_front_img: None,
             cached_back_img: None,
@@ -795,6 +816,31 @@ fn get_or_build_ddg_mesh(
 /// 3) Mara et al. (2010) 다중 스케일 구면 적분 불변량(MSII) + 반경 제한 PCV AO + Vergne et al. (2010) Radiance Scaling
 /// 4) Winnemöller et al. (2012) XDoG (`σ_fine = 0.8`, `σ_coarse = 14.0`) 대역통과 필터링
 /// 5) 5-Octave FBM Perlin 한지 섬유 + Cellular Worley 암석 입자 + Interleaved Gradient Noise (Blue-Noise) 다계조 점묘 합성
+/// 도판 캔버스가 용지 안에 들어가는 **가장 큰 축척**을 고른다(1:1 우선, 안 되면 1:2 → 1:3 → 1:4).
+/// 대형 유물에서 1:1 을 고집해 도판이 종이 밖으로 잘리는 문제를 막는다.
+pub fn fit_scale_preset(
+    canvas_w_mm: f64,
+    canvas_h_mm: f64,
+    paper_w_mm: f64,
+    paper_h_mm: f64,
+    margin_mm: f64,
+) -> ScalePreset {
+    let avail_w = (paper_w_mm - margin_mm * 2.0).max(10.0);
+    let avail_h = (paper_h_mm - margin_mm * 2.0).max(10.0);
+    for preset in [
+        ScalePreset::Full1To1,
+        ScalePreset::Half1To2,
+        ScalePreset::Third1To3,
+        ScalePreset::Quarter1To4,
+    ] {
+        let r = preset.ratio();
+        if canvas_w_mm * r <= avail_w && canvas_h_mm * r <= avail_h {
+            return preset;
+        }
+    }
+    ScalePreset::Quarter1To4
+}
+
 /// 탁본 파라미터를 결정론적으로 요약한 64비트 해시(FNV-1a).
 /// 같은 값이면 언제나 같은 해시가 나오므로 도판 출처(provenance)에 각인할 수 있다.
 pub fn rubbing_params_hash(p: &AcademicRubbingParams) -> u64 {
@@ -1923,6 +1969,17 @@ pub fn render_sheet_pane_egui(
         );
         let p_rect = spec.paper_bounds_rect;
         let paper_scale = spec.scale_px_per_mm;
+        // 대형 유물: 1:1 도판이 용지보다 크면 자동으로 축척을 낮춘다(사용자가 직접 선택하면 고정).
+        if !state.scale_locked {
+            let (pw, ph) = state.paper_preset.dimensions_mm();
+            state.active_scale_preset = fit_scale_preset(
+                plate.canvas_width_mm,
+                plate.canvas_height_mm,
+                pw,
+                ph,
+                12.0,
+            );
+        }
         let scale_factor = (state.active_scale_preset.ratio() as f32).clamp(0.2, 5.0);
         let scale = paper_scale * scale_factor;
         let cw_px = (plate.canvas_width_mm as f32) * scale;
@@ -2522,11 +2579,11 @@ pub fn render_sheet_pane_egui(
                 || elem.layer_id.contains("십자선");
 
             let (stroke_col, width_mm) = if is_section_layer {
-                (sec_col, state.line_style.section_width_mm)
+                (sec_col, snap_to_standard_weight_mm(state.line_style.section_width_mm))
             } else if is_outer_layer {
-                (out_col, state.line_style.outer_width_mm)
+                (out_col, snap_to_standard_weight_mm(state.line_style.outer_width_mm))
             } else if is_horiz_or_aux {
-                (aux_col, state.line_style.aux_width_mm)
+                (aux_col, snap_to_standard_weight_mm(state.line_style.aux_width_mm))
             } else {
                 let c = match elem.stroke_hex.as_str() {
                     "#B5573A" => aux_col,
@@ -2575,8 +2632,14 @@ pub fn render_sheet_pane_egui(
             {
                 let p_start = transformed_points_mm[0];
                 let p_end = transformed_points_mm[transformed_points_mm.len() - 1];
-                let x0 = origin_x + (p_start[0] as f32) * scale;
-                let x1 = origin_x + (p_end[0] as f32) * scale;
+                let raw_x0 = origin_x + (p_start[0] as f32) * scale;
+                let raw_x1 = origin_x + (p_end[0] as f32) * scale;
+                // 축척 막대는 선택된 축척의 표준 길이를 쓴다(실무 규격: 5cm/10cm/20cm/40cm 막대).
+                let (std_bar_mm, _) = state.active_scale_preset.standard_scale_bar_mm();
+                let center_x = (raw_x0 + raw_x1) * 0.5;
+                let half_w = (std_bar_mm as f32) * scale * 0.5;
+                let x0 = center_x - half_w;
+                let x1 = center_x + half_w;
                 let y_bar = origin_y - (p_start[1] as f32) * scale;
                 let bar_w = (x1 - x0).abs().max(25.0);
                 let bar_h = (1.6 * scale).clamp(4.0, 7.5);
@@ -2676,10 +2739,16 @@ pub fn render_sheet_pane_egui(
                 "#5E5D59" => muted,
                 _ => dim_col,
             };
+            // 축척 라벨은 현재 선택된 축척의 실무 표기(「10cm (1/2)」)로 다시 쓴다.
+            let shown_text = if c.layer_id == "치수_축척라벨" {
+                state.active_scale_preset.standard_scale_bar_mm().1.to_string()
+            } else {
+                c.text.clone()
+            };
             paper_painter.text(
                 pos,
                 egui::Align2::LEFT_TOP,
-                &c.text,
+                &shown_text,
                 egui::FontId::proportional(10.5),
                 col,
             );
@@ -2724,7 +2793,8 @@ pub fn render_sheet_pane_egui(
                     fallback_bot
                 };
 
-                let dim_w_px = (state.line_style.dim_width_mm * scale).clamp(0.9, 3.0);
+                let dim_w_px = (snap_to_standard_weight_mm(state.line_style.dim_width_mm) * scale)
+                    .clamp(0.9, 3.0);
 
                 // (a) 상단 수평 구경 화살표 치수선 — 구연부 **실측 구경**에 맞춰 표시한다.
                 let span_px = (rx1 - rx0).abs();
@@ -3301,11 +3371,14 @@ pub fn render_sheet_pane_egui(
         scale_ui.spacing_mut().item_spacing.x = 4.0;
         scale_ui.label(egui::RichText::new("📐 도면 축척:").size(9.5).strong().color(terra));
         for (preset, lbl) in [
-            (ScalePreset::Full1To1, "1:1 (기본)"),
-            (ScalePreset::Half1To2, "1:2"),
-            (ScalePreset::Third1To3, "1:3"),
-            (ScalePreset::Quarter1To4, "1:4"),
-            (ScalePreset::Micro2To1, "2:1"),
+            (ScalePreset::Full1To1, "1/1"),
+            (ScalePreset::Half1To2, "1/2"),
+            (ScalePreset::Third1To3, "1/3"),
+            (ScalePreset::Quarter1To4, "1/4"),
+            (ScalePreset::Fifth1To5, "1/5"),
+            (ScalePreset::Sixth1To6, "1/6"),
+            (ScalePreset::Tenth1To10, "1/10"),
+            (ScalePreset::Micro2To1, "2/1"),
         ] {
             let is_sel = state.active_scale_preset == preset;
             let btn = egui::Button::new(
@@ -3318,6 +3391,7 @@ pub fn render_sheet_pane_egui(
             .corner_radius(3.0);
             if scale_ui.add(btn).clicked() {
                 state.active_scale_preset = preset;
+                state.scale_locked = true;
                 state.zoom = match preset {
                     ScalePreset::Full1To1 => 1.0,
                     ScalePreset::Half1To2 => 0.5,
@@ -3858,6 +3932,56 @@ mod tests {
             160,
         );
         assert_eq!(a.as_raw(), b.as_raw(), "같은 입력인데 렌더 결과가 다름(비결정적)");
+    }
+
+    #[test]
+    fn test_line_weights_snap_to_house_standard() {
+        // 「유물제도선.ai」 규격: 0.12/0.15/0.2/0.3/0.4/0.5/0.8
+        assert_eq!(STANDARD_LINE_WEIGHTS_MM.len(), 7);
+        assert_eq!(snap_to_standard_weight_mm(0.35), 0.30);
+        assert_eq!(snap_to_standard_weight_mm(0.26), 0.30);
+        assert_eq!(snap_to_standard_weight_mm(0.22), 0.20);
+        assert_eq!(snap_to_standard_weight_mm(0.44), 0.40);
+        assert_eq!(snap_to_standard_weight_mm(0.9), 0.80);
+        // 기본값 자체가 규격값이어야 한다.
+        let d = PlateLineStyleConfig::default();
+        for w in [
+            d.section_width_mm,
+            d.outer_width_mm,
+            d.aux_width_mm,
+            d.dim_width_mm,
+        ] {
+            assert!(
+                STANDARD_LINE_WEIGHTS_MM.contains(&w),
+                "기본 선굵기 {} 가 규격값이 아님",
+                w
+            );
+        }
+    }
+
+    #[test]
+    fn test_fit_scale_preset_keeps_large_plate_on_paper() {
+        // 실물 스캔(Φ223.8, 높이 71.2)의 1:1 도판 캔버스는 A3(420×297)를 넘는다.
+        let (c_w, c_h) = (653.0, 381.0);
+        assert_eq!(
+            fit_scale_preset(c_w, c_h, 420.0, 297.0, 12.0),
+            ScalePreset::Half1To2
+        );
+        // 작은 도판은 1:1 유지.
+        assert_eq!(
+            fit_scale_preset(240.0, 260.0, 420.0, 297.0, 12.0),
+            ScalePreset::Full1To1
+        );
+        // 아주 큰 유물은 1:3 까지 내려간다.
+        assert_eq!(
+            fit_scale_preset(900.0, 700.0, 420.0, 297.0, 12.0),
+            ScalePreset::Third1To3
+        );
+        // 어떤 축척으로도 안 들어가면 최소 축척(1:4)을 돌려준다.
+        assert_eq!(
+            fit_scale_preset(2000.0, 1500.0, 420.0, 297.0, 12.0),
+            ScalePreset::Quarter1To4
+        );
     }
 
     #[test]

@@ -216,6 +216,12 @@ pub enum ScalePreset {
     Half1To2,
     Third1To3,
     Quarter1To4,
+    /// 1/5 축소 — 대형 완형 토기·옹 (동국문화재 축척표 규격)
+    Fifth1To5,
+    /// 1/6 축소 — 대형 옹·기와 (동국문화재 축척표 규격)
+    Sixth1To6,
+    /// 1/10 축소 — 초대형 유물·유구 (동국문화재 축척표 규격)
+    Tenth1To10,
 }
 
 impl ScalePreset {
@@ -230,6 +236,9 @@ impl ScalePreset {
             Self::Half1To2 => 0.5,
             Self::Third1To3 => 1.0 / 3.0,
             Self::Quarter1To4 => 0.25,
+            Self::Fifth1To5 => 0.2,
+            Self::Sixth1To6 => 1.0 / 6.0,
+            Self::Tenth1To10 => 0.1,
         }
     }
 
@@ -244,17 +253,44 @@ impl ScalePreset {
             Self::Half1To2 => "1:2",
             Self::Third1To3 => "1:3",
             Self::Quarter1To4 => "1:4",
+            Self::Fifth1To5 => "1:5",
+            Self::Sixth1To6 => "1:6",
+            Self::Tenth1To10 => "1:10",
         }
     }
 
     /// 축척에 맞는 표준 축척 막대 길이(mm) 및 표시 텍스트 반환.
     /// 구슬·옥류 확대 축척(`2:1~10:1`)에서는 `5 mm` / `10 mm` 미세 눈금 막대를 사용한다.
+    /// 축소 축척은 「동국문화재 축척 및 방위표」 규격을 따른다 — `실측길이 (1/n)` 형식.
     pub fn standard_scale_bar_mm(self) -> (f64, &'static str) {
         match self {
             Self::Micro10To1 | Self::Micro5To1 => (5.0, "5 mm"),
-            Self::Micro4To1 | Self::Micro3To1 | Self::Micro2To1 => (10.0, "10 mm (1 cm)"),
-            Self::Full1To1 | Self::Half1To2 => (50.0, "5 cm"),
-            Self::Third1To3 | Self::Quarter1To4 => (100.0, "10 cm"),
+            Self::Micro4To1 | Self::Micro3To1 | Self::Micro2To1 => (10.0, "10mm (1cm)"),
+            Self::Full1To1 => (50.0, "5cm (1/1)"),
+            Self::Half1To2 => (100.0, "10cm (1/2)"),
+            Self::Third1To3 => (100.0, "10cm (1/3)"),
+            Self::Quarter1To4 => (200.0, "20cm (1/4)"),
+            Self::Fifth1To5 => (200.0, "20cm (1/5)"),
+            Self::Sixth1To6 => (200.0, "20cm (1/6)"),
+            Self::Tenth1To10 => (400.0, "40cm (1/10)"),
+        }
+    }
+
+    /// 분수 축척 표기 (`1/2`, `1/5` …). 실무 도판은 콜론(`1:2`)보다 분수 표기를 쓴다.
+    pub fn fraction_label(self) -> &'static str {
+        match self {
+            Self::Micro10To1 => "10/1",
+            Self::Micro5To1 => "5/1",
+            Self::Micro4To1 => "4/1",
+            Self::Micro3To1 => "3/1",
+            Self::Micro2To1 => "2/1",
+            Self::Full1To1 => "1/1",
+            Self::Half1To2 => "1/2",
+            Self::Third1To3 => "1/3",
+            Self::Quarter1To4 => "1/4",
+            Self::Fifth1To5 => "1/5",
+            Self::Sixth1To6 => "1/6",
+            Self::Tenth1To10 => "1/10",
         }
     }
 }

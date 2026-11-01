@@ -11,13 +11,14 @@ pub use pdf_tiled_print::{
     compute_tiled_print_plan, render_plate_to_pdf_bytes, PaperSheetSize, TiledPrintPlan,
 };
 pub use plate_composer::{
-    compose_archaeological_plate, compose_archaeological_plate_with_mode,
+    append_artifact_label_block, compose_archaeological_plate, compose_archaeological_plate_with_mode,
     triangulate_polygon_ear_clipping, ComposedPlate2D, PlateComposeInput, PlateLayoutMode,
     PlatePathElement, PlateRasterKind, PlateRasterRegion, PlateTextCallout,
 };
 pub use ret_exporter::{export_ret_folder_package, RetPackageManifest};
 pub use svg_illustrator::{
     render_plate_to_illustrator_svg, render_plate_to_illustrator_svg_with_meta,
+    render_plate_to_illustrator_svg_with_options,
 };
 
 #[cfg(test)]
@@ -218,6 +219,45 @@ mod tests {
             let plate = compose_archaeological_plate_with_mode(&input, forced);
             assert_eq!(plate.mode, forced);
         }
+    }
+
+    fn minimal_test_plate() -> ComposedPlate2D {
+        ComposedPlate2D {
+            mode: PlateLayoutMode::CompleteVesselStandard,
+            title: String::from("테스트"),
+            scale_preset: strata_core::ScalePreset::Full1To1,
+            canvas_width_mm: 100.0,
+            canvas_height_mm: 80.0,
+            flip_exterior_right: false,
+            paths: Vec::new(),
+            callouts: Vec::new(),
+            raster_regions: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn test_svg_grid_layer_is_optional() {
+        let plate = minimal_test_plate();
+        let plain = render_plate_to_illustrator_svg(&plate);
+        assert!(!plain.contains("방안지_1mm"));
+        let gridded = render_plate_to_illustrator_svg_with_options(&plate, "", true);
+        for id in ["방안지_1mm", "방안지_5mm", "방안지_10mm"] {
+            assert!(gridded.contains(id), "{} 격자 레이어 없음", id);
+        }
+        assert!(gridded.len() > plain.len());
+    }
+
+    #[test]
+    fn test_artifact_label_block_appends_number_and_caption() {
+        let mut plate = minimal_test_plate();
+        append_artifact_label_block(&mut plate, "000115", "유물재질, 결실부분 확인요함");
+        let ids: Vec<&str> = plate.callouts.iter().map(|c| c.layer_id.as_str()).collect();
+        assert!(ids.contains(&"유물번호"));
+        assert!(ids.contains(&"유물캡션"));
+        // 빈 값은 그리지 않는다.
+        let mut blank = minimal_test_plate();
+        append_artifact_label_block(&mut blank, "  ", "");
+        assert!(blank.callouts.is_empty());
     }
 
     #[test]

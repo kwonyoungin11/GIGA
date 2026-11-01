@@ -832,6 +832,31 @@ fn append_measured_top_plan_view_paths(
     });
 }
 
+/// 판 하단 중앙에 **유물번호 + 캡션** 블록을 넣는다(「유물 편집판.ai」 템플릿 규격).
+/// 번호는 크게, 캡션은 그 아래 작게 — 도판이 문서로 성립하기 위한 최소 표기다.
+pub fn append_artifact_label_block(plate: &mut ComposedPlate2D, number: &str, caption: &str) {
+    let cx = plate.canvas_width_mm * 0.5;
+    let base_y = (plate.canvas_height_mm * 0.06).max(6.0);
+    if !number.trim().is_empty() {
+        plate.callouts.push(PlateTextCallout {
+            layer_id: String::from("유물번호"),
+            pos_mm: [cx - 14.0, base_y + 8.0],
+            text: number.trim().to_string(),
+            font_size_pt: 12.0,
+            color_hex: String::from("#141413"),
+        });
+    }
+    if !caption.trim().is_empty() {
+        plate.callouts.push(PlateTextCallout {
+            layer_id: String::from("유물캡션"),
+            pos_mm: [cx - 22.0, base_y + 2.0],
+            text: caption.trim().to_string(),
+            font_size_pt: 8.5,
+            color_hex: String::from("#141413"),
+        });
+    }
+}
+
 /// 실측치(`ArtifactMeasurementReport`)와 단면 윤곽(`PlaneSliceResult`)으로부터 8대 유물군 맞춤형 2D 도판을 합성한다.
 pub fn compose_archaeological_plate(input: &PlateComposeInput<'_>) -> ComposedPlate2D {
     compose_archaeological_plate_inner(input, None)
@@ -1822,7 +1847,7 @@ fn compose_archaeological_plate_inner(
 
     // 5. 동적 실측 치수선 및 축척 막대(`Scale Bar`) — 기본 축척 1:1(`ScalePreset::Full1To1`)
     let default_scale = ScalePreset::Full1To1;
-    let bar_len_mm = 50.0;
+    let (bar_len_mm, bar_label) = default_scale.standard_scale_bar_mm();
     let bar_x0 = cx - bar_len_mm * 0.5;
     let bar_y = (base_y - 7.5).max(8.0);
     paths.push(PlatePathElement {
@@ -1835,14 +1860,9 @@ fn compose_archaeological_plate_inner(
         fill_hex: None,
     });
 
-    let scale_label = format!(
-        "{} ({:.0}cm = {:.0}mm)",
-        default_scale.label(),
-        bar_len_mm / 10.0,
-        bar_len_mm
-    );
+    let scale_label = bar_label.to_string();
     callouts.push(PlateTextCallout {
-        layer_id: String::from("치수_축척막대"),
+        layer_id: String::from("치수_축척라벨"),
         pos_mm: [cx - 12.0, bar_y - 4.0],
         text: scale_label,
         font_size_pt: 8.5,

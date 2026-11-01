@@ -16,6 +16,16 @@ pub fn render_plate_to_illustrator_svg_with_meta(
     plate: &ComposedPlate2D,
     provenance: &str,
 ) -> String {
+    render_plate_to_illustrator_svg_with_options(plate, provenance, false)
+}
+
+/// 방안지 격자 포함 여부까지 지정하는 전체 옵션판.
+/// 「유물 편집판」 템플릿은 인쇄물에 방안지(1mm/5mm/10mm)를 깔므로 `draw_grid = true` 를 쓴다.
+pub fn render_plate_to_illustrator_svg_with_options(
+    plate: &ComposedPlate2D,
+    provenance: &str,
+    draw_grid: bool,
+) -> String {
     let w_px = (plate.canvas_width_mm * PX_PER_MM_1TO1).round().max(50.0);
     let h_px = (plate.canvas_height_mm * PX_PER_MM_1TO1).round().max(50.0);
 
@@ -42,6 +52,44 @@ pub fn render_plate_to_illustrator_svg_with_meta(
         svg,
         r##"  <rect id="한지_배경" x="0" y="0" width="{w_px:.0}" height="{h_px:.0}" fill="#FAF9F5" />"##
     );
+
+    // 0. 방안지 격자 (1mm / 5mm / 10mm) — 인쇄물에 깔리는 실무 템플릿 규격
+    if draw_grid {
+        let w_mm = plate.canvas_width_mm;
+        let h_mm = plate.canvas_height_mm;
+        let px = |mm: f64| mm * PX_PER_MM_1TO1;
+        for (step, color, width) in [
+            (1.0_f64, "#E6E2D6", "0.10"),
+            (5.0, "#D8D2C0", "0.14"),
+            (10.0, "#C7C0AA", "0.18"),
+        ] {
+            let _ = writeln!(
+                svg,
+                r#"  <path id="방안지_{step:.0}mm" d="" fill="none" stroke="{color}" stroke-width="{width}" />"#
+            );
+            let mut d = String::new();
+            let mut v = step;
+            while v < w_mm {
+                d.push_str(&format!("M{:.2} 0 V{:.2} ", px(v), px(h_mm)));
+                v += step;
+            }
+            let mut u = step;
+            while u < h_mm {
+                d.push_str(&format!("M0 {:.2} H{:.2} ", px(u), px(w_mm)));
+                u += step;
+            }
+            // 방금 빈 path 를 실제 좌표로 교체
+            let empty = format!(
+                r#"  <path id="방안지_{step:.0}mm" d="" fill="none" stroke="{color}" stroke-width="{width}" />"#
+            );
+            let filled = format!(
+                r#"  <path id="방안지_{step:.0}mm" d="{d}" fill="none" stroke="{color}" stroke-width="{width}" />"#
+            );
+            if let Some(pos) = svg.rfind(&empty) {
+                svg.replace_range(pos..pos + empty.len(), &filled);
+            }
+        }
+    }
 
     // 1. 4-Corner 1x1px transparent alignment anchors (Illustrator 0.00px registration)
     let _ = writeln!(svg, r#"  <g id="정렬_앵커">"#);
