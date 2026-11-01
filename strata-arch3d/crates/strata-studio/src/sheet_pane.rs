@@ -1454,6 +1454,20 @@ fn draw_line_style_vector_icon(
     }
 }
 
+/// 액션바는 **선택된 레이어 또는 마우스가 호버된 레이어 하나에만** 표시한다(도면 외곽선 가림 방지).
+pub fn active_action_bar_layer(
+    selected: Option<usize>,
+    hovered: Option<usize>,
+    visible_layers: &[usize],
+) -> Option<usize> {
+    if let Some(s) = selected {
+        if visible_layers.contains(&s) {
+            return Some(s);
+        }
+    }
+    hovered.filter(|h| visible_layers.contains(h))
+}
+
 /// Image 7 & 레이어 관리: 개별 도면 레이어(`0..5`) 상단에
 /// `[✓/□] [↻90°] [↕180°] [↻앞으로] [🗑Del]` 소형 아이콘 컨트롤 바를 렌더링하고 드래그 이동을 지원한다.
 #[allow(clippy::too_many_arguments)]
@@ -2642,6 +2656,9 @@ pub fn render_sheet_pane_egui(
             ),
         ];
         let mut pending_del_layer = None;
+        // 1) 먼저 각 뷰의 앵커를 계산하고, 포인터가 올라가 있는 뷰를 찾는다.
+        let half_d_px = (half_d_mm as f32) * scale;
+        let mut anchored: Vec<(usize, &str, egui::Pos2)> = Vec::new();
         for (v_idx, v_prefix, base_anchor_mm, exists) in individual_anchors {
             if !exists || !state.view_transforms[v_idx].visible {
                 continue;
@@ -2659,6 +2676,24 @@ pub fn render_sheet_pane_egui(
                     .clamp(sheet_rect.left() + 100.0, max_x_for_bar.max(sheet_rect.left() + 100.0)),
                 raw_y,
             );
+            anchored.push((v_idx, v_prefix, anchor_px));
+        }
+        let visible_layers: Vec<usize> = anchored.iter().map(|(i, _, _)| *i).collect();
+        let hovered_layer = anchored.iter().find_map(|(idx, _, anchor)| {
+            let zone = egui::Rect::from_center_size(
+                egui::pos2(anchor.x, anchor.y + half_d_px * 0.5),
+                egui::vec2(half_d_px * 2.0, half_d_px * 2.0),
+            );
+            ui.rect_contains_pointer(zone).then_some(*idx)
+        });
+        let active_bar =
+            active_action_bar_layer(state.selected_layer_idx, hovered_layer, &visible_layers);
+
+        // 2) 액션바는 활성 레이어 하나에만 그린다.
+        for (v_idx, v_prefix, anchor_px) in anchored {
+            if active_bar != Some(v_idx) {
+                continue;
+            }
             let is_sel = state.selected_layer_idx == Some(v_idx);
             let (sel_clicked, del_clicked) = draw_individual_view_flip_controls(
                 ui,
@@ -3533,6 +3568,19 @@ mod tests {
             assert!(opaque_px > 2_000);
             assert!(ink_shaded_px > 400);
         }
+    }
+
+    #[test]
+    fn test_action_bar_shows_for_single_view_only() {
+        let visible = [0usize, 1, 2, 3];
+        // 선택된 레이어가 있으면 그것 하나만.
+        assert_eq!(active_action_bar_layer(Some(2), Some(3), &visible), Some(2));
+        // 선택이 없으면 호버된 하나만.
+        assert_eq!(active_action_bar_layer(None, Some(3), &visible), Some(3));
+        // 둘 다 없으면 아무것도 그리지 않는다(도면 가림 방지).
+        assert_eq!(active_action_bar_layer(None, None, &visible), None);
+        // 숨겨진 레이어가 선택돼 있으면 무시하고 호버로 되돌아간다.
+        assert_eq!(active_action_bar_layer(Some(4), Some(1), &visible), Some(1));
     }
 
     #[test]
